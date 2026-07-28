@@ -178,12 +178,12 @@ describe('CompaniesPage', () => {
 
       if (url.pathname.startsWith('/api/companies/enrichment-runs/') && (!init.method || init.method === 'GET')) {
         if (url.pathname.endsWith('/items')) {
-          const runId = url.pathname.split('/')[5];
+          const runId = url.pathname.split('/').at(-2);
           return mockJsonResponse({
             items: runItemsById[runId] || [],
           });
         }
-        const runId = url.pathname.split('/')[5];
+        const runId = url.pathname.split('/').at(-1);
         const responses = runResponsesById[runId];
         if (!responses || responses.length === 0) {
           return Promise.reject(new Error(`Unhandled run poll for ${runId}`));
@@ -236,8 +236,72 @@ describe('CompaniesPage', () => {
     await user.click(searchOption);
     await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
 
-    expect(createdRunBodies).toEqual([{ web_search_enabled: true }]);
+    expect(createdRunBodies).toEqual([{
+      web_search_enabled: true,
+      mode: 'generate_missing',
+      requested_limit: 50,
+      regenerate_confirmed: false,
+    }]);
     expect(await screen.findByText(/^web search enabled$/i)).toBeInTheDocument();
+  });
+
+  it('accepts an operator-entered run size without a product maximum', async () => {
+    const user = userEvent.setup();
+    runResponsesById['run-1'] = [{
+      ...createdRunResponse,
+      status: 'running',
+      started_at: '2026-04-19T10:00:00Z',
+    }];
+    render(<CompaniesPage />);
+
+    const runSize = await screen.findByLabelText(/run size/i);
+    expect(runSize).not.toHaveAttribute('max');
+    await user.clear(runSize);
+    await user.type(runSize, '100000');
+    await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
+
+    expect(createdRunBodies).toEqual([{
+      web_search_enabled: false,
+      mode: 'generate_missing',
+      requested_limit: 100000,
+      regenerate_confirmed: false,
+    }]);
+  });
+
+  it('requires confirmation before submitting a Regenerate run', async () => {
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, 'confirm')
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    createdRunResponse = {
+      ...createdRunResponse,
+      mode: 'regenerate_existing',
+      requested_limit: 73,
+    };
+    runResponsesById['run-1'] = [{
+      ...createdRunResponse,
+      status: 'running',
+      started_at: '2026-04-19T10:00:00Z',
+    }];
+    render(<CompaniesPage />);
+
+    await user.selectOptions(await screen.findByLabelText(/mode/i), 'regenerate_existing');
+    const runSize = screen.getByLabelText(/run size/i);
+    await user.clear(runSize);
+    await user.type(runSize, '73');
+    const regenerate = screen.getByRole('button', { name: /regenerate existing descriptions/i });
+
+    await user.click(regenerate);
+    expect(createdRunCalls).toBe(0);
+
+    await user.click(regenerate);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(createdRunBodies).toEqual([{
+      web_search_enabled: false,
+      mode: 'regenerate_existing',
+      requested_limit: 73,
+      regenerate_confirmed: true,
+    }]);
   });
 
   it('displays the persisted mode of an already-active Company run', async () => {
@@ -269,7 +333,9 @@ describe('CompaniesPage', () => {
       name: /use web search for this run/i,
     });
     expect(searchOption).toBeDisabled();
-    expect(screen.getByText(/krill web search probe was rejected/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/krill web search probe was rejected/i),
+    ).toBeInTheDocument();
   });
 
   it('resets to page 1 when search or status filters change', async () => {
@@ -393,7 +459,12 @@ describe('CompaniesPage', () => {
     await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));
 
     expect(createdRunCalls).toBe(1);
-    expect(createdRunBodies).toEqual([{ web_search_enabled: false }]);
+    expect(createdRunBodies).toEqual([{
+      web_search_enabled: false,
+      mode: 'generate_missing',
+      requested_limit: 50,
+      regenerate_confirmed: false,
+    }]);
 
     await waitFor(() => {
       expect(companyRequests.at(-1)).toBe('status=pending&q=&page=1&page_size=25');
@@ -461,7 +532,7 @@ describe('CompaniesPage', () => {
       expect(createdRunCalls).toBe(1);
     });
     expect(screen.queryByText('Failed to load companies')).not.toBeInTheDocument();
-    expect(screen.getByText(/global backlog run started\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Generate run started\./i)).toBeInTheDocument();
   });
 
   it('adopts an existing active run and disables duplicate creation', async () => {

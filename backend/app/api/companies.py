@@ -1,5 +1,5 @@
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -54,6 +54,8 @@ class CompanyEnrichmentRunSchema(BaseModel):
     pending_items: int
     completed_items: int
     failed_items: int
+    mode: str
+    requested_limit: int
     web_search_enabled: bool = False
     started_at: str | None = None
     completed_at: str | None = None
@@ -84,6 +86,15 @@ class CompanyEnrichmentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     web_search_enabled: bool = False
+    mode: str = Field(default="generate_missing", pattern="^(generate_missing|regenerate_existing)$")
+    requested_limit: int = Field(gt=0)
+    regenerate_confirmed: bool = False
+
+    @model_validator(mode="after")
+    def require_regenerate_confirmation(self):
+        if self.mode == "regenerate_existing" and not self.regenerate_confirmed:
+            raise ValueError("regenerate_confirmed must be true for Regenerate")
+        return self
 
 
 class CompanyBatchEnrichmentResponse(BaseModel):
@@ -130,6 +141,8 @@ def _serialize_run(run, db: Session | None = None) -> dict:
         "pending_items": run.pending_items,
         "completed_items": run.completed_items,
         "failed_items": run.failed_items,
+        "mode": getattr(run, "mode", "generate_missing"),
+        "requested_limit": int(getattr(run, "requested_limit", run.total_items) or 0),
         "web_search_enabled": bool(getattr(run, "web_search_enabled", False)),
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -178,7 +191,9 @@ async def create_company_enrichment_run(
     if active_run is not None:
         return _serialize_run(active_run, db)
 
-    web_search_enabled = bool(request and request.web_search_enabled)
+    if request is None:
+        raise HTTPException(status_code=422, detail="Company Enrichment run options are required")
+    web_search_enabled = bool(request.web_search_enabled)
     if web_search_enabled:
         metadata = AIRuntimeSettingsService(db).get_profile_runtime_metadata(
             "companies"
@@ -190,13 +205,39 @@ async def create_company_enrichment_run(
                 or "Company Web Search is unavailable for this profile.",
             )
 
-    run = service.create_pending_run(web_search_enabled=web_search_enabled)
+    run = service.create_pending_run(
+        mode=request.mode,
+        requested_limit=request.requested_limit,
+        web_search_enabled=web_search_enabled,
+    )
     if run is None:
         return {"status": "empty", "run": None}
 
     run_id = run.id
     db.commit()
     background_tasks.add_task(_run_persisted_company_enrichment, run_id)
+    db.refresh(run)
+    return _serialize_run(run, db)
+
+
+@router.post("/enrichment-runs/{run_id}/retry-failed")
+async def retry_failed_company_enrichment_run(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    service = CompanyEnrichmentRunService(db)
+    active_run = service.get_active_run()
+    if active_run is not None:
+        return _serialize_run(active_run, db)
+    try:
+        run = service.create_retry_run_from_failed_items(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    db.commit()
+    background_tasks.add_task(_run_persisted_company_enrichment, run.id)
     db.refresh(run)
     return _serialize_run(run, db)
 
@@ -327,6 +368,8 @@ async def create_company(company: CompanyCreateSchema, db: Session = Depends(get
     try:
         db_company = Company(
             company_id=company_id,
+            source_site="manual",
+            source_company_id=company_id,
             **company.model_dump(exclude={"company_id"}),
         )
         db.add(db_company)

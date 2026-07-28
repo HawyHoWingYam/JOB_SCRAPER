@@ -28,15 +28,21 @@ class CompanyEnrichmentRunService:
     def __init__(self, db: Session):
         self.db = db
 
-    def _pending_company_query(self):
-        return (
-            self.db.query(Company.id)
-            .filter(
-                Company.is_deleted.is_(False),
+    def _eligible_company_query(self, mode: str):
+        query = self.db.query(Company.id).filter(Company.is_deleted.is_(False))
+        if mode == "generate_missing":
+            return query.filter(
                 or_(Company.ai_description.is_(None), Company.ai_description == ""),
+            ).order_by(Company.created_at.asc(), Company.id.asc())
+        if mode == "regenerate_existing":
+            return query.filter(
+                Company.ai_description.is_not(None),
+                func.length(func.trim(Company.ai_description)) > 0,
+            ).order_by(
+                Company.ai_description_updated_at.asc().nullsfirst(),
+                Company.id.asc(),
             )
-            .order_by(Company.created_at.asc(), Company.name.asc(), Company.id.asc())
-        )
+        raise ValueError(f"Unsupported Company Enrichment mode: {mode}")
 
     def get_active_run(self) -> Optional[CompanyEnrichmentRun]:
         return (
@@ -211,13 +217,23 @@ class CompanyEnrichmentRunService:
 
     def create_pending_run(
         self,
-        force_company_ids: Optional[List[str]] = None,
+        *,
+        mode: str = "generate_missing",
+        requested_limit: int,
+        company_ids: Optional[List[str]] = None,
         web_search_enabled: bool = False,
     ) -> Optional[CompanyEnrichmentRun]:
-        if force_company_ids is None:
-            company_ids = [company_id for (company_id,) in self._pending_company_query().all()]
+        if requested_limit < 1:
+            raise ValueError("requested_limit must be positive")
+        if company_ids is None:
+            selected_company_ids = [
+                company_id
+                for (company_id,) in self._eligible_company_query(mode)
+                .limit(requested_limit)
+                .all()
+            ]
         else:
-            normalized_company_ids = [uuid.UUID(str(company_id)) for company_id in force_company_ids]
+            normalized_company_ids = [uuid.UUID(str(company_id)) for company_id in company_ids]
             existing_company_ids = {
                 company_id
                 for (company_id,) in (
@@ -229,27 +245,29 @@ class CompanyEnrichmentRunService:
                     .all()
                 )
             }
-            company_ids = [
+            selected_company_ids = [
                 company_id
                 for company_id in normalized_company_ids
                 if company_id in existing_company_ids
             ]
 
-        if not company_ids:
+        if not selected_company_ids:
             return None
 
         run = CompanyEnrichmentRun(
             status="pending",
-            total_items=len(company_ids),
-            pending_items=len(company_ids),
+            total_items=len(selected_company_ids),
+            pending_items=len(selected_company_ids),
             completed_items=0,
             failed_items=0,
             web_search_enabled=bool(web_search_enabled),
+            mode=mode,
+            requested_limit=requested_limit,
         )
         self.db.add(run)
         self.db.flush()
 
-        for position, company_id in enumerate(company_ids):
+        for position, company_id in enumerate(selected_company_ids):
             self.db.add(
                 CompanyEnrichmentRunItem(
                     run_id=run.id,
@@ -335,6 +353,7 @@ class CompanyEnrichmentRunService:
                 name=company.name,
                 industry=company.industry,
                 location=company.location,
+                website=company.website,
                 ai_description=company.ai_description,
             )
             for company_id, company in companies_by_id.items()
@@ -366,12 +385,14 @@ class CompanyEnrichmentRunService:
                         if hasattr(service, "enrich_company_id"):
                             await service.enrich_company_id(
                                 item.company_id,
+                                force=run.mode == "regenerate_existing",
                                 web_search_enabled=bool(run.web_search_enabled),
                             )
                         else:
                             await service.enrich_company_description(
                                 company_snapshots_by_id[item.company_id],
                                 self.db,
+                                force=run.mode == "regenerate_existing",
                                 web_search_enabled=bool(run.web_search_enabled),
                             )
                     except Exception as exc:
@@ -434,3 +455,24 @@ class CompanyEnrichmentRunService:
         self.db.commit()
         self.db.refresh(run)
         return run
+
+    def create_retry_run_from_failed_items(
+        self,
+        run_id: str,
+    ) -> Optional[CompanyEnrichmentRun]:
+        original = self.get_run(run_id)
+        if original is None:
+            return None
+        failed_ids = [
+            str(item.company_id)
+            for item in self.list_run_items(run_id)
+            if item.status == "failed"
+        ]
+        if not failed_ids:
+            raise ValueError(f"Run {run_id} has no failed items to retry")
+        return self.create_pending_run(
+            mode=original.mode,
+            requested_limit=original.requested_limit,
+            company_ids=failed_ids,
+            web_search_enabled=bool(original.web_search_enabled),
+        )

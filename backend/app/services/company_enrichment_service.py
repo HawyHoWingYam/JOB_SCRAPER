@@ -10,6 +10,7 @@ from sqlalchemy.orm.exc import NoResultFound
 from app.ai.llm_client import get_llm_client
 from app.database import SessionLocal
 from app.models import Company, Job
+from app.utils.time import utc_now
 
 _PROCESS_NARRATION_PREFIXES = (
     "searching ",
@@ -66,11 +67,13 @@ class CompanyEnrichmentService:
                 "ai_description": company.ai_description,
             }
 
-        company.ai_description = await self._generate_company_description(
+        generated_description = await self._generate_company_description(
             company,
             db,
             web_search_enabled=web_search_enabled,
         )
+        company.ai_description = generated_description
+        company.ai_description_updated_at = utc_now()
         db.commit()
         db.refresh(company)
         return {
@@ -123,6 +126,7 @@ class CompanyEnrichmentService:
                 db,
                 web_search_enabled=web_search_enabled,
             )
+            company.ai_description_updated_at = utc_now()
             enriched_companies.append(company)
 
         if enriched_companies:
@@ -201,6 +205,7 @@ class CompanyEnrichmentService:
             "If search results are sparse, stay conservative and only state what is supported.\n"
             "Do not invent facts.\n\n"
             f"Company name: {company.name}\n"
+            f"Website: {getattr(company, 'website', None) or 'Unknown'}\n"
             f"Industry: {company.industry or 'Unknown'}\n"
             f"Location: {company.location or 'Unknown'}\n"
             f"Recent jobs:\n{jobs_context}\n"

@@ -35,12 +35,25 @@ Company run API and service:
 POST /api/companies/enrichment-runs
 Content-Type: application/json
 
-{"web_search_enabled": false}
+{
+  "mode": "generate_missing",
+  "requested_limit": 50,
+  "regenerate_confirmed": false,
+  "web_search_enabled": false
+}
 ```
 
 ```python
 CompanyEnrichmentRunService.create_pending_run(
-    *, web_search_enabled: bool = False
+    *,
+    mode: Literal["generate_missing", "regenerate_existing"],
+    requested_limit: int,
+    company_ids: list[UUID] | None = None,
+    web_search_enabled: bool = False,
+) -> CompanyEnrichmentRun | None
+
+CompanyEnrichmentRunService.create_retry_run_from_failed_items(
+    run_id: str,
 ) -> CompanyEnrichmentRun | None
 
 CompanyEnrichmentService.enrich_company_description(
@@ -55,6 +68,10 @@ Persisted columns:
 
 ```text
 company_enrichment_runs.web_search_enabled BOOLEAN NOT NULL DEFAULT FALSE
+company_enrichment_runs.mode VARCHAR(32) NOT NULL
+company_enrichment_runs.requested_limit INTEGER NOT NULL
+companies.website VARCHAR(2048) NULL
+companies.ai_description_updated_at TIMESTAMP NULL
 app_runtime_settings.companies_web_search_last_test_status VARCHAR(32) NULL
 app_runtime_settings.companies_web_search_last_tested_at TIMESTAMP NULL
 app_runtime_settings.companies_web_search_last_test_error TEXT NULL
@@ -97,10 +114,20 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
 - Execution reads the persisted run flag. Disabled runs use ordinary
   generation; enabled runs search. Search failure fails the item and never
   falls back to an unlabeled ordinary description.
-- Global Company runs select only non-deleted companies whose
-  `ai_description` is null or blank. They persist only the final
-  `Company.ai_description`; search calls, citations, result objects, and page
-  content remain transient.
+- `generate_missing` selects non-deleted Companies whose `ai_description` is
+  null/blank, ordered by `created_at ASC, id ASC`.
+- `regenerate_existing` selects non-deleted Companies with non-blank
+  descriptions, ordered by `ai_description_updated_at ASC NULLS FIRST, id ASC`,
+  and requires `regenerate_confirmed=true`.
+- `requested_limit` is a positive operator-entered quantity with no product
+  maximum. The run freezes `min(requested_limit, eligible_count)` item IDs;
+  runtime concurrency remains separately bounded.
+- Run mode, requested limit, frozen IDs, and Web Search intent are persisted.
+  Failed-item retry reuses only the original failed IDs with the original mode,
+  limit, and Web Search intent; it never selects a replacement cohort.
+- Successful Generate or Regenerate writes `Company.ai_description` and
+  `ai_description_updated_at` together. Failed Regenerate preserves both old
+  values. Search calls, citations, result objects, and page content remain transient.
 
 ### Diagnostics
 
@@ -134,6 +161,12 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
 | Chat response is `{}` or lacks `choices[0].message.content` | Non-retryable shape failure with safe shape/hash diagnostics |
 | SSE event is malformed or lacks a terminal event after deltas | Non-retryable shape failure; never accept partial text |
 | Company already has an AI description in a global run | Exclude from the run; do not overwrite |
+| `requested_limit <= 0` or is not an integer | HTTP/Pydantic 422; create no run |
+| Regenerate omits confirmation | HTTP/Pydantic 422; create no run |
+| Requested quantity exceeds eligible count | Freeze every eligible Company; do not reject or cap to a product constant |
+| Generate has no blank descriptions / Regenerate has no existing descriptions | Return `{status: "empty", run: null}` |
+| Retry source run has no failed items | HTTP 400 |
+| Regenerate item fails | Mark item failed; preserve its prior description and timestamp |
 
 ## 5. Good / Base / Bad Cases
 
@@ -142,6 +175,10 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
   `true` and stores only the final description.
 - Base: the operator leaves the checkbox off; Company generation uses Chat
   Completions and behaves like ordinary enrichment.
+- Good: the operator requests 100,000 Generate items and 73 are eligible; the
+  run persists `requested_limit=100000` and freezes the 73 oldest eligible IDs.
+- Good: confirmed Regenerate processes the least recently generated Companies;
+  a failed item keeps its previous description while successful items receive a new timestamp.
 - Bad: infer search from `client.supports_web_search()` and automatically send
   every Company request to Responses. Local adapter support does not prove the
   relay accepts the operation and removes operator intent.
@@ -168,11 +205,13 @@ app_runtime_settings.companies_web_search_last_test_fingerprint VARCHAR(128) NUL
   their bounded readiness diagnostic in the 422 `detail.error_message` field,
   while arbitrary provider failures remain summarized.
 - API/service tests assert default false, 409 when unavailable, active-run mode
-  precedence, persisted execution intent, missing-description-only targeting,
-  and no fallback/persistence on search failure.
+  precedence, persisted execution intent, deterministic Generate/Regenerate
+  ordering, arbitrary positive limits, frozen identities, retry preservation,
+  atomic description/timestamp writes, and no fallback/persistence on failure.
 - Companies UI tests assert default-off, unavailable reason, explicit boolean
-  POST, persisted active-run mode, and unchanged missing-description targeting
-  text. Job surfaces must contain no Web Search control.
+  POST, Mode and Run size payloads, no input maximum, Regenerate cancellation
+  and confirmation, retry-failed action, and persisted active-run intent. Job
+  surfaces must contain no Web Search control.
 - Empty-schema bootstrap tests assert the Company enrichment tables and current
   columns are present in metadata; no in-place schema upgrade test exists.
 
@@ -198,6 +237,9 @@ description = await llm.generate(
     prompt,
     web_search=bool(run.web_search_enabled),
 )
+company.ai_description = description
+company.ai_description_updated_at = utc_now()
+db.commit()
 ```
 
 Create the run only after the current-fingerprint capability gate passes. Let a

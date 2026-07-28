@@ -65,7 +65,7 @@ function reconcileRunItemsByCompanyId(run, runItemsByCompanyId) {
 export function getCompanyStatus(company, run, runItem) {
   const itemStatus = String(runItem?.status || '').toLowerCase();
 
-  if (itemStatus === 'failed' && !hasCompanyAIDescription(company)) {
+  if (itemStatus === 'failed') {
     return 'failed';
   }
 
@@ -73,10 +73,10 @@ export function getCompanyStatus(company, run, runItem) {
     return hasCompanyAIDescription(company) ? 'ready' : 'pending';
   }
 
-  if (itemStatus === 'pending' && !hasCompanyAIDescription(company)) {
+  if (itemStatus === 'pending') {
     return 'queued';
   }
-  if (itemStatus === 'running' && !hasCompanyAIDescription(company)) {
+  if (itemStatus === 'running') {
     return 'generating';
   }
 
@@ -94,7 +94,8 @@ export function getCompanyStatus(company, run, runItem) {
 }
 
 export function formatRunCompletionMessage(run) {
-  const summary = `Finished generating descriptions for ${run.total_items} companies. ${run.completed_items} succeeded, ${run.failed_items} failed.`;
+  const action = run.mode === 'regenerate_existing' ? 'regenerating' : 'generating';
+  const summary = `Finished ${action} descriptions for ${run.total_items} companies. ${run.completed_items} succeeded, ${run.failed_items} failed.`;
   if (run.error_message) {
     return `${summary} ${run.error_message}`;
   }
@@ -164,6 +165,8 @@ export default function useCompanyEnrichmentRun({
   const [runItemsByCompanyId, setRunItemsByCompanyId] = useState({});
   const [isCreatingRun, setIsCreatingRun] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [runMode, setRunMode] = useState('generate_missing');
+  const [requestedLimit, setRequestedLimit] = useState('50');
   const [webSearchCapability, setWebSearchCapability] = useState({
     available: false,
     reason: 'Checking Company Web Search capability...',
@@ -455,6 +458,17 @@ export default function useCompanyEnrichmentRun({
   }, [currentRun, isPageVisible, refreshCurrentRun]);
 
   const createRun = async () => {
+    const normalizedLimit = Number(requestedLimit);
+    if (!Number.isInteger(normalizedLimit) || normalizedLimit < 1) {
+      setRefreshError('Run size must be a positive whole number.');
+      return false;
+    }
+    if (
+      runMode === 'regenerate_existing'
+      && !window.confirm('Regenerate will replace existing Company descriptions after each successful item. Continue?')
+    ) {
+      return false;
+    }
     setIsCreatingRun(true);
     setRefreshError(null);
     setActionMessage(null);
@@ -467,6 +481,9 @@ export default function useCompanyEnrichmentRun({
         },
         body: JSON.stringify({
           web_search_enabled: webSearchEnabled,
+          mode: runMode,
+          requested_limit: normalizedLimit,
+          regenerate_confirmed: runMode === 'regenerate_existing',
         }),
       });
       if (!response.ok) {
@@ -481,7 +498,11 @@ export default function useCompanyEnrichmentRun({
       const payload = await response.json();
       if (payload?.status === 'empty' && payload?.run === null) {
         updateCurrentRun(null);
-        setActionMessage('All companies already have AI descriptions.');
+        setActionMessage(
+          runMode === 'regenerate_existing'
+            ? 'No Companies with existing AI descriptions are eligible.'
+            : 'All Companies already have AI descriptions.',
+        );
         return true;
       }
 
@@ -489,9 +510,7 @@ export default function useCompanyEnrichmentRun({
       updateCurrentRun(runPayload);
       setWebSearchEnabled(false);
       setActionMessage(
-        runPayload.web_search_enabled
-          ? 'Global backlog run started with Web Search.'
-          : 'Global backlog run started.',
+        `${runPayload.mode === 'regenerate_existing' ? 'Regenerate' : 'Generate'} run started${runPayload.web_search_enabled ? ' with Web Search' : ''}.`,
       );
 
       if (isActiveRun(runPayload)) {
@@ -502,6 +521,28 @@ export default function useCompanyEnrichmentRun({
         }
       }
 
+      return true;
+    } catch (error) {
+      setRefreshError(error.message);
+      return false;
+    } finally {
+      setIsCreatingRun(false);
+    }
+  };
+
+  const retryFailed = async () => {
+    if (!currentRun?.id || Number(currentRun.failed_items || 0) < 1) return false;
+    setIsCreatingRun(true);
+    setRefreshError(null);
+    try {
+      const response = await fetch(
+        `${apiUrl}/api/companies/enrichment-runs/${currentRun.id}/retry-failed`,
+        { method: 'POST' },
+      );
+      if (!response.ok) throw new Error('Failed to retry Company enrichment items');
+      const payload = await response.json();
+      updateCurrentRun(payload);
+      setActionMessage(`Retrying ${payload.total_items} failed Company item(s).`);
       return true;
     } catch (error) {
       setRefreshError(error.message);
@@ -535,7 +576,9 @@ export default function useCompanyEnrichmentRun({
     ? (hasQueuedRun ? 'Generation queued' : 'Generation in progress')
     : isCreatingRun
       ? 'Starting generation...'
-      : 'Generate Missing Descriptions';
+      : runMode === 'regenerate_existing'
+        ? 'Regenerate Existing Descriptions'
+        : 'Generate Missing Descriptions';
   const terminalMessage = hasTerminalRun ? formatRunCompletionMessage(currentRun) : null;
 
   return {
@@ -555,7 +598,12 @@ export default function useCompanyEnrichmentRun({
     webSearchEnabled,
     setWebSearchEnabled,
     webSearchCapability,
+    runMode,
+    setRunMode,
+    requestedLimit,
+    setRequestedLimit,
     createRun,
+    retryFailed,
     getCompanyRunState,
   };
 }

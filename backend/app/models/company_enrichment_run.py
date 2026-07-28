@@ -18,6 +18,8 @@ class CompanyEnrichmentRun(Base):
     pending_items = Column(Integer, nullable=False)
     completed_items = Column(Integer, nullable=False, default=0)
     failed_items = Column(Integer, nullable=False, default=0)
+    mode = Column(String(32), nullable=False, default="generate_missing")
+    requested_limit = Column(Integer, nullable=False)
     web_search_enabled = Column(
         Boolean,
         nullable=False,

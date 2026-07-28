@@ -95,7 +95,12 @@ function CompaniesPage() {
     webSearchEnabled,
     setWebSearchEnabled,
     webSearchCapability,
+    runMode,
+    setRunMode,
+    requestedLimit,
+    setRequestedLimit,
     createRun,
+    retryFailed,
     getCompanyRunState,
   } = useCompanyEnrichmentRun({
     apiUrl: API_BASE_URL,
@@ -263,8 +268,34 @@ function CompaniesPage() {
 
           <div className="companies-batch-group">
             <p className="companies-batch-hint">
-              Targets all companies without AI descriptions.
+              {runMode === 'regenerate_existing'
+                ? 'Targets Companies with existing descriptions, oldest generated first.'
+                : 'Targets Companies without AI descriptions, oldest created first.'}
             </p>
+            <label className="companies-web-search-option" htmlFor="company-enrichment-mode">
+              <span>Mode</span>
+              <select
+                id="company-enrichment-mode"
+                value={runMode}
+                onChange={(event) => setRunMode(event.target.value)}
+                disabled={isLoading || isCreatingRun || hasActiveRun}
+              >
+                <option value="generate_missing">Generate missing</option>
+                <option value="regenerate_existing">Regenerate existing</option>
+              </select>
+            </label>
+            <label className="companies-web-search-option" htmlFor="company-enrichment-limit">
+              <span>Run size</span>
+              <input
+                id="company-enrichment-limit"
+                type="number"
+                min="1"
+                step="1"
+                value={requestedLimit}
+                onChange={(event) => setRequestedLimit(event.target.value)}
+                disabled={isLoading || isCreatingRun || hasActiveRun}
+              />
+            </label>
             <label className="companies-web-search-option">
               <input
                 type="checkbox"
@@ -301,6 +332,16 @@ function CompaniesPage() {
               <Sparkles size={16} />
               <span>{batchButtonLabel}</span>
             </button>
+            {hasTerminalRun && Number(currentRun?.failed_items || 0) > 0 && (
+              <button
+                type="button"
+                className="companies-batch-button"
+                onClick={retryFailed}
+                disabled={isCreatingRun || hasActiveRun}
+              >
+                Retry failed items
+              </button>
+            )}
           </div>
         </div>
       </section>

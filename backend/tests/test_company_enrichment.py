@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import uuid
 
@@ -67,10 +68,51 @@ def _company():
     return SimpleNamespace(
         id=uuid.uuid4(),
         name="Example Limited",
+        website=None,
         industry="Technology",
         location="Hong Kong",
         ai_description=None,
+        ai_description_updated_at=None,
     )
+
+
+@pytest.fixture
+def company_run_db():
+    engine = create_engine("sqlite:///:memory:")
+    Company.__table__.create(engine)
+    CompanyEnrichmentRun.__table__.create(engine)
+    CompanyEnrichmentRunItem.__table__.create(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        yield db
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def _stored_company(
+    db,
+    *,
+    identity: str,
+    row_id: str,
+    created_at: datetime,
+    description: str | None = None,
+    description_updated_at: datetime | None = None,
+):
+    company = Company(
+        id=uuid.UUID(row_id),
+        company_id=identity,
+        source_site="jobsdb",
+        source_company_id=identity,
+        name=identity,
+        ai_description=description,
+        ai_description_updated_at=description_updated_at,
+        created_at=created_at,
+        is_deleted=False,
+    )
+    db.add(company)
+    db.flush()
+    return company
 
 
 async def _generate_with_search_flag(enabled: bool):
@@ -85,7 +127,9 @@ async def _generate_with_search_flag(enabled: bool):
 
 
 def test_company_run_request_defaults_web_search_off():
-    assert CompanyEnrichmentRunRequest().web_search_enabled is False
+    request = CompanyEnrichmentRunRequest(requested_limit=25)
+    assert request.web_search_enabled is False
+    assert request.mode == "generate_missing"
 
 
 def test_company_run_serializer_returns_persisted_search_mode():
@@ -127,6 +171,9 @@ async def test_company_generation_searches_only_when_explicitly_enabled():
 @pytest.mark.asyncio
 async def test_company_search_failure_does_not_persist_or_fallback_description():
     company = _company()
+    company.ai_description = "Existing description"
+    original_timestamp = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    company.ai_description_updated_at = original_timestamp
 
     class NoWriteDB(_EmptyJobsDB):
         def commit(self):
@@ -142,10 +189,37 @@ async def test_company_search_failure_does_not_persist_or_fallback_description()
         await service.enrich_company_description(
             company,
             db,
+            force=True,
             web_search_enabled=True,
         )
 
-    assert company.ai_description is None
+    assert company.ai_description == "Existing description"
+    assert company.ai_description_updated_at == original_timestamp
+
+
+@pytest.mark.asyncio
+async def test_company_generation_updates_description_and_timestamp_together():
+    company = _company()
+
+    class RecordingDB(_EmptyJobsDB):
+        committed = False
+
+        def commit(self):
+            self.committed = True
+
+        def refresh(self, _company):
+            pass
+
+    db = RecordingDB()
+    result = await CompanyEnrichmentService(llm=_RecordingLLM()).enrich_company_description(
+        company,
+        db,
+    )
+
+    assert result["ai_description"] == "A factual company description."
+    assert company.ai_description == "A factual company description."
+    assert company.ai_description_updated_at is not None
+    assert db.committed is True
 
 
 @pytest.mark.asyncio
@@ -177,7 +251,7 @@ async def test_active_company_run_keeps_its_persisted_search_mode(monkeypatch):
 
     result = await create_company_enrichment_run(
         BackgroundTasks(),
-        CompanyEnrichmentRunRequest(web_search_enabled=False),
+        CompanyEnrichmentRunRequest(web_search_enabled=False, requested_limit=25),
         db=SimpleNamespace(),
     )
 
@@ -211,7 +285,7 @@ async def test_company_run_rejects_unavailable_requested_search(monkeypatch):
     with pytest.raises(HTTPException) as raised:
         await create_company_enrichment_run(
             BackgroundTasks(),
-            CompanyEnrichmentRunRequest(web_search_enabled=True),
+            CompanyEnrichmentRunRequest(web_search_enabled=True, requested_limit=25),
             db=SimpleNamespace(),
         )
 
@@ -258,41 +332,156 @@ async def test_background_run_persists_only_sanitized_failure_details(monkeypatc
     assert leaked_detail not in str(raised.value)
 
 
-def test_global_company_run_keeps_missing_only_targeting_and_persists_mode():
-    engine = create_engine("sqlite:///:memory:")
-    Company.__table__.create(engine)
-    CompanyEnrichmentRun.__table__.create(engine)
-    CompanyEnrichmentRunItem.__table__.create(engine)
-    db = sessionmaker(bind=engine)()
-    try:
-        missing_company = Company(
-            company_id="missing",
-            source_site="jobsdb",
-            source_company_id="missing",
-            name="Missing Description",
-            ai_description=None,
-            is_deleted=False,
-        )
-        ready_company = Company(
-            company_id="ready",
-            source_site="jobsdb",
-            source_company_id="ready",
-            name="Ready Description",
-            ai_description="Already present",
-            is_deleted=False,
-        )
-        db.add_all([missing_company, ready_company])
-        db.commit()
+def test_global_company_run_keeps_missing_only_targeting_and_persists_mode(company_run_db):
+    now = datetime(2026, 7, 1)
+    missing_company = _stored_company(
+        company_run_db,
+        identity="missing",
+        row_id="00000000-0000-0000-0000-000000000001",
+        created_at=now,
+    )
+    _stored_company(
+        company_run_db,
+        identity="ready",
+        row_id="00000000-0000-0000-0000-000000000002",
+        created_at=now,
+        description="Already present",
+    )
+    company_run_db.commit()
 
-        run = CompanyEnrichmentRunService(db).create_pending_run(
-            web_search_enabled=True
-        )
-        db.commit()
+    run = CompanyEnrichmentRunService(company_run_db).create_pending_run(
+        requested_limit=25,
+        web_search_enabled=True,
+    )
+    company_run_db.commit()
 
-        assert run.web_search_enabled is True
-        assert run.total_items == 1
-        assert len(run.items) == 1
-        assert run.items[0].company_id == missing_company.id
-    finally:
-        db.close()
-        engine.dispose()
+    assert run.web_search_enabled is True
+    assert run.mode == "generate_missing"
+    assert run.requested_limit == 25
+    assert run.total_items == 1
+    assert [item.company_id for item in run.items] == [missing_company.id]
+
+
+def test_generate_run_has_no_product_maximum_and_orders_created_at_then_id(company_run_db):
+    now = datetime(2026, 7, 1)
+    newest = _stored_company(
+        company_run_db,
+        identity="newest",
+        row_id="00000000-0000-0000-0000-000000000003",
+        created_at=now + timedelta(days=1),
+    )
+    tie_second = _stored_company(
+        company_run_db,
+        identity="tie-second",
+        row_id="00000000-0000-0000-0000-000000000002",
+        created_at=now,
+    )
+    tie_first = _stored_company(
+        company_run_db,
+        identity="tie-first",
+        row_id="00000000-0000-0000-0000-000000000001",
+        created_at=now,
+    )
+    company_run_db.commit()
+
+    run = CompanyEnrichmentRunService(company_run_db).create_pending_run(
+        requested_limit=100_000,
+    )
+    company_run_db.commit()
+
+    assert run.requested_limit == 100_000
+    assert [item.company_id for item in run.items] == [
+        tie_first.id,
+        tie_second.id,
+        newest.id,
+    ]
+
+
+def test_regenerate_run_orders_null_then_oldest_description_timestamp(company_run_db):
+    now = datetime(2026, 7, 1)
+    newer = _stored_company(
+        company_run_db,
+        identity="newer",
+        row_id="00000000-0000-0000-0000-000000000004",
+        created_at=now,
+        description="Newer",
+        description_updated_at=now + timedelta(days=1),
+    )
+    oldest = _stored_company(
+        company_run_db,
+        identity="oldest",
+        row_id="00000000-0000-0000-0000-000000000003",
+        created_at=now,
+        description="Oldest",
+        description_updated_at=now,
+    )
+    null_second = _stored_company(
+        company_run_db,
+        identity="null-second",
+        row_id="00000000-0000-0000-0000-000000000002",
+        created_at=now,
+        description="Legacy second",
+    )
+    null_first = _stored_company(
+        company_run_db,
+        identity="null-first",
+        row_id="00000000-0000-0000-0000-000000000001",
+        created_at=now,
+        description="Legacy first",
+    )
+    company_run_db.commit()
+
+    run = CompanyEnrichmentRunService(company_run_db).create_pending_run(
+        mode="regenerate_existing",
+        requested_limit=4,
+    )
+    company_run_db.commit()
+
+    assert [item.company_id for item in run.items] == [
+        null_first.id,
+        null_second.id,
+        oldest.id,
+        newer.id,
+    ]
+
+
+def test_retry_preserves_failed_company_ids_mode_limit_and_web_search(company_run_db):
+    now = datetime(2026, 7, 1)
+    first = _stored_company(
+        company_run_db,
+        identity="first",
+        row_id="00000000-0000-0000-0000-000000000001",
+        created_at=now,
+        description="First",
+    )
+    second = _stored_company(
+        company_run_db,
+        identity="second",
+        row_id="00000000-0000-0000-0000-000000000002",
+        created_at=now,
+        description="Second",
+    )
+    company_run_db.commit()
+    service = CompanyEnrichmentRunService(company_run_db)
+    original = service.create_pending_run(
+        mode="regenerate_existing",
+        requested_limit=500_000,
+        web_search_enabled=True,
+    )
+    company_run_db.flush()
+    original.items[0].status = "failed"
+    original.items[1].status = "completed"
+    original.status = "completed_with_failures"
+    original.pending_items = 0
+    original.completed_items = 1
+    original.failed_items = 1
+    company_run_db.commit()
+
+    retry = service.create_retry_run_from_failed_items(original.id)
+    company_run_db.commit()
+
+    assert retry.mode == "regenerate_existing"
+    assert retry.requested_limit == 500_000
+    assert retry.web_search_enabled is True
+    assert [item.company_id for item in retry.items] == [first.id]
+    assert second.id not in [item.company_id for item in retry.items]
