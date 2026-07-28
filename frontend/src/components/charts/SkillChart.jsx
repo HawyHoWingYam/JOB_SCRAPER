@@ -1,182 +1,243 @@
-import { useEffect, useState } from 'react';
-import { apiPath } from '../../api/base';
-
+import { useMemo, useState } from "react";
 
 const SKILL_BUCKET_ORDER = [
-  'Backend',
-  'Database',
-  'Frontend',
-  'Data',
-  'Platform & Cloud',
-  'Systems & Network',
-  'Security & Identity',
-  'Support',
-  'Infrastructure',
+  "Backend",
+  "Database",
+  "Frontend",
+  "Data",
+  "Platform & Cloud",
+  "Systems & Network",
+  "Security & Identity",
+  "Support",
+  "Infrastructure",
 ];
 
 const VISIBLE_SKILLS_PER_BUCKET = 4;
-
-function mapSkillBucket(skill) {
-  const dashboardBucket = String(skill?.dashboard_bucket || '').trim();
-  if (dashboardBucket) {
-    return dashboardBucket;
-  }
-
-  const category = String(skill?.category || '');
-  const name = String(skill?.name || '').toLowerCase();
-
-  if (category === 'Backend') {
-    return 'Backend';
-  }
-  if (category === 'Database') {
-    return 'Database';
-  }
-  if (category === 'Frontend') {
-    return 'Frontend';
-  }
-  if (category === 'Data') {
-    return 'Data';
-  }
-  if (category === 'Support & Operations') {
-    return 'Support';
-  }
-  if (category === 'DevOps') {
-    if (/(azure|aws|kubernetes|docker|ci\/cd|microsoft 365)/i.test(name)) {
-      return 'Platform & Cloud';
-    }
-    if (/(linux|windows server|windows|network|vpn|active directory)/i.test(name)) {
-      return 'Systems & Network';
-    }
-    if (/(firewall|cybersecurity|security|identity)/i.test(name)) {
-      return 'Security & Identity';
-    }
-    return 'Infrastructure';
-  }
-
-  return null;
-}
 
 function groupSkills(skills) {
   const grouped = new Map(SKILL_BUCKET_ORDER.map((bucket) => [bucket, []]));
 
   for (const skill of skills || []) {
-    const bucket = mapSkillBucket(skill);
-    if (!bucket) {
-      continue;
-    }
-    if (!grouped.has(bucket)) {
-      grouped.set(bucket, []);
-    }
+    const bucket = String(skill?.dashboard_bucket || "").trim();
+    if (!bucket) continue;
+    if (!grouped.has(bucket)) grouped.set(bucket, []);
     grouped.get(bucket).push(skill);
   }
 
   return Array.from(grouped, ([bucket, bucketSkills]) => ({
-      bucket,
-      skills: bucketSkills.sort((left, right) => Number(right.count || 0) - Number(left.count || 0)),
-    }))
-    .filter((entry) => entry.skills.length > 0);
+    bucket,
+    skills: bucketSkills,
+  })).filter((entry) => entry.skills.length > 0);
 }
 
-export default function SkillChart() {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+function formatUpdatedAt(value) {
+  if (!value) return null;
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
 
-  useEffect(() => {
-    fetch(apiPath('/stats/skills?limit=30'))
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((payload) => {
-        setData(payload.skills || []);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
-    return (
-      <div
-        style={{
-          height: '300px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--color-primary)',
-        }}
+function ChartError({ error, hasData, lastUpdated, onRetry }) {
+  return (
+    <div className="dashboard-chart-error" role="alert">
+      <strong>
+        {hasData ? "Skills data is stale." : "Skills data is unavailable."}
+      </strong>
+      <span>{error}</span>
+      {hasData && lastUpdated ? (
+        <span>Last successful update: {formatUpdatedAt(lastUpdated)}</span>
+      ) : null}
+      <button
+        type="button"
+        className="dashboard-inline-button"
+        onClick={onRetry}
       >
-        Loading skills telemetry...
-      </div>
-    );
-  }
+        Retry skills
+      </button>
+    </div>
+  );
+}
 
-  if (error) {
-    return (
-      <div className="chart-container">
-        <h3
-          style={{
-            marginBottom: '1.5rem',
-            color: 'var(--color-text-primary)',
-            fontWeight: 600,
-          }}
-        >
-          Top Requested Skills
-        </h3>
-        <div className="error-message">Failed to load skills: {error}</div>
-      </div>
-    );
-  }
+export default function SkillChart({
+  data = null,
+  loading = false,
+  error = null,
+  lastUpdated = null,
+  onRetry,
+}) {
+  const [expandedBuckets, setExpandedBuckets] = useState(() => new Set());
+  const groups = useMemo(() => groupSkills(data?.skills), [data]);
+  const returnedCount = groups.reduce(
+    (count, entry) => count + entry.skills.length,
+    0,
+  );
+  const visibleCount = groups.reduce(
+    (count, entry) =>
+      count +
+      (expandedBuckets.has(entry.bucket)
+        ? entry.skills.length
+        : Math.min(entry.skills.length, VISIBLE_SKILLS_PER_BUCKET)),
+    0,
+  );
+  const backlog = data?.candidate_backlog || {};
 
-  const groups = groupSkills(data);
-  const visibleGroupedSkillCount = groups.reduce((count, entry) => count + entry.skills.length, 0);
+  function toggleBucket(bucket) {
+    setExpandedBuckets((current) => {
+      const next = new Set(current);
+      if (next.has(bucket)) next.delete(bucket);
+      else next.add(bucket);
+      return next;
+    });
+  }
 
   return (
-    <div className="chart-container dashboard-skill-chart">
+    <section
+      className="chart-container dashboard-skill-chart"
+      aria-labelledby="skill-chart-title"
+    >
       <div className="dashboard-chart-heading">
         <div>
-          <h3>Top Requested Skills</h3>
-          <p>Skills are grouped into narrower operating buckets so you can scan more demand without losing context.</p>
+          <h3 id="skill-chart-title">Top Matched Canonical Skills</h3>
+          <p>
+            Current canonical matches in successfully enriched corpus Jobs.
+            Unresolved, generic, and rejected mentions are outside this ranking.
+          </p>
         </div>
-        <div className="dashboard-chart-badge">
-          {visibleGroupedSkillCount} skills shown
-        </div>
+        {data ? (
+          <div className="dashboard-chart-badge">
+            {visibleCount === returnedCount
+              ? `${returnedCount} returned`
+              : `${visibleCount} of ${returnedCount} visible`}
+          </div>
+        ) : null}
       </div>
 
-      {groups.length === 0 ? (
-        <p className="chart-empty-state">No governed skills yet.</p>
-      ) : (
-        <div className="skill-chart-grid">
-          {groups.map(({ bucket, skills }) => {
-            const visibleSkills = skills.slice(0, VISIBLE_SKILLS_PER_BUCKET);
-            const hiddenCount = Math.max(skills.length - VISIBLE_SKILLS_PER_BUCKET, 0);
+      {loading && !data ? (
+        <p className="dashboard-chart-status" role="status">
+          Loading matched canonical Skills…
+        </p>
+      ) : null}
+      {loading && data ? (
+        <p className="dashboard-chart-status" role="status">
+          Refreshing matched canonical Skills…
+        </p>
+      ) : null}
+      {error ? (
+        <ChartError
+          error={error}
+          hasData={Boolean(data)}
+          lastUpdated={lastUpdated}
+          onRetry={onRetry}
+        />
+      ) : null}
 
-            return (
-              <section key={bucket} className="skill-chart-card">
-                <div className="skill-chart-card-header">
-                  <h4>{bucket}</h4>
-                  <span>{skills.length}</span>
-                </div>
+      {data ? (
+        <>
+          <div className="category-chart-summary-grid skill-chart-summary-grid">
+            <div className="category-chart-summary-card">
+              <span>Canonical Skill Match Coverage</span>
+              <strong>{Number(data.match_coverage || 0)}%</strong>
+              <small>
+                {Number(data.matched_job_total || 0).toLocaleString()} of{" "}
+                {Number(data.processed_total || 0).toLocaleString()}{" "}
+                successfully enriched Jobs have at least one match.
+              </small>
+            </div>
+            <div className="category-chart-summary-card category-chart-summary-card-alert">
+              <span>Unresolved Skill Candidates</span>
+              <strong>
+                {Number(
+                  backlog.unresolved_candidate_total || 0,
+                ).toLocaleString()}
+              </strong>
+              <small>
+                Across{" "}
+                {Number(backlog.affected_job_total || 0).toLocaleString()}{" "}
+                distinct Jobs;{" "}
+                {Number(backlog.ready_candidate_total || 0).toLocaleString()}{" "}
+                meet the current{" "}
+                {Number(backlog.ready_threshold || 0).toLocaleString()}-Job
+                Classification threshold.
+              </small>
+            </div>
+          </div>
 
-                <div className="skill-chart-list">
-                  {visibleSkills.map((skill) => (
-                    <div key={`${bucket}-${skill.name}`} className="skill-chart-row">
-                      <span>{skill.name}</span>
-                      <strong>{Number(skill.count || 0).toLocaleString()}</strong>
+          {groups.length === 0 ? (
+            <p className="chart-empty-state">
+              No matched canonical Skills yet.
+            </p>
+          ) : (
+            <div className="skill-chart-grid">
+              {groups.map(({ bucket, skills }, bucketIndex) => {
+                const expanded = expandedBuckets.has(bucket);
+                const visibleSkills = expanded
+                  ? skills
+                  : skills.slice(0, VISIBLE_SKILLS_PER_BUCKET);
+                const hiddenCount = Math.max(
+                  skills.length - VISIBLE_SKILLS_PER_BUCKET,
+                  0,
+                );
+
+                return (
+                  <section
+                    key={bucket}
+                    className="skill-chart-card"
+                    aria-labelledby={`skill-bucket-${bucketIndex}`}
+                  >
+                    <div className="skill-chart-card-header">
+                      <h4 id={`skill-bucket-${bucketIndex}`}>{bucket}</h4>
+                      <span
+                        aria-label={`${skills.length} returned Skills in ${bucket}`}
+                      >
+                        {skills.length}
+                      </span>
                     </div>
-                  ))}
-                </div>
 
-                {hiddenCount > 0 && (
-                  <div className="skill-chart-overflow">+{hiddenCount} more</div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      )}
-    </div>
+                    <ul className="skill-chart-list">
+                      {visibleSkills.map((skill) => (
+                        <li
+                          key={skill.code}
+                          className="skill-chart-row"
+                          aria-label={`${skill.name}: ${Number(
+                            skill.count || 0,
+                          ).toLocaleString()} Jobs, ${Number(
+                            skill.prevalence || 0,
+                          )}% prevalence`}
+                        >
+                          <span>{skill.name}</span>
+                          <strong>
+                            {Number(skill.count || 0).toLocaleString()} Jobs ·{" "}
+                            {Number(skill.prevalence || 0)}%
+                          </strong>
+                        </li>
+                      ))}
+                    </ul>
+
+                    {hiddenCount > 0 ? (
+                      <button
+                        type="button"
+                        className="skill-chart-overflow"
+                        aria-expanded={expanded}
+                        onClick={() => toggleBucket(bucket)}
+                      >
+                        {expanded ? "Show less" : `Show ${hiddenCount} more`}
+                      </button>
+                    ) : null}
+                  </section>
+                );
+              })}
+            </div>
+          )}
+
+          <p className="category-chart-footnote">
+            Skill prevalence uses successfully enriched, non-deleted Jobs as its
+            denominator. Jobs may have multiple Skills, so percentages do not
+            sum to 100%.
+          </p>
+        </>
+      ) : null}
+    </section>
   );
 }

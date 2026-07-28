@@ -1,140 +1,163 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  BarChart: ({ children }) => <div data-testid="bar-chart">{children}</div>,
-  CartesianGrid: () => <div data-testid="grid" />,
-  XAxis: () => <div data-testid="x-axis" />,
-  YAxis: () => <div data-testid="y-axis" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-  Bar: ({ children }) => <div data-testid="bar">{children}</div>,
-  Cell: () => <div data-testid="cell" />,
-}));
+import SkillChart from "./SkillChart";
 
-import SkillChart from './SkillChart';
+const skillData = {
+  processed_total: 100,
+  matched_job_total: 72,
+  match_coverage: 72,
+  candidate_backlog: {
+    unresolved_candidate_total: 12,
+    affected_job_total: 34,
+    ready_candidate_total: 3,
+    ready_threshold: 5,
+  },
+  skills: [
+    {
+      code: "python",
+      name: "Python",
+      category: "Backend",
+      count: 40,
+      prevalence: 40,
+      dashboard_bucket: "Backend",
+    },
+    {
+      code: "java",
+      name: "Java",
+      category: "Backend",
+      count: 30,
+      prevalence: 30,
+      dashboard_bucket: "Backend",
+    },
+    {
+      code: "node",
+      name: "Node.js",
+      category: "Backend",
+      count: 20,
+      prevalence: 20,
+      dashboard_bucket: "Backend",
+    },
+    {
+      code: "dotnet",
+      name: ".NET",
+      category: "Backend",
+      count: 15,
+      prevalence: 15,
+      dashboard_bucket: "Backend",
+    },
+    {
+      code: "go",
+      name: "Go",
+      category: "Backend",
+      count: 10,
+      prevalence: 10,
+      dashboard_bucket: "Backend",
+    },
+    {
+      code: "uat",
+      name: "User Acceptance Testing",
+      category: "Product & Delivery",
+      count: 8,
+      prevalence: 8,
+      dashboard_bucket: "Product & Delivery",
+    },
+    {
+      code: "hidden",
+      name: "Hidden Legacy",
+      category: "Other",
+      count: 99,
+      prevalence: 99,
+      dashboard_bucket: null,
+    },
+  ],
+};
 
-function mockJsonResponse(payload) {
-  return Promise.resolve({
-    ok: true,
-    json: async () => payload,
-  });
-}
+describe("SkillChart", () => {
+  it("shows canonical coverage, prevalence, truthful visible counts, and expansion", async () => {
+    const user = userEvent.setup();
+    render(<SkillChart data={skillData} />);
 
-describe('SkillChart', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+    expect(
+      screen.getByRole("heading", { name: "Top Matched Canonical Skills" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Canonical Skill Match Coverage"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("72%")).toBeInTheDocument();
+    expect(screen.getByText("Unresolved Skill Candidates")).toBeInTheDocument();
+    expect(screen.getByText(/12/)).toBeInTheDocument();
+    expect(screen.getByText("5 of 6 visible")).toBeInTheDocument();
+    expect(screen.queryByText("Go")).not.toBeInTheDocument();
+    expect(screen.getByText("40 Jobs · 40%")).toBeVisible();
 
-  it('groups skills into narrower dashboard buckets and shows overflow counts', async () => {
-    globalThis.fetch = vi.fn((input) => {
-      const url = String(input);
+    const expand = screen.getByRole("button", { name: "Show 1 more" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    await user.click(expand);
 
-      if (url.includes('/api/stats/skills')) {
-        return mockJsonResponse({
-          skills: [
-            { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
-            { name: 'Java', category: 'Backend', count: 695, dashboard_bucket: 'Backend' },
-            { name: 'C#', category: 'Backend', count: 398, dashboard_bucket: 'Backend' },
-            { name: 'Node.js', category: 'Backend', count: 269, dashboard_bucket: 'Backend' },
-            { name: 'API Development', category: 'Backend', count: 210, dashboard_bucket: 'Backend' },
-            { name: 'SQL', category: 'Database', count: 794, dashboard_bucket: 'Database' },
-            { name: 'MySQL', category: 'Database', count: 284, dashboard_bucket: 'Database' },
-            { name: 'Linux', category: 'DevOps', count: 626, dashboard_bucket: 'Systems & Network' },
-            { name: 'Azure', category: 'DevOps', count: 443, dashboard_bucket: 'Platform & Cloud' },
-            { name: 'AWS', category: 'DevOps', count: 440, dashboard_bucket: 'Platform & Cloud' },
-            { name: 'Docker', category: 'DevOps', count: 274, dashboard_bucket: 'Platform & Cloud' },
-            { name: 'Kubernetes', category: 'DevOps', count: 288, dashboard_bucket: 'Platform & Cloud' },
-            { name: 'Microsoft 365', category: 'DevOps', count: 238, dashboard_bucket: 'Platform & Cloud' },
-            { name: 'Windows', category: 'DevOps', count: 396, dashboard_bucket: 'Systems & Network' },
-            { name: 'Firewalls', category: 'DevOps', count: 364, dashboard_bucket: 'Security & Identity' },
-            { name: 'JavaScript', category: 'Frontend', count: 421, dashboard_bucket: 'Frontend' },
-            { name: 'React', category: 'Frontend', count: 337, dashboard_bucket: 'Frontend' },
-            { name: 'HTML', category: 'Frontend', count: 260, dashboard_bucket: 'Frontend' },
-            { name: 'Troubleshooting', category: 'Support & Operations', count: 418, dashboard_bucket: 'Support' },
-            { name: 'Incident Management', category: 'Support & Operations', count: 311, dashboard_bucket: 'Support' },
-            { name: 'Power BI', category: 'Data', count: 252, dashboard_bucket: 'Data' },
-            { name: 'Machine Learning', category: 'Data', count: 357, dashboard_bucket: 'Data' },
-          ],
-        });
-      }
-
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    });
-
-    render(<SkillChart />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Top Requested Skills')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/backend/i)).toBeInTheDocument();
-    expect(screen.getByText(/database/i)).toBeInTheDocument();
-    expect(screen.getByText(/platform & cloud/i)).toBeInTheDocument();
-    expect(screen.getByText(/22 skills shown/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/\+1 more/i).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/top 15/i)).not.toBeInTheDocument();
-  });
-
-  it('counts only actually rendered grouped skills in the summary badge', async () => {
-    globalThis.fetch = vi.fn((input) => {
-      const url = String(input);
-
-      if (url.includes('/api/stats/skills')) {
-        return mockJsonResponse({
-          skills: [
-            { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
-            { name: 'SQL', category: 'Database', count: 794, dashboard_bucket: 'Database' },
-            { name: 'Legacy Skill', category: 'Unmapped', count: 200, dashboard_bucket: null },
-          ],
-        });
-      }
-
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    });
-
-    render(<SkillChart />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Top Requested Skills')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/2 skills shown/i)).toBeInTheDocument();
-    expect(screen.queryByText(/3 skills shown/i)).not.toBeInTheDocument();
-    expect(screen.queryByText('Legacy Skill')).not.toBeInTheDocument();
+    expect(screen.getByText("Go")).toBeVisible();
+    expect(screen.getByText("6 returned")).toBeInTheDocument();
+    expect(screen.queryByText("Hidden Legacy")).not.toBeInTheDocument();
   });
 
-  it('renders dynamic dashboard buckets after the predefined buckets', async () => {
-    globalThis.fetch = vi.fn((input) => {
-      const url = String(input);
+  it("preserves dynamic backend-owned buckets after preferred buckets", () => {
+    render(<SkillChart data={skillData} />);
 
-      if (url.includes('/api/stats/skills')) {
-        return mockJsonResponse({
-          skills: [
-            { name: 'Python', category: 'Backend', count: 1015, dashboard_bucket: 'Backend' },
-            {
-              name: 'User Acceptance Testing',
-              category: 'Product & Delivery',
-              count: 65,
-              dashboard_bucket: 'Product & Delivery',
-            },
-          ],
-        });
-      }
+    expect(
+      screen
+        .getAllByRole("heading", { level: 4 })
+        .map((heading) => heading.textContent),
+    ).toEqual(["Backend", "Product & Delivery"]);
+  });
 
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    });
+  it("preserves backend ranking order and exposes accessible values", () => {
+    const rankedData = {
+      ...skillData,
+      skills: [
+        {
+          code: "z-first",
+          name: "Backend First",
+          category: "Backend",
+          count: 10,
+          prevalence: 10,
+          dashboard_bucket: "Backend",
+        },
+        {
+          code: "a-second",
+          name: "Backend Second",
+          category: "Backend",
+          count: 10,
+          prevalence: 10,
+          dashboard_bucket: "Backend",
+        },
+      ],
+    };
 
-    render(<SkillChart />);
+    render(<SkillChart data={rankedData} loading />);
 
-    await waitFor(() => {
-      expect(screen.getByText('Product & Delivery')).toBeInTheDocument();
-    });
+    expect(
+      screen.getByRole("list").querySelectorAll("li")[0],
+    ).toHaveAccessibleName("Backend First: 10 Jobs, 10% prevalence");
+    expect(
+      screen.getByLabelText("2 returned Skills in Backend"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("status", {
+        name: "",
+      }),
+    ).toHaveTextContent("Refreshing matched canonical Skills");
+  });
 
-    expect(screen.getByText('User Acceptance Testing')).toBeInTheDocument();
-    expect(screen.getAllByRole('heading', { level: 4 }).map((heading) => heading.textContent)).toEqual([
-      'Backend',
-      'Product & Delivery',
-    ]);
+  it("renders an accessible empty error state and retry", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(<SkillChart error="HTTP 500" onRetry={onRetry} />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Skills data is unavailable.",
+    );
+    await user.click(screen.getByRole("button", { name: "Retry skills" }));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 });

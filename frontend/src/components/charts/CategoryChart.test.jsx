@@ -1,132 +1,124 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div data-testid="responsive-container">{children}</div>,
-  PieChart: ({ children }) => <div data-testid="pie-chart">{children}</div>,
-  Pie: ({ children }) => <div data-testid="pie">{children}</div>,
-  Cell: () => <div data-testid="cell" />,
-  Tooltip: () => <div data-testid="tooltip" />,
-}));
+import CategoryChart from "./CategoryChart";
 
-import CategoryChart from './CategoryChart';
+const categoryData = {
+  population_total: 100,
+  assigned_total: 80,
+  unassigned_total: 20,
+  assignment_coverage: 80,
+  classification_ready_unassigned_total: 12,
+  top_categories: [
+    {
+      code: "backend",
+      path: "Technology / Software Engineering / Backend Development",
+      label: "Backend Development",
+      count: 30,
+      share_of_assigned: 38,
+    },
+  ],
+  other_categories: {
+    count: 50,
+    bucket_count: 2,
+    share_of_assigned: 62,
+    items: [
+      {
+        code: "security",
+        path: "Technology / Infrastructure / Cybersecurity",
+        label: "Cybersecurity",
+        count: 28,
+        share_of_assigned: 35,
+      },
+      {
+        code: "support",
+        path: "Technology / Operations / Technical Support",
+        label: "Technical Support",
+        count: 22,
+        share_of_assigned: 28,
+      },
+    ],
+  },
+};
 
-function mockJsonResponse(payload) {
-  return Promise.resolve({
-    ok: true,
-    json: async () => payload,
-  });
-}
+describe("CategoryChart", () => {
+  it("leads with assignment health and exposes full canonical paths", () => {
+    render(<CategoryChart data={categoryData} />);
 
-describe('CategoryChart', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('renders only accepted Canonical Job Taxonomy assignments and ignores legacy fallback payloads', async () => {
-    globalThis.fetch = vi.fn((input) => {
-      const url = String(input);
-
-      if (url.includes('/api/stats/categories/dashboard')) {
-        return mockJsonResponse({
-          categorized_total: 7308,
-          specific_total: 5043,
-          fallback_total: 2265,
-          top_specific_categories: [
-            {
-              path: 'Information & Communication Technology / Software Development / Backend Development',
-              label: 'Backend Development',
-              count: 983,
-              share_of_specific: 19,
-            },
-            {
-              path: 'Information & Communication Technology / Infrastructure & Support / Systems Administration',
-              label: 'Systems Administration',
-              count: 764,
-              share_of_specific: 15,
-            },
-          ],
-          other_specific_categories: {
-            count: 3296,
-            bucket_count: 10,
-            share_of_specific: 65,
-          },
-          fallback_buckets: [
-            {
-              path: 'Information & Communication Technology / General / General',
-              label: 'General / General',
-              count: 2262,
-              share_of_categorized: 31,
-              source_breakdown: [
-                { source_site: 'ctgoodjobs', source_subclassification_name: null, count: 2220 },
-                { source_site: 'jobsdb', source_subclassification_name: 'Other', count: 43 },
-              ],
-            },
-          ],
-        });
-      }
-
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
-    });
-
-    render(<CategoryChart totalJobs={7308} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Jobs by Canonical Job Taxonomy')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('Accepted assignments')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /fallback diagnostic/i })).not.toBeInTheDocument();
-    expect(screen.queryByText('General / General')).not.toBeInTheDocument();
-    expect(screen.queryByText(/ctgoodjobs \/ no source subcategory/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/other specific categories/i)).toBeInTheDocument();
-    expect(screen.queryByText(/other categories/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Jobs by Canonical Job Taxonomy" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("80% assigned")).toBeInTheDocument();
+    expect(screen.getByText("Unassigned Jobs")).toBeInTheDocument();
+    expect(screen.getByText("Classification-ready")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Technology / Software Engineering / Backend Development",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("meter", {
+        name: "Technology / Software Engineering / Backend Development: 38% of accepted assignments",
+      }),
+    ).toHaveAttribute("aria-valuenow", "38");
+    expect(
+      screen.getByLabelText(
+        "Technology / Software Engineering / Backend Development: 30 Jobs",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/source listings may have expired/i),
+    ).toBeInTheDocument();
   });
 
-  it('derives category share labels from counts when the dashboard payload omits precomputed percentages', async () => {
-    globalThis.fetch = vi.fn((input) => {
-      const url = String(input);
+  it("announces a refresh while retaining the last successful data", () => {
+    render(<CategoryChart data={categoryData} loading />);
 
-      if (url.includes('/api/stats/categories/dashboard')) {
-        return mockJsonResponse({
-          categorized_total: 7308,
-          specific_total: 5043,
-          fallback_total: 2265,
-          top_specific_categories: [
-            {
-              path: 'Information & Communication Technology / Software Development / Backend Development',
-              label: 'Backend Development',
-              count: 983,
-            },
-          ],
-          other_specific_categories: {
-            count: 4060,
-            bucket_count: 12,
-          },
-          fallback_buckets: [
-            {
-              path: 'Information & Communication Technology / General / General',
-              label: 'General / General',
-              count: 2265,
-              source_breakdown: [
-                { source_site: 'ctgoodjobs', source_subclassification_name: null, count: 2220 },
-              ],
-            },
-          ],
-        });
-      }
+    expect(screen.getByText("Backend Development")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Refreshing canonical assignments",
+    );
+  });
 
-      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+  it("expands Other into every counted canonical path", async () => {
+    const user = userEvent.setup();
+    render(<CategoryChart data={categoryData} />);
+
+    const other = screen.getByRole("button", {
+      name: /other.*50 jobs.*2 job subcategories/i,
     });
+    expect(other).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Cybersecurity")).not.toBeInTheDocument();
 
-    render(<CategoryChart totalJobs={7308} />);
+    await user.click(other);
 
-    await waitFor(() => {
-      expect(screen.getByText('Backend Development')).toBeInTheDocument();
-    });
+    expect(other).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByText("Technology / Infrastructure / Cybersecurity"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Technology / Operations / Technical Support"),
+    ).toBeVisible();
+  });
 
-    expect(screen.getByText('19% of accepted assignments')).toBeInTheDocument();
-    expect(screen.getByText(/81% across 12 Job Subcategories/i)).toBeInTheDocument();
-    expect(screen.queryByText(/31% of categorized jobs/i)).not.toBeInTheDocument();
+  it("retains stale data with an accessible error and retry", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(
+      <CategoryChart
+        data={categoryData}
+        error="HTTP 503"
+        lastUpdated={Date.now()}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Taxonomy data is stale.",
+    );
+    expect(screen.getByText("Backend Development")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Retry taxonomy" }));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 });
