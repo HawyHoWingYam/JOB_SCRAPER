@@ -15,13 +15,13 @@
   "branch": null,
   "base_branch": "codex/offertoday-it-coverage-20260702",
   "worktree_path": null,
-  "commit": null,
+  "commit": "71fce2c9",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "07-27-fix-automated-classification-qa-defects",
   "relatedFiles": [],
-  "notes": "Current 54-entry all-non-mapping manifest approved on 2026-07-28. Browser manual QA explicitly deferred; keep task and GitHub issue open until completed.",
+  "notes": "Implementation committed in 71fce2c9. Current 54-entry all-non-mapping manifest approved on 2026-07-28; evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/38#issuecomment-5098334289. Browser manual QA explicitly deferred; keep task and issue open.",
   "meta": {
     "github_issue": 38,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/38"

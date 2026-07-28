@@ -15,13 +15,13 @@
   "branch": null,
   "base_branch": "codex/offertoday-it-coverage-20260702",
   "worktree_path": null,
-  "commit": null,
+  "commit": "71fce2c9",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": "07-27-fix-automated-classification-qa-defects",
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Implementation committed in 71fce2c9. Evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/37#issuecomment-5098334329. Browser manual QA deferred; keep issue open.",
   "meta": {
     "github_issue": 37,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/37"

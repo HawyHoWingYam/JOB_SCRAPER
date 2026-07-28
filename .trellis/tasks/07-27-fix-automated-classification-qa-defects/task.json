@@ -15,7 +15,7 @@
   "branch": null,
   "base_branch": "codex/offertoday-it-coverage-20260702",
   "worktree_path": null,
-  "commit": null,
+  "commit": "71fce2c9",
   "pr_url": null,
   "subtasks": [],
   "children": [
@@ -25,7 +25,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Implementation and automated verification approved on 2026-07-28. Aggregate browser manual QA explicitly deferred; keep child and umbrella issues open.",
+  "notes": "Implementation committed in 71fce2c9 and approved on 2026-07-28. Aggregate evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/34#issuecomment-5098334255 and https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/32#issuecomment-5098334278. Browser manual QA explicitly deferred; keep child and umbrella issues open.",
   "meta": {
     "github_issue": 32,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/32"
