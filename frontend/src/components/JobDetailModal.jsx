@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
-import { X } from 'lucide-react';
+import { Pencil, X } from 'lucide-react';
 import SkillTags from './SkillTags';
+import ManualJobForm from './jobs/ManualJobForm';
 
 const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
 
@@ -45,6 +46,9 @@ function formatLongDate(value) {
 }
 
 function getAiStateMessage(job) {
+  if (job.job_intelligence_freshness === 'stale') {
+    return 'Job Intelligence is stale because operator-authored facts changed. Run AI enrichment again to replace it.';
+  }
   if (!job.ai_enriched_at) {
     return 'AI enrichment not run yet';
   }
@@ -243,6 +247,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const [relatedJobs, setRelatedJobs] = useState([]);
   const [relatedJobsLoading, setRelatedJobsLoading] = useState(true);
   const [relatedJobsError, setRelatedJobsError] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
   const recommendationsAvailable = capabilities?.recommendations?.similar_jobs?.available !== false;
 
   useEffect(() => {
@@ -468,7 +473,49 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
               <h2 id="job-detail-title">{job.title}</h2>
               <p className="modal-company">{job.company_name}</p>
               <p className="modal-location">{job.location}</p>
+              <p className="modal-meta-item">
+                Origin: {job.origin === 'manual_entry' ? 'Manual Entry' : humanizeContractValue(job.origin)}
+              </p>
+              {job.enrichment_eligibility === 'needs_job_description' && (
+                <p className="modal-ai-state">Needs job description before AI enrichment</p>
+              )}
+              {job.manual_editable && (
+                <button type="button" onClick={() => setIsEditing((value) => !value)}>
+                  <Pencil size={15} /> {isEditing ? 'Close edit form' : 'Edit Manual Job'}
+                </button>
+              )}
             </div>
+
+            {isEditing && (
+              <ManualJobForm
+                endpoint={`/jobs/manual/${job.id}`}
+                method="PATCH"
+                submitLabel="Save Job"
+                initialValue={{
+                  title: job.title,
+                  description: job.description || '',
+                  company: {
+                    mode: 'existing',
+                    value: { id: job.company_id, name: job.company_name },
+                  },
+                  details: {
+                    salaryMin: job.salary_min == null ? '' : String(job.salary_min),
+                    salaryMax: job.salary_max == null ? '' : String(job.salary_max),
+                    salaryCurrency: job.salary_currency || 'HKD',
+                    location: job.location || '',
+                    employmentTypeCodes: employmentTypes.map((item) => item.code),
+                    postedDate: job.posted_date ? String(job.posted_date).slice(0, 10) : '',
+                    experienceMin: job.experience_min_years == null ? '' : String(job.experience_min_years),
+                    experienceMax: job.experience_max_years == null ? '' : String(job.experience_max_years),
+                  },
+                }}
+                onSuccess={(updatedJob) => {
+                  setJob(updatedJob);
+                  setIsEditing(false);
+                }}
+                onCancel={() => setIsEditing(false)}
+              />
+            )}
 
             <section
               className="modal-section"

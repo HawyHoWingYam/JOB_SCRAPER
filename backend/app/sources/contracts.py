@@ -292,15 +292,6 @@ def build_offertoday_company_data(
         ),
         "name": company_name,
         "location": canonical_job.location,
-        "extra_data": {
-            "source_url": canonical_job.source_url,
-            "raw_data": canonical_job.raw_data,
-            "source_identity": (
-                "fallback_company_name"
-                if str(source_company_id).startswith("fallback:name:")
-                else "source_company_id"
-            ),
-        },
     }
 
 

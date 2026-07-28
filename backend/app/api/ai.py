@@ -498,6 +498,8 @@ async def get_ai_overview(db: Session = Depends(get_db)):
         "ai_eligible_jobs": overview["ai_eligible_jobs"],
         "ineligible_jobs": overview["ineligible_jobs"],
         "pending_jobs": overview["pending_jobs"],
+        "manual_pending_jobs": overview["manual_pending_jobs"],
+        "needs_job_description": overview["needs_job_description"],
         "running_runs": overview["running_runs"],
         "active_runs": overview["active_runs"],
         "failed_jobs": overview["failed_jobs"],
@@ -521,8 +523,14 @@ async def get_pending_filter_options(db: Session = Depends(get_db)):
     hierarchy: dict[str, dict[str, object]] = {}
     for row in rows:
         source = str(row.get("source_site") or "").strip().lower()
+        if not source:
+            continue
+        source_state = hierarchy.setdefault(
+            source,
+            {"classification_paths": {}, "classifications": {}},
+        )
         nodes = row.get("nodes")
-        if not source or not isinstance(nodes, list) or not nodes:
+        if not isinstance(nodes, list) or not nodes:
             continue
 
         normalized_nodes = [
@@ -540,10 +548,6 @@ async def get_pending_filter_options(db: Session = Depends(get_db)):
         if not normalized_nodes or int(normalized_nodes[0]["source_position"]) != 0:
             continue
 
-        source_state = hierarchy.setdefault(
-            source,
-            {"classification_paths": {}, "classifications": {}},
-        )
         path_key = tuple(str(node["id"]) for node in normalized_nodes)
         source_state["classification_paths"].setdefault(
             path_key,

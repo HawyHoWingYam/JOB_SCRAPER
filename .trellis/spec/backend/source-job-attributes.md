@@ -13,6 +13,10 @@ Source Classification Paths belong to one external Source. They are not the
 Canonical Job Taxonomy. Employment Type is the governed seven-code attribute;
 Work Arrangement and working-day labels remain separate evidence.
 
+Manual Entry is an origin, not an external Source. Manual Jobs use
+`ManualJobEvidence` and `JobEnrichmentEvidence`; they must never be admitted to
+these projection tables or given fabricated Source classification identities.
+
 ### 2. Signatures
 
 The executable Module boundary is:
@@ -154,6 +158,7 @@ Persistence is owned by `job_source_attribute_projections`,
 | CTGoodJobs detail evidence is present before merge | Preserve the exact detail payload through canonical construction; do not fall back to listing evidence |
 | CTGoodJobs detail evidence is absent but listing evidence exists | Preserve the listing evidence; ingest remains responsible for typed validation |
 | Generic `POST /api/jobs` is called | HTTP 410 with `COLLECTED_JOB_CREATE_RETIRED` |
+| Manual Job is projected through `SourceJobAttributes.project` | Forbidden boundary violation; use Manual evidence instead |
 | Unknown Employment Type code or unrecognized legacy label filter | HTTP/Pydantic 422 validation failure |
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
 | Malformed bounded label marker | Retain evidence, map no type, count malformed but not unknown |
@@ -177,6 +182,8 @@ Persistence is owned by `job_source_attribute_projections`,
   unrecoverable.
 - **Bad:** a UI sends a display label into a new direct SQL equality filter.
   This creates a second filter authority beside governed codes.
+- **Bad:** add `manual` to a Source check constraint to make a Manual Job pass
+  Job enrichment. This destroys the external-Source identity boundary.
 
 ### 6. Tests Required
 

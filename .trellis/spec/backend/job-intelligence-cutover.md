@@ -34,6 +34,8 @@ The application seam is `app.job_intelligence.sandbox_cutover.SandboxCutover`.
 Retain exactly:
 
 - Companies and Jobs, including collected details and AI enrichment fields;
+- Company `website` and `ai_description_updated_at`, plus Manual Job evidence,
+  freshness hashes, operator field authority, and mutation receipts;
 - Job embeddings without persisted taxonomy/model version identity;
 - ordinary Source Classification rows and complete Job source-path evidence;
 - current Job Taxonomy, Company Industry, Skill nodes, aliases, mappings,
@@ -52,6 +54,11 @@ Delete exactly:
 
 Never delete or regenerate retained Job IDs, Company IDs, details, enrichment,
 embeddings, or source evidence.
+
+`companies.extra_data` and `jobs.search_vector` are the only intentionally
+removed compatibility columns in this cutover. Export records their pre-cutover
+non-null counts for operator review, omits their values from retained rows, and
+does not treat them as restorable data.
 
 ### 4. Artifact Contracts
 
@@ -108,7 +115,8 @@ aborts the workflow while the existing sandbox remains intact.
 - `test_sandbox_cutover.py`: deterministic export, recursive identity stripping,
   strict artifact gate, exact import/verification, parent-first hierarchy,
   failed-verification retention, Redis cleanup, runtime emptiness, forbidden
-  table absence, and no backup/restore/rollback CLI commands.
+  table absence, additive Manual-table handling for older source schemas,
+  removed-column discard counts, and no backup/restore/rollback CLI commands.
 - `integration/test_sandbox_cutover_rehearsal.py`: a disposable PostgreSQL
   database ending in `_test` plus non-zero Redis DB; real RESTRICT cycles,
   consumer group pending entries, dead letters, retained corpus, vectors, and

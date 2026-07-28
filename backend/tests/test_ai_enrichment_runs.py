@@ -1,6 +1,7 @@
 import asyncio
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -21,7 +22,9 @@ from app.models.company import Company
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
+from app.models.manual_job import ManualJobEvidence
 from app.models.source_job_attributes import (
+    SOURCE_JOB_ATTRIBUTE_TABLES,
     JobSourceAttributeProjection,
     JobSourceClassificationPath,
     JobSourceClassificationPathNode,
@@ -31,6 +34,7 @@ from app.services.enrichment_run_service import (
     EnrichmentRunService,
     PendingJobFilters,
 )
+from app.services.ai_enrichment_service import AIEnrichmentService
 @compiles(UUID, "sqlite")
 def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(32)"
@@ -41,9 +45,9 @@ def db():
     engine = create_engine("sqlite:///:memory:")
     Company.__table__.create(engine)
     Job.__table__.create(engine)
-    JobSourceAttributeProjection.__table__.create(engine)
-    JobSourceClassificationPath.__table__.create(engine)
-    JobSourceClassificationPathNode.__table__.create(engine)
+    ManualJobEvidence.__table__.create(engine)
+    for table in SOURCE_JOB_ATTRIBUTE_TABLES:
+        table.create(engine, checkfirst=True)
     EnrichmentRun.__table__.create(engine)
     EnrichmentRunItem.__table__.create(engine)
     EventOutbox.__table__.create(engine)
@@ -177,6 +181,38 @@ def add_source_path(db, job, *nodes):
     return path
 
 
+def make_manual_job(
+    db,
+    company,
+    *,
+    job_id: str,
+    description: str | None,
+    enriched_hash: str | None = None,
+    enriched: bool = False,
+):
+    job = make_job(
+        db,
+        company,
+        job_id=job_id,
+        source_site="manual",
+        classification=None,
+        subclassification=None,
+        projected=False,
+        enriched=enriched,
+    )
+    job.description = description
+    db.add(
+        ManualJobEvidence(
+            job_id=job.id,
+            evidence_hash="a" * 64,
+            enriched_evidence_hash=enriched_hash,
+            operator_authored_fields=["title", "description"],
+        )
+    )
+    db.flush()
+    return job
+
+
 def test_pending_request_normalizes_values_and_enforces_safe_scope():
     request = PendingSelectionRequest.model_validate(
         {
@@ -218,6 +254,258 @@ def test_pending_request_normalizes_values_and_enforces_safe_scope():
         CreateRunRequest.model_validate(
             {"mode": "batch", "job_ids": [str(uuid.uuid4())]}
         )
+
+
+def test_manual_origin_is_a_valid_explicit_pending_scope() -> None:
+    request = PendingSelectionRequest(
+        filters={"source_sites": [" MANUAL "]},
+        limit=25,
+    )
+
+    assert request.filters.source_sites == ["manual"]
+    assert request.filters.to_service_filters().has_constraints
+
+
+def test_manual_jobs_use_evidence_freshness_and_description_eligibility(db, company):
+    pending = make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000201",
+        description="Build reliable systems",
+    )
+    make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000202",
+        description=None,
+    )
+    stale = make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000203",
+        description="Changed facts",
+        enriched_hash="b" * 64,
+        enriched=True,
+    )
+    make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000204",
+        description="Current facts",
+        enriched_hash="a" * 64,
+        enriched=True,
+    )
+    service = EnrichmentRunService(db)
+
+    preview = service.inspect_pending_selection(
+        filters=PendingJobFilters(source_sites=("manual",)),
+        limit=50,
+    )
+    counts = service.get_job_queue_counts()
+
+    assert set(preview.supported_job_ids) == {str(pending.id), str(stale.id)}
+    assert counts["manual_pending_jobs"] == 2
+    assert counts["needs_job_description"] == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_filter_option_has_no_source_classification_paths(db, company):
+    make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000205",
+        description="Build reliable systems",
+    )
+
+    payload = await get_pending_filter_options_endpoint(db)
+
+    manual = next(item for item in payload["sources"] if item["source_site"] == "manual")
+    assert manual["classification_paths"] == []
+    assert manual["classifications"] == []
+
+
+class _StubInsightExtractor:
+    def __init__(self, experience):
+        self.experience = experience
+
+    async def extract(self, **_kwargs):
+        return {
+            "summary": "Fresh AI summary",
+            "classification": {"code": "software-engineering"},
+            "skills": [],
+            "confidence": 0.8,
+            "experience": self.experience,
+        }
+
+
+class _StubCurrentTaxonomyEnrichment:
+    def __init__(self, _db):
+        pass
+
+    def build_job_context(self, _evidence):
+        return SimpleNamespace(prompt_payload=[])
+
+    def build_skill_prompt(self, **_kwargs):
+        return []
+
+    def assign_job_from_classification(self, **_kwargs):
+        return {"state": "assigned"}
+
+    def replace_job_skills(self, **_kwargs):
+        return {"skills": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "operator_fields",
+        "stored_min",
+        "stored_max",
+        "extracted_min",
+        "extracted_max",
+        "expected_min",
+        "expected_max",
+        "expected_conflicts",
+    ),
+    [
+        (
+            ["title", "description"],
+            None,
+            None,
+            2,
+            4,
+            2,
+            4,
+            [],
+        ),
+        (
+            ["title", "description", "experience_min_years", "experience_max_years"],
+            2,
+            4,
+            2,
+            4,
+            2,
+            4,
+            [],
+        ),
+        (
+            ["title", "description", "experience_min_years", "experience_max_years"],
+            3,
+            5,
+            1,
+            2,
+            3,
+            5,
+            [
+                "AI suggested experience_min_years=1; operator-authored value preserved",
+                "AI suggested experience_max_years=2; operator-authored value preserved",
+            ],
+        ),
+    ],
+)
+async def test_manual_enrichment_preserves_operator_experience_and_fills_only_omitted_values(
+    db,
+    company,
+    monkeypatch,
+    operator_fields,
+    stored_min,
+    stored_max,
+    extracted_min,
+    extracted_max,
+    expected_min,
+    expected_max,
+    expected_conflicts,
+):
+    job = make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000206",
+        description="Build reliable systems",
+        enriched_hash="b" * 64,
+        enriched=True,
+    )
+    job.experience_min_years = stored_min
+    job.experience_max_years = stored_max
+    job.manual_evidence.operator_authored_fields = operator_fields
+    db.commit()
+
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.CurrentTaxonomyEnrichment",
+        _StubCurrentTaxonomyEnrichment,
+    )
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.get_llm_status",
+        lambda _scope: {},
+    )
+    service = AIEnrichmentService()
+    service.insight_extractor = _StubInsightExtractor(
+        {
+            "experience_level": "mid",
+            "experience_min_years": extracted_min,
+            "experience_max_years": extracted_max,
+            "summary": "Experience extracted",
+            "evidence": ["Role description evidence"],
+        }
+    )
+
+    result = await service.enrich_job(job, db)
+
+    assert result["status"] == "success"
+    assert job.experience_min_years == expected_min
+    assert job.experience_max_years == expected_max
+    assert job.experience_evidence == ["Role description evidence", *expected_conflicts]
+    assert job.manual_evidence.enriched_evidence_hash == job.manual_evidence.evidence_hash
+
+
+@pytest.mark.asyncio
+async def test_failed_manual_enrichment_preserves_old_intelligence_and_stale_hash(
+    db,
+    company,
+    monkeypatch,
+):
+    job = make_manual_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000207",
+        description="Changed facts",
+        enriched_hash="b" * 64,
+        enriched=True,
+    )
+    old_enriched_at = datetime(2026, 7, 18, 13, 0)
+    job.ai_summary = "Old intelligence"
+    job.ai_enriched_at = old_enriched_at
+    db.commit()
+
+    class FailingTaxonomy(_StubCurrentTaxonomyEnrichment):
+        def replace_job_skills(self, **_kwargs):
+            raise RuntimeError("skill replacement failed")
+
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.CurrentTaxonomyEnrichment",
+        FailingTaxonomy,
+    )
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.get_llm_status",
+        lambda _scope: {},
+    )
+    service = AIEnrichmentService()
+    service.insight_extractor = _StubInsightExtractor(
+        {
+            "experience_level": "mid",
+            "experience_min_years": 2,
+            "experience_max_years": 4,
+            "summary": "Experience extracted",
+            "evidence": [],
+        }
+    )
+
+    result = await service.enrich_job(job, db)
+
+    assert result["status"] == "error"
+    assert job.ai_summary == "Old intelligence"
+    assert job.ai_enriched_at == old_enriched_at
+    assert job.manual_evidence.enriched_evidence_hash == "b" * 64
+    assert job.manual_evidence.enriched_evidence_hash != job.manual_evidence.evidence_hash
 
 
 def test_pending_preview_and_create_do_not_gate_jobs_on_taxonomy_mapping(db, company):

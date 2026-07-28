@@ -29,6 +29,15 @@ documented in `ordinary-current-taxonomies.md`.
 - `compose_current_job_detail` serializes ordinary Job fields through
   `JobSchema`, adds safe detail scalars, overlays the current product payload,
   and validates one complete `JobDetailSchema`.
+- Job Detail includes structured salary, `origin`, `manual_editable`,
+  `enrichment_eligibility`, `job_intelligence_freshness`, and
+  `company_website`. Manual Entry renders as `manual_entry`; only Manual Jobs
+  are editable. Freshness is derived from Manual evidence hashes, never in the UI.
+- Company reads expose normalized `website` and
+  `ai_description_updated_at`; ordinary Company create input does not accept
+  `ai_description`.
+- Manual structured salary accepts only `AUD`, `CAD`, `CNY`, `EUR`, `GBP`,
+  `HKD`, `JPY`, `SGD`, or `USD`; the command normalizes the code to uppercase.
 - Never validate a raw `Job` ORM instance as `JobDetailSchema`: a retired ORM
   property can trigger a query against a table absent from the current schema
   before the current payload is overlaid.
@@ -58,6 +67,9 @@ documented in `ordinary-current-taxonomies.md`.
 | Current taxonomy code is unknown to the reader | Fail the composed response; do not use legacy text |
 | Required composed state is missing or availability contradicts data | Pydantic validation failure |
 | Frontend/backend fixture copies differ | Product contract test failure |
+| Manual Job description is blank | `enrichment_eligibility=needs_job_description` |
+| Manual evidence hash differs from last enriched hash | Old intelligence remains visible with `job_intelligence_freshness=stale` |
+| Collected Job requests Manual edit route | Reject; collected facts remain read-only |
 
 ### 5. Good / Base / Bad Cases
 
@@ -65,6 +77,8 @@ documented in `ordinary-current-taxonomies.md`.
   Mentions while no legacy Governance tables exist.
 - **Base:** an unenriched Job is Unassigned with empty Skills and Candidate
   Mentions.
+- **Good:** Manual Job Detail exposes operator fields as editable and keeps AI
+  summary/taxonomy/Skills outside the mutation command.
 - **Bad:** serialize the raw ORM object first and overwrite Skills afterward.
 - **Bad:** show a Governance link or use a legacy revision-bound projection when
   the current assignment is empty.
@@ -81,6 +95,8 @@ documented in `ordinary-current-taxonomies.md`.
   current fixtures and assert no legacy fallback or Governance workspace.
 - The backend test container mounts `/frontend` read-only for exact fixture
   equality.
+- Manual intake/product tests cover structured salary, origin/editability,
+  needs-description, stale/current intelligence, and Company website round-trip.
 
 ### 7. Wrong vs Correct
 

@@ -86,7 +86,6 @@ class SourceIdentityBackfillService:
                         industry=company.industry,
                         location=company.location,
                         ai_description=company.ai_description,
-                        extra_data=company.extra_data,
                         is_deleted=company.is_deleted,
                     )
                     db.add(target_company)

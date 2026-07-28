@@ -142,6 +142,45 @@
   border-bottom: 1px solid var(--color-border);
 }
 
+.add-job-company-mode {
+  display: flex;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.add-job-company-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.add-job-new-company-grid,
+.add-job-optional-details {
+  display: grid;
+  gap: 1rem;
+}
+
+.add-job-optional-details {
+  padding: 1rem 0;
+  border-top: 1px solid var(--glass-border);
+}
+
+.add-job-optional-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.add-job-duplicate-review {
+  display: flex;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 0.75rem;
+  background: rgba(245, 158, 11, 0.08);
+}
+
 .add-job-field {
   display: flex;
   flex-direction: column;
@@ -330,6 +369,13 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background 0.15s;
+}
+
+button.add-job-suggestion-item {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  color: inherit;
 }
 
 .add-job-suggestion-item:hover,

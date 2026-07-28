@@ -20,7 +20,8 @@ const TERMINAL_RUN_STATUSES = new Set(['completed', 'completed_with_failures', '
 const DEGRADED_PLACEHOLDER = 'Unavailable';
 const REFRESH_REQUEST_TIMEOUT_MS = 8000;
 const FILTER_PREVIEW_DEBOUNCE_MS = 350;
-const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run';
+const FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run:v1';
+const LEGACY_FILTER_STORAGE_KEY = 'ai-enrichment-filtered-run';
 const DEFAULT_FILTER_STATE = {
   source_sites: [],
   source_classification_ids: [],
@@ -162,7 +163,8 @@ function getRunStatusTone(status) {
 
 function loadPersistedFilters() {
   try {
-    const current = window.localStorage.getItem(FILTER_STORAGE_KEY);
+    const current = window.localStorage.getItem(FILTER_STORAGE_KEY)
+      || window.localStorage.getItem(LEGACY_FILTER_STORAGE_KEY);
     const parsed = JSON.parse(current || 'null');
     const filters = parsed?.filters;
     const limit = Number(parsed?.limit);
@@ -398,7 +400,11 @@ export default function AIEnrichmentPage() {
     && !previewLoading
     && !previewError
     && Number(preview?.effective_item_count || 0) > 0;
-  const sourceOptions = filterHierarchy.map((source) => source.source_site);
+  const sourceOptions = filterHierarchy.map((source) => ({
+    value: source.source_site,
+    label: source.source_site === 'manual' ? 'Manual Entry' : source.source_site,
+  }));
+  const manualOnly = filters.source_sites.length === 1 && filters.source_sites[0] === 'manual';
   const selectedSources = filters.source_sites.length > 0
     ? filterHierarchy.filter((source) => filters.source_sites.includes(source.source_site))
     : filterHierarchy;
@@ -827,6 +833,7 @@ export default function AIEnrichmentPage() {
     setPreview(null);
     try {
       window.localStorage.removeItem(FILTER_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_FILTER_STORAGE_KEY);
     } catch {
       // Ignore unavailable storage; in-memory controls are already reset.
     }
@@ -899,6 +906,8 @@ export default function AIEnrichmentPage() {
           {refreshError && <div className="ai-status-banner ai-status-error">{refreshError}</div>}
           <div className="ai-metric-strip glass-panel" aria-label="AI enrichment summary">
             <div><BrainCircuit size={18} /><span>Pending / eligible</span><strong>{pendingEligibleDisplay}</strong></div>
+            <div><Orbit size={18} /><span>Manual pending</span><strong>{hasLoadedOverview ? Number(overview?.manual_pending_jobs || 0).toLocaleString() : DEGRADED_PLACEHOLDER}</strong></div>
+            <div><Clock3 size={18} /><span>Needs job description</span><strong>{hasLoadedOverview ? Number(overview?.needs_job_description || 0).toLocaleString() : DEGRADED_PLACEHOLDER}</strong></div>
             <div><Orbit size={18} /><span>Active runs</span><strong>{activeRunsDisplay}</strong></div>
             <div><AlertTriangle size={18} /><span>Failed jobs</span><strong>{failedJobsDisplay}</strong></div>
           </div>
@@ -916,23 +925,27 @@ export default function AIEnrichmentPage() {
 
               <div className="ai-filter-grid">
                 <SearchableMultiSelect
-                  label="Sources"
+                  label="Origins"
                   options={sourceOptions}
                   values={filters.source_sites}
                   onChange={updateSources}
                 />
-                <SearchableMultiSelect
-                  label="Source Classifications"
-                  options={classificationOptions}
-                  values={filters.source_classification_ids}
-                  onChange={updateClassifications}
-                />
-                <SearchableMultiSelect
-                  label="Source Subclassifications"
-                  options={subclassificationOptions}
-                  values={filters.source_subclassification_ids}
-                  onChange={(value) => setFilters((current) => ({ ...current, source_subclassification_ids: value }))}
-                />
+                {!manualOnly && (
+                  <>
+                    <SearchableMultiSelect
+                      label="Source Classifications"
+                      options={classificationOptions}
+                      values={filters.source_classification_ids}
+                      onChange={updateClassifications}
+                    />
+                    <SearchableMultiSelect
+                      label="Source Subclassifications"
+                      options={subclassificationOptions}
+                      values={filters.source_subclassification_ids}
+                      onChange={(value) => setFilters((current) => ({ ...current, source_subclassification_ids: value }))}
+                    />
+                  </>
+                )}
               </div>
 
               {filterOptionsError && <div className="ai-status-banner ai-status-error">{filterOptionsError}</div>}

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.api import jobs as jobs_api
 from app.database import get_db
 from app.models.job import Job
-from app.models.source_job_attributes import JobEmploymentType
+from app.services.manual_job_intake import ManualJobMutationResult
 
 
 FIXTURE_PATH = (
@@ -19,38 +19,28 @@ FIXTURE_PATH = (
 )
 
 
-class _RegistryQuery:
-    def __init__(self, rows):
-        self._rows = rows
+class _ResultQuery:
+    def __init__(self, db):
+        self._db = db
+
+    def options(self, *_args):
+        return self
 
     def filter(self, *_args):
         return self
 
-    def all(self):
-        return list(self._rows)
+    def first(self):
+        return self._db.job
 
 
 class _FakeSession:
     def __init__(self):
-        self.added = []
+        self.job = None
         self.commits = 0
         self.rollbacks = 0
 
     def query(self, _model):
-        return _RegistryQuery(
-            [
-                SimpleNamespace(code="full_time", label="Full-time", sort_order=1),
-                SimpleNamespace(code="permanent", label="Permanent", sort_order=3),
-            ]
-        )
-
-    def add(self, value):
-        self.added.append(value)
-
-    def flush(self):
-        for value in self.added:
-            if isinstance(value, Job) and value.id is None:
-                value.id = uuid4()
+        return _ResultQuery(self)
 
     def commit(self):
         self.commits += 1
@@ -59,30 +49,61 @@ class _FakeSession:
         self.rollbacks += 1
 
 
-def _client(monkeypatch, db):
+def _client(monkeypatch, db, captured):
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))["job_detail"]
 
     class _Service:
         def __init__(self, session):
             assert session is db
 
-        def create_manual_job_run(self, job_id):
-            UUID(job_id)
-            return SimpleNamespace(id="manual-run")
+        def create(self, command, *, idempotency_key):
+            return self._result("create", command, idempotency_key)
 
-    monkeypatch.setattr(jobs_api, "ensure_profile_runtime_ready", lambda _profile: None)
-    monkeypatch.setattr(jobs_api, "EnrichmentRunService", _Service)
+        def update(self, job_id, command, *, idempotency_key):
+            captured["updated_job_id"] = str(job_id)
+            return self._result("update", command, idempotency_key)
+
+        def _result(self, kind, command, idempotency_key):
+            captured.update(
+                {
+                    "kind": kind,
+                    "command": command,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            company_id = (
+                command.company.company_id
+                if command.company.mode == "existing"
+                else uuid4()
+            )
+            company = SimpleNamespace(
+                id=company_id,
+                name=(
+                    fixture["company_name"]
+                    if command.company.mode == "existing"
+                    else command.company.name
+                ),
+            )
+            job = Job(
+                id=uuid4(),
+                job_id=f"manual:{uuid4()}",
+                source_site="manual",
+                source_job_id=f"manual:{uuid4()}",
+                company_id=company_id,
+                title=command.title,
+            )
+            db.job = job
+            return ManualJobMutationResult(job=job, company=company)
+
+        def replay(self, *_args, **_kwargs):
+            raise AssertionError("replay should not be needed in this contract test")
+
+    monkeypatch.setattr(jobs_api, "ManualJobIntake", _Service)
     monkeypatch.setattr(
         jobs_api,
-        "_publish_run_request",
-        lambda session, **_kwargs: session.commit(),
+        "compose_current_job_detail",
+        lambda session, job: fixture,
     )
-
-    async def _wait(_run_id):
-        return None
-
-    monkeypatch.setattr(jobs_api, "_wait_for_terminal_run", _wait)
-    monkeypatch.setattr(jobs_api, "_load_job_snapshot", lambda _job_id: fixture)
 
     app = FastAPI()
     app.include_router(jobs_api.router, prefix="/api")
@@ -90,69 +111,133 @@ def _client(monkeypatch, db):
     return TestClient(app)
 
 
-def test_manual_job_http_contract_persists_governed_employment_type_codes(
+def test_manual_job_http_contract_accepts_governed_structured_input(
     monkeypatch,
 ) -> None:
     db = _FakeSession()
-    client = _client(monkeypatch, db)
+    captured = {}
+    client = _client(monkeypatch, db, captured)
 
     response = client.post(
         "/api/jobs/manual",
+        headers={"Idempotency-Key": "manual-create-1"},
         json={
-            "company_id": "30000000-0000-0000-0000-000000000010",
-            "title": "Platform Engineer",
-            "employment_type_codes": ["full_time", "permanent"],
+            "company": {
+                "mode": "existing",
+                "company_id": "30000000-0000-0000-0000-000000000010",
+            },
+            "title": "  Platform Engineer  ",
+            "salary_min": 40000,
+            "salary_max": 60000,
+            "salary_currency": "hkd",
+            "employment_type_codes": ["full_time", "permanent", "full_time"],
         },
     )
 
     assert response.status_code == 200
-    job = next(value for value in db.added if isinstance(value, Job))
-    assignments = [
-        value for value in db.added if isinstance(value, JobEmploymentType)
-    ]
-    assert job.employment_type is None
-    assert [assignment.employment_type_code for assignment in assignments] == [
-        "full_time",
-        "permanent",
-    ]
-    assert all(assignment.job_id == job.id for assignment in assignments)
-    assert all(assignment.evidence_label_ids == [] for assignment in assignments)
-    assert all(
-        assignment.provenance
-        == {
-            "method": "manual_operator_selection",
-            "actor": "local-operator",
-            "source": "add-job",
-        }
-        for assignment in assignments
-    )
+    command = captured["command"]
+    assert captured["kind"] == "create"
+    assert captured["idempotency_key"] == "manual-create-1"
+    assert command.title == "Platform Engineer"
+    assert command.salary_currency == "HKD"
+    assert command.employment_type_codes == ["full_time", "permanent"]
     assert db.commits == 1
     assert db.rollbacks == 0
 
 
-def test_manual_job_http_contract_rejects_unknown_or_conflicting_employment_input(
+def test_manual_job_http_contract_keeps_new_company_as_one_command(
     monkeypatch,
 ) -> None:
     db = _FakeSession()
-    client = _client(monkeypatch, db)
-    base = {
-        "company_id": "30000000-0000-0000-0000-000000000010",
-        "title": "Platform Engineer",
-    }
+    captured = {}
+    client = _client(monkeypatch, db, captured)
 
-    unknown = client.post(
+    response = client.post(
         "/api/jobs/manual",
-        json={**base, "employment_type_codes": ["other"]},
-    )
-    conflicting = client.post(
-        "/api/jobs/manual",
+        headers={"Idempotency-Key": "manual-create-new-company"},
         json={
-            **base,
-            "employment_type": "Full-time",
-            "employment_type_codes": ["full_time"],
+            "company": {
+                "mode": "new",
+                "name": " Evidence Company ",
+                "website": "Example.COM/",
+                "industry": " Software Consulting ",
+                "location": " Central ",
+            },
+            "title": "Engineer",
         },
     )
 
-    assert unknown.status_code == 422
-    assert conflicting.status_code == 422
-    assert db.added == []
+    assert response.status_code == 200
+    company = captured["command"].company
+    assert company.name == "Evidence Company"
+    assert company.website == "https://example.com"
+    assert company.industry == "Software Consulting"
+    assert company.location == "Central"
+
+
+def test_manual_job_http_contract_rejects_legacy_or_invalid_input(monkeypatch) -> None:
+    db = _FakeSession()
+    client = _client(monkeypatch, db, {})
+    base = {
+        "company": {
+            "mode": "existing",
+            "company_id": "30000000-0000-0000-0000-000000000010",
+        },
+        "title": "Platform Engineer",
+    }
+
+    missing_key = client.post("/api/jobs/manual", json=base)
+    legacy_salary = client.post(
+        "/api/jobs/manual",
+        headers={"Idempotency-Key": "legacy-salary"},
+        json={**base, "salary_range": "$40k-$60k"},
+    )
+    legacy_employment = client.post(
+        "/api/jobs/manual",
+        headers={"Idempotency-Key": "legacy-employment"},
+        json={**base, "employment_type": "Full-time"},
+    )
+    reversed_range = client.post(
+        "/api/jobs/manual",
+        headers={"Idempotency-Key": "reversed-range"},
+        json={**base, "salary_min": 60000, "salary_max": 40000},
+    )
+    unsupported_currency = client.post(
+        "/api/jobs/manual",
+        headers={"Idempotency-Key": "unsupported-currency"},
+        json={**base, "salary_currency": "ZZZ"},
+    )
+
+    assert missing_key.status_code == 422
+    assert legacy_salary.status_code == 422
+    assert legacy_employment.status_code == 422
+    assert reversed_range.status_code == 422
+    assert unsupported_currency.status_code == 422
+    assert db.commits == 0
+
+
+def test_manual_job_http_contract_routes_manual_update_through_same_command(
+    monkeypatch,
+) -> None:
+    db = _FakeSession()
+    captured = {}
+    client = _client(monkeypatch, db, captured)
+    job_id = uuid4()
+
+    response = client.patch(
+        f"/api/jobs/manual/{job_id}",
+        headers={"Idempotency-Key": "manual-update-1"},
+        json={
+            "company": {
+                "mode": "existing",
+                "company_id": "30000000-0000-0000-0000-000000000010",
+            },
+            "title": "Updated Platform Engineer",
+            "description": "Updated evidence",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["kind"] == "update"
+    assert captured["updated_job_id"] == str(job_id)
+    assert captured["command"].description == "Updated evidence"

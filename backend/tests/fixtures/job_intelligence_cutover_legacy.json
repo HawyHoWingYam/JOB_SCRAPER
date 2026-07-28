@@ -5,10 +5,7 @@
     "source_site": "jobsdb",
     "source_company_id": "company-1",
     "name": "Fixture Company",
-    "industry": "Legacy technology industry",
-    "extra_data": {
-      "company_owned": "evidence"
-    }
+    "industry": "Legacy technology industry"
   },
   "jobs": [
     {

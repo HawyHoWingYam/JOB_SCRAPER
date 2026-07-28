@@ -91,7 +91,6 @@ class Job(Base):
     location = Column(String(255), nullable=True)
     employment_type = Column(String(100), nullable=True)
     raw_data = Column(JSON, nullable=True)
-    search_vector = Column(String, nullable=True)
     posted_date = Column(DateTime, nullable=True)
     is_deleted = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
@@ -124,6 +123,13 @@ class Job(Base):
         "JobEmploymentType",
         back_populates="job",
         cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    manual_evidence = relationship(
+        "ManualJobEvidence",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        uselist=False,
         passive_deletes=True,
     )
 

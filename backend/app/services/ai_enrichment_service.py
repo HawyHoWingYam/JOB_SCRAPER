@@ -17,8 +17,8 @@ from app.ai.llm_client import LLMResponseFormatError, LLMUpstreamError, get_llm_
 from app.job_intelligence.current_taxonomies.enrichment import (
     CurrentTaxonomyEnrichment,
 )
+from app.job_intelligence.enrichment_evidence import JobEnrichmentEvidence
 from app.job_intelligence.foundation import normalized_content_hash
-from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.models.job import Job
 from app.database import SessionLocal
 from app.services.job_role_mode import resolve_job_role_mode
@@ -39,12 +39,22 @@ class AIEnrichmentService:
         results: Dict[str, Any] = {"job_id": str(job.id), "status": "success"}
 
         try:
+            inspection = JobEnrichmentEvidence(db).inspect(job)
+            if not inspection.supported:
+                return {
+                    "job_id": str(job.id),
+                    "status": "excluded",
+                    "error": inspection.reason or "job_enrichment_not_supported",
+                    "error_code": inspection.reason or "job_enrichment_not_supported",
+                }
+            enrichment_input = inspection.enrichment_input
+            assert enrichment_input is not None
             role_mode = resolve_job_role_mode(
                 title=job.title,
                 source_subclassification_name=job.source_subclassification_name or "",
                 source_classification_name=job.source_classification_name or "",
             )
-            source_attributes = SourceJobAttributes(db).get(job.id)
+            source_attributes = enrichment_input.evidence
             current_taxonomies = CurrentTaxonomyEnrichment(db)
             classifier_context = current_taxonomies.build_job_context(source_attributes)
             category_candidates = classifier_context.prompt_payload
@@ -85,10 +95,21 @@ class AIEnrichmentService:
             if not isinstance(experience, dict):
                 experience = {}
             job.experience_level = experience.get("experience_level") or "not_specified"
-            job.experience_min_years = experience.get("experience_min_years")
-            job.experience_max_years = experience.get("experience_max_years")
+            operator_fields = enrichment_input.operator_authored_fields
+            extracted_min = experience.get("experience_min_years")
+            extracted_max = experience.get("experience_max_years")
+            if "experience_min_years" not in operator_fields:
+                job.experience_min_years = extracted_min
+            if "experience_max_years" not in operator_fields:
+                job.experience_max_years = extracted_max
             job.experience_summary = experience.get("summary")
-            job.experience_evidence = experience.get("evidence")
+            job.experience_evidence = self._experience_evidence(
+                experience.get("evidence"),
+                extracted_min=extracted_min,
+                extracted_max=extracted_max,
+                job=job,
+                operator_fields=operator_fields,
+            )
 
             raw_confidence = insight.get("confidence")
             confidence = (
@@ -106,6 +127,10 @@ class AIEnrichmentService:
                     "content_hash": normalized_content_hash(extracted_skills),
                 },
             )
+            if enrichment_input.origin == "manual" and job.manual_evidence is not None:
+                job.manual_evidence.enriched_evidence_hash = (
+                    job.manual_evidence.evidence_hash
+                )
             db.commit()
 
         except LLMUpstreamError as e:
@@ -138,6 +163,37 @@ class AIEnrichmentService:
             db.rollback()
 
         return results
+
+    @staticmethod
+    def _experience_evidence(
+        raw_evidence: object,
+        *,
+        extracted_min: object,
+        extracted_max: object,
+        job: Job,
+        operator_fields: frozenset[str],
+    ) -> list[str] | None:
+        if isinstance(raw_evidence, list):
+            evidence = [str(item) for item in raw_evidence if str(item).strip()]
+        elif raw_evidence is None:
+            evidence = []
+        else:
+            evidence = [str(raw_evidence)]
+
+        conflicts: list[str] = []
+        for field, extracted in (
+            ("experience_min_years", extracted_min),
+            ("experience_max_years", extracted_max),
+        ):
+            if (
+                field in operator_fields
+                and extracted is not None
+                and extracted != getattr(job, field)
+            ):
+                conflicts.append(
+                    f"AI suggested {field}={extracted}; operator-authored value preserved"
+                )
+        return [*evidence, *conflicts] or None
 
     @staticmethod
     def _model_provenance(llm_status: Dict[str, Any]) -> dict[str, object]:

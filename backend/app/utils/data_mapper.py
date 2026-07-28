@@ -181,7 +181,7 @@ def map_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, Any]:
         scraped_job: Transformed job data from REST API or detail scraper
 
     Returns:
-        Company data dict with keys: company_id, name, industry, location, extra_data
+        Company data dict with keys: company_id, name, industry, location
     """
     try:
         # Handle both list API and detail scraper formats
@@ -196,12 +196,6 @@ def map_scraped_company_to_db(scraped_job: Dict[str, Any]) -> Dict[str, Any]:
                 "Unknown Company"
             ),
             "location": scraped_job.get("location"),
-            "extra_data": {
-                "logo_url": scraped_job.get("logo_url"),
-                "advertiser_name": scraped_job.get("advertiser_name"),
-                "bullet_points": scraped_job.get("bullet_points") or scraped_job.get("bullets"),
-                "work_arrangements": scraped_job.get("work_arrangements"),
-            },
         }
         return company_data
     except Exception as e:

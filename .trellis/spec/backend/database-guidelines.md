@@ -37,6 +37,10 @@ python backend/scripts/sandbox_cutover.py clear-database \
   `clear_database`. An envelope hash alone is not sufficient.
 - There is no Alembic directory, migration runtime, schema stamp, downgrade,
   compatibility column, or mixed-code deployment path.
+- Manual intake schema includes `manual_job_evidence` and
+  `manual_job_mutation_receipts`; Companies include `website` and
+  `ai_description_updated_at`. `companies.extra_data` and `jobs.search_vector`
+  are absent from current metadata.
 - Schema deployment order is `stop -> export -> clear -> deploy complete code
   set -> bootstrap -> import -> verify -> start`.
 - Tests that may create or clear PostgreSQL state parse their URL with
@@ -58,6 +62,8 @@ python backend/scripts/sandbox_cutover.py clear-database \
 ### 5. Tests Required
 
 - Bootstrap tests cover empty creation, exact parity, and non-empty refusal.
+- Disposable cutover tests prove Manual evidence/receipts and new Company fields
+  survive exact export/import while removed-column values are intentionally discarded.
 - `test_job_intelligence_test_safety.py` inventories every PostgreSQL-bound
   suite and proves parsed `_test` checks precede engine creation and mutation.
 - `test_sandbox_cutover.py` covers explicit destruction, complete artifact

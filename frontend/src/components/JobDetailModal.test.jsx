@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -223,6 +223,54 @@ describe('JobDetailModal', () => {
     );
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Job not found');
+  });
+
+  it('edits operator-authored fields only for a Manual Job', async () => {
+    const payload = createJobPayload({
+      origin: 'manual_entry',
+      manual_editable: true,
+      enrichment_eligibility: 'needs_job_description',
+      job_intelligence_freshness: 'not_enriched',
+      description: null,
+    });
+    const patches = [];
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/job-1') return mockJsonResponse(payload);
+      if (url.pathname === '/api/jobs/job-1/similar') {
+        return mockJsonResponse({ recommendations: [] });
+      }
+      if (url.pathname === '/api/jobs/filters') {
+        return mockJsonResponse(productFixture.job_filters);
+      }
+      if (url.pathname === `/api/jobs/manual/${payload.id}` && init.method === 'PATCH') {
+        patches.push({ body: JSON.parse(init.body), headers: init.headers });
+        return mockJsonResponse({
+          ...payload,
+          description: 'Operator supplied description',
+          enrichment_eligibility: 'pending',
+        });
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
+    });
+    const user = userEvent.setup();
+    render(
+      <JobDetailModal jobId="job-1" apiUrl="http://localhost:8000" onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByText('Origin: Manual Entry')).toBeInTheDocument();
+    expect(screen.getByText(/Needs job description before AI enrichment/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Edit Manual Job' }));
+    await user.type(screen.getByLabelText('Description'), 'Operator supplied description');
+    await user.click(screen.getByRole('button', { name: 'Save Job' }));
+
+    await waitFor(() => expect(patches).toHaveLength(1));
+    expect(patches[0].body.company).toEqual({
+      mode: 'existing',
+      company_id: payload.company_id,
+    });
+    expect(patches[0].headers['Idempotency-Key']).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save Job' })).not.toBeInTheDocument();
   });
 
   it('renders company name, salary range, relational skills, and ai summary from the detail API', async () => {

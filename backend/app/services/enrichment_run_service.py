@@ -4,17 +4,22 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional, TypedDict
 
-from sqlalchemy import and_, case, func, text
+from sqlalchemy import and_, case, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.current_taxonomies.enrichment import (
     normalize_exact_skill_key,
+)
+from app.job_intelligence.enrichment_evidence import (
+    JobEnrichmentEvidence,
+    MANUAL_ORIGIN,
 )
 from app.messaging.topics import STREAM_JOB_LIFECYCLE
 from app.models.crawl_job import CrawlJob
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
+from app.models.manual_job import ManualJobEvidence
 from app.models.source_job_attributes import (
     JobSourceClassificationPath,
     JobSourceClassificationPathNode,
@@ -135,7 +140,14 @@ class EnrichmentRunService:
     def _query_ai_actionable_jobs(self, *entities):
         return self.db.query(*entities).filter(
             Job.is_deleted.is_(False),
-            Job.source_attribute_projection.has(),
+            or_(
+                Job.source_attribute_projection.has(),
+                and_(
+                    func.lower(Job.source_site) == MANUAL_ORIGIN,
+                    Job.manual_evidence.has(),
+                    func.length(func.trim(func.coalesce(Job.description, ""))) > 0,
+                ),
+            ),
         )
 
     def _acquire_active_slot_lock(self) -> None:
@@ -176,16 +188,28 @@ class EnrichmentRunService:
     ):
         normalized = filters or PendingJobFilters()
         query = self._query_ai_actionable_jobs(*entities).filter(
-            Job.ai_enriched_at.is_(None),
+            or_(
+                Job.ai_enriched_at.is_(None),
+                and_(
+                    func.lower(Job.source_site) == MANUAL_ORIGIN,
+                    Job.manual_evidence.has(
+                        or_(
+                            ManualJobEvidence.enriched_evidence_hash.is_(None),
+                            ManualJobEvidence.enriched_evidence_hash
+                            != ManualJobEvidence.evidence_hash,
+                        )
+                    ),
+                ),
+            ),
             ~self._reserved_job_exists(),
         )
+        manual_selected = MANUAL_ORIGIN in normalized.source_sites
         if normalized.source_sites:
             query = query.filter(
                 func.lower(Job.source_site).in_(normalized.source_sites)
             )
         if normalized.source_classification_ids:
-            query = query.filter(
-                Job.source_classification_paths.any(
+            predicate = Job.source_classification_paths.any(
                     JobSourceClassificationPath.nodes.any(
                         and_(
                             JobSourceClassificationPathNode.source_position == 0,
@@ -195,10 +219,13 @@ class EnrichmentRunService:
                         )
                     )
                 )
+            query = query.filter(
+                or_(func.lower(Job.source_site) == MANUAL_ORIGIN, predicate)
+                if manual_selected
+                else predicate
             )
         if normalized.source_subclassification_ids:
-            query = query.filter(
-                Job.source_classification_paths.any(
+            predicate = Job.source_classification_paths.any(
                     JobSourceClassificationPath.nodes.any(
                         and_(
                             JobSourceClassificationPathNode.source_position > 0,
@@ -208,18 +235,28 @@ class EnrichmentRunService:
                         )
                     )
                 )
+            query = query.filter(
+                or_(func.lower(Job.source_site) == MANUAL_ORIGIN, predicate)
+                if manual_selected
+                else predicate
             )
         if normalized.source_classification_names:
+            predicate = func.lower(Job.source_classification_name).in_(
+                normalized.source_classification_names
+            )
             query = query.filter(
-                func.lower(Job.source_classification_name).in_(
-                    normalized.source_classification_names
-                )
+                or_(func.lower(Job.source_site) == MANUAL_ORIGIN, predicate)
+                if manual_selected
+                else predicate
             )
         if normalized.source_subclassification_names:
+            predicate = func.lower(Job.source_subclassification_name).in_(
+                normalized.source_subclassification_names
+            )
             query = query.filter(
-                func.lower(Job.source_subclassification_name).in_(
-                    normalized.source_subclassification_names
-                )
+                or_(func.lower(Job.source_site) == MANUAL_ORIGIN, predicate)
+                if manual_selected
+                else predicate
             )
         if normalized.posted_date_from is not None:
             query = query.filter(
@@ -283,7 +320,36 @@ class EnrichmentRunService:
         self,
         jobs: list[Job],
     ) -> tuple[list[Job], dict[str, str], list[_ExcludedTaxonomyGroup]]:
-        return jobs, {}, []
+        supported: list[Job] = []
+        excluded_reasons: dict[str, str] = {}
+        grouped: dict[tuple[str | None, str | None, str], _ExcludedTaxonomyGroup] = {}
+        evidence = JobEnrichmentEvidence(self.db)
+        for job in jobs:
+            inspection = evidence.inspect(job)
+            if inspection.supported:
+                supported.append(job)
+                continue
+            reason = inspection.reason or "job_enrichment_not_supported"
+            job_id = str(job.id)
+            excluded_reasons[job_id] = reason
+            key = (
+                job.source_classification_id,
+                job.source_classification_name,
+                reason,
+            )
+            item = grouped.setdefault(
+                key,
+                {
+                    "source_classification_id": job.source_classification_id,
+                    "source_classification_name": job.source_classification_name,
+                    "count": 0,
+                    "reason": reason,
+                    "job_ids": [],
+                },
+            )
+            item["count"] += 1
+            item["job_ids"].append(job_id)
+        return supported, excluded_reasons, list(grouped.values())
 
     def get_pending_filter_options(self) -> list[dict[str, object]]:
         candidate_ids = self._query_pending_candidates(Job.id).subquery()
@@ -321,53 +387,44 @@ class EnrichmentRunService:
                     "label": label,
                 }
             )
-        return list(paths.values())
+        values = list(paths.values())
+        manual_pending = self._query_pending_candidates(func.count(Job.id)).filter(
+            func.lower(Job.source_site) == MANUAL_ORIGIN
+        ).scalar()
+        if int(manual_pending or 0) > 0:
+            values.append({"source_site": MANUAL_ORIGIN, "nodes": []})
+        return values
 
     def get_job_queue_counts(self) -> dict[str, int]:
-        total_jobs, enriched_jobs, eligible_enriched_jobs, eligible_unenriched_jobs = (
-            self.db.query(
-                func.count(Job.id),
-                func.count(Job.ai_enriched_at),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    Job.ai_enriched_at.isnot(None),
-                                    Job.source_attribute_projection.has(),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    Job.ai_enriched_at.is_(None),
-                                    Job.source_attribute_projection.has(),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ),
-            )
-            .filter(Job.is_deleted.is_(False))
-            .one()
-        )
+        total_jobs, enriched_jobs = self.db.query(
+            func.count(Job.id),
+            func.count(Job.ai_enriched_at),
+        ).filter(Job.is_deleted.is_(False)).one()
+        eligible_enriched_jobs = self._query_ai_actionable_jobs(
+            func.count(Job.id)
+        ).filter(Job.ai_enriched_at.is_not(None)).scalar()
+        ai_eligible_jobs = self._query_ai_actionable_jobs(func.count(Job.id)).scalar()
         pending_jobs = int(
             self._query_pending_candidates(func.count(Job.id)).scalar() or 0
         )
-        ai_eligible_jobs = int(
-            (eligible_enriched_jobs or 0) + (eligible_unenriched_jobs or 0)
+        needs_job_description = int(
+            self.db.query(func.count(Job.id))
+            .filter(
+                Job.is_deleted.is_(False),
+                func.lower(Job.source_site) == MANUAL_ORIGIN,
+                Job.manual_evidence.has(),
+                func.length(func.trim(func.coalesce(Job.description, ""))) == 0,
+            )
+            .scalar()
+            or 0
         )
+        manual_pending_jobs = int(
+            self._query_pending_candidates(func.count(Job.id))
+            .filter(func.lower(Job.source_site) == MANUAL_ORIGIN)
+            .scalar()
+            or 0
+        )
+        ai_eligible_jobs = int(ai_eligible_jobs or 0)
         total_jobs = int(total_jobs or 0)
         return {
             "total_jobs": total_jobs,
@@ -376,6 +433,8 @@ class EnrichmentRunService:
             "ai_eligible_jobs": ai_eligible_jobs,
             "ineligible_jobs": max(total_jobs - ai_eligible_jobs, 0),
             "pending_jobs": int(pending_jobs or 0),
+            "manual_pending_jobs": manual_pending_jobs,
+            "needs_job_description": needs_job_description,
         }
 
     def create_post_scrape_run(self, job_ids: List[str]) -> EnrichmentRun:
@@ -1172,6 +1231,8 @@ class EnrichmentRunService:
             "ai_eligible_jobs": queue_counts["ai_eligible_jobs"],
             "ineligible_jobs": queue_counts["ineligible_jobs"],
             "pending_jobs": queue_counts["pending_jobs"],
+            "manual_pending_jobs": queue_counts["manual_pending_jobs"],
+            "needs_job_description": queue_counts["needs_job_description"],
             "running_runs": running_runs,
             "active_runs": active_runs,
             "failed_jobs": failed_jobs,
@@ -1529,6 +1590,16 @@ class EnrichmentRunService:
                             run_id,
                             item.id,
                             "JOB_NOT_FOUND",
+                        )
+                        item_queue.task_done()
+                        continue
+
+                    inspection = JobEnrichmentEvidence(self.db).inspect(job)
+                    if not inspection.supported:
+                        self._update_item_excluded(
+                            run_id,
+                            item.id,
+                            inspection.reason or "job_enrichment_not_supported",
                         )
                         item_queue.task_done()
                         continue

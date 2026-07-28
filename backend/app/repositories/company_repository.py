@@ -98,7 +98,7 @@ class CompanyRepository:
 
         Args:
             db: SQLAlchemy session
-            company_data: Company data dict with keys: company_id, name, industry, location, extra_data
+            company_data: Company data dict with keys: company_id, name, industry, location
 
         Returns:
             (Company, created: bool) - Company instance and whether it was created
@@ -205,7 +205,7 @@ class CompanyRepository:
                 industry=company_data.get("industry"),
                 location=company_data.get("location"),
                 ai_description=company_data.get("ai_description"),
-                extra_data=company_data.get("extra_data"),
+                website=company_data.get("website"),
             )
             db.add(company)
             if auto_commit:

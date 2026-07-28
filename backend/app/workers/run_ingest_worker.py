@@ -422,13 +422,6 @@ class IngestWorkerService:
             "company_id": build_compat_company_id(source_site, source_company_id),
             "name": company_name,
             "location": canonical_job.get("location"),
-            "extra_data": {
-                "source_url": canonical_job.get("source_url"),
-                "raw_data": canonical_job.get("raw_data"),
-                "source_identity": "fallback_company_name"
-                if str(source_company_id).startswith("fallback:name:")
-                else "source_company_id",
-            },
         }
 
     def _derive_fallback_source_company_id(

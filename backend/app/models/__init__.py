@@ -10,6 +10,7 @@ from app.models.crawl_dispatch_plan import (
 from app.models.crawl_run import CrawlRun
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
+from app.models.manual_job import ManualJobEvidence, ManualJobMutationReceipt
 from app.models.job_embedding import JobEmbedding
 from app.models.schedule import (
     AutomationDeleteReview,
@@ -64,6 +65,8 @@ __all__ = [
     "CrawlRun",
     "EventOutbox",
     "Job",
+    "ManualJobEvidence",
+    "ManualJobMutationReceipt",
     "JobEmbedding",
     "AutomationDeleteReview",
     "ScrapeSchedule",

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from uuid import UUID
 
-from sqlalchemy import Engine, MetaData, select
+from sqlalchemy import Engine, MetaData, Table, func, inspect, select
 
 from app.job_intelligence.sandbox_cutover.artifacts import (
     RetentionArtifactStore,
@@ -24,6 +24,8 @@ RETAINED_TABLE_NAMES = (
     "current_taxonomy_nodes",
     "current_taxonomy_aliases",
     "jobs",
+    "manual_job_evidence",
+    "manual_job_mutation_receipts",
     "job_source_attribute_projections",
     "job_source_classification_paths",
     "job_source_classification_path_nodes",
@@ -39,6 +41,16 @@ RETAINED_TABLE_NAMES = (
     "governance_idempotency_records",
     "job_embeddings",
 )
+
+ADDITIVE_RETAINED_TABLE_NAMES = {
+    "manual_job_evidence",
+    "manual_job_mutation_receipts",
+}
+
+DISCARDED_COLUMNS = {
+    "companies": ("extra_data",),
+    "jobs": ("search_vector",),
+}
 
 _AUDIT_TABLE_NAMES = {
     "governance_audit_events",
@@ -67,6 +79,7 @@ class ExportReport:
     artifact_hash: str
     table_counts: dict[str, int]
     table_hashes: dict[str, str]
+    discarded_non_null_counts: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -106,13 +119,56 @@ class SandboxCutover:
         table_payloads: list[dict[str, Any]] = []
         table_counts: dict[str, int] = {}
         table_hashes: dict[str, str] = {}
+        discarded_non_null_counts = {
+            f"{table_name}.{column_name}": 0
+            for table_name, column_names in DISCARDED_COLUMNS.items()
+            for column_name in column_names
+        }
         with self._source_engine.connect() as connection:
+            source_table_names = set(inspect(connection).get_table_names())
             for name in self._retained_table_names:
-                table = self._metadata.tables[name]
-                rows = [
-                    self._serialize_row(name, row)
-                    for row in connection.execute(select(table)).mappings()
-                ]
+                target_table = self._metadata.tables[name]
+                if name not in source_table_names:
+                    if name not in ADDITIVE_RETAINED_TABLE_NAMES:
+                        raise ValueError(f"Retained source table is missing: {name}")
+                    raw_rows: list[Mapping[str, Any]] = []
+                else:
+                    source_table = Table(name, MetaData(), autoload_with=connection)
+                    source_columns = set(source_table.c.keys())
+                    missing_required = [
+                        column.name
+                        for column in target_table.columns
+                        if column.name not in source_columns
+                        and not column.nullable
+                        and column.default is None
+                        and column.server_default is None
+                    ]
+                    if missing_required:
+                        raise ValueError(
+                            f"Retained source table {name} is missing required target "
+                            f"columns: {', '.join(missing_required)}"
+                        )
+                    raw_rows = []
+                    for source_row in connection.execute(select(source_table)).mappings():
+                        raw_rows.append(
+                            {
+                                column.name: _coerce_source_value(
+                                    column,
+                                    source_row.get(column.name),
+                                )
+                                for column in target_table.columns
+                            }
+                        )
+                    for discarded_column in DISCARDED_COLUMNS.get(name, ()):
+                        if discarded_column in source_columns:
+                            discarded_non_null_counts[
+                                f"{name}.{discarded_column}"
+                            ] = connection.execute(
+                                select(func.count()).where(
+                                    source_table.c[discarded_column].is_not(None)
+                                )
+                            ).scalar_one()
+                rows = [self._serialize_row(name, row) for row in raw_rows]
                 rows.sort(key=_row_sort_key)
                 row_hash = content_hash(rows)
                 table_payloads.append(
@@ -125,12 +181,16 @@ class SandboxCutover:
                 )
                 table_counts[name] = len(rows)
                 table_hashes[name] = row_hash
-        payload = {"tables": table_payloads}
+        payload = {
+            "discarded_non_null_counts": discarded_non_null_counts,
+            "tables": table_payloads,
+        }
         artifact_hash = self._artifact_store.write(output, payload)
         return ExportReport(
             artifact_hash=artifact_hash,
             table_counts=table_counts,
             table_hashes=table_hashes,
+            discarded_non_null_counts=discarded_non_null_counts,
         )
 
     def import_retained(self, path: Path, *, target_engine: Engine) -> ImportReport:
@@ -207,6 +267,23 @@ class SandboxCutover:
 
     def _validated_table_payloads(self, path: Path) -> list[dict[str, Any]]:
         payload = self._artifact_store.read(path)
+        discarded_counts = payload.get("discarded_non_null_counts")
+        expected_discarded_keys = {
+            f"{table_name}.{column_name}"
+            for table_name, column_names in DISCARDED_COLUMNS.items()
+            for column_name in column_names
+        }
+        if (
+            not isinstance(discarded_counts, dict)
+            or set(discarded_counts) != expected_discarded_keys
+            or any(
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+                for value in discarded_counts.values()
+            )
+        ):
+            raise ValueError(
+                "Sandbox retention artifact discarded-column counts are invalid"
+            )
         raw_tables = payload.get("tables")
         if not isinstance(raw_tables, list):
             raise ValueError("Sandbox retention artifact tables are invalid")
@@ -325,6 +402,20 @@ def _decode_value(value: Any) -> Any:
             return base64.b64decode(encoded)
         raise ValueError(f"Unknown sandbox retention value type: {kind}")
     return {key: _decode_value(item) for key, item in value.items()}
+
+
+def _coerce_source_value(column, value: Any) -> Any:
+    """Restore target Python types lost through compatibility reflection."""
+
+    if value is None:
+        return None
+    try:
+        python_type = column.type.python_type
+    except (AttributeError, NotImplementedError):
+        return value
+    if python_type is UUID and isinstance(value, str):
+        return UUID(value)
+    return value
 
 
 def _row_sort_key(row: Mapping[str, Any]) -> bytes:

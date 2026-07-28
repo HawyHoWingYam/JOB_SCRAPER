@@ -35,8 +35,8 @@ AUTHORITATIVE_SOURCE_WRITERS = {
 }
 
 DIRECT_JOB_CONSTRUCTORS = {
-    ("app/api/jobs.py", "create_manual_job"),
     ("app/repositories/job_repository.py", "_create_source_job"),
+    ("app/services/manual_job_intake.py", "create"),
 }
 
 

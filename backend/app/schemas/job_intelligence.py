@@ -78,7 +78,7 @@ class PendingSelectionScopeSchema(BaseModel):
     def validate_sources(cls, value: list[str]) -> list[str]:
         from app.services.source_sites import list_supported_source_sites
 
-        supported = set(list_supported_source_sites())
+        supported = {*list_supported_source_sites(), "manual"}
         unsupported = [source for source in value if source not in supported]
         if unsupported:
             raise ValueError(f"Unsupported source site(s): {', '.join(unsupported)}")

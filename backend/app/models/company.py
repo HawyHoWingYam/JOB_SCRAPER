@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, JSON, String, Text, UUID, UniqueConstraint, text
+from sqlalchemy import Boolean, Column, DateTime, String, Text, UUID, UniqueConstraint, text
 from sqlalchemy.orm import deferred, relationship
 from datetime import datetime
 from app.database import Base
@@ -44,10 +44,11 @@ class Company(Base):
         )
     )
     name = Column(String(255), nullable=False)
+    website = Column(String(2048), nullable=True)
     industry = Column(String(255), nullable=True)
     location = Column(String(255), nullable=True)
     ai_description = Column(Text, nullable=True)
-    extra_data = Column("metadata", JSON, nullable=True)
+    ai_description_updated_at = Column(DateTime(timezone=True), nullable=True)
     is_deleted = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

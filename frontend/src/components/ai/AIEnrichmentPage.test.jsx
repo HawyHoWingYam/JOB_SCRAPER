@@ -7,6 +7,8 @@ import AIEnrichmentPage from './AIEnrichmentPage';
 const overview = {
   pending_jobs: 396,
   ai_eligible_jobs: 400,
+  manual_pending_jobs: 12,
+  needs_job_description: 3,
   active_runs: 1,
   failed_jobs: 7,
 };
@@ -245,7 +247,7 @@ describe('AIEnrichmentPage', () => {
 
     expect(screen.getByText(/Refresh failed: Overview request timed out after 8000ms/)).toBeInTheDocument();
     expect(screen.getByText('Unavailable / Unavailable')).toBeInTheDocument();
-    expect(screen.getAllByText('Unavailable')).toHaveLength(2);
+    expect(screen.getAllByText('Unavailable')).toHaveLength(4);
     expect(screen.getAllByTestId('run-monitor-card')).toHaveLength(2);
   });
 
@@ -355,7 +357,7 @@ describe('AIEnrichmentPage', () => {
     await waitFor(() => expect(screen.getByText('12 match · 12 will run')).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Run 12 filtered jobs' }));
     expect(window.confirm).toHaveBeenCalledOnce();
-    expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run'))).not.toHaveProperty('all_pending_acknowledged');
+    expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v1'))).not.toHaveProperty('all_pending_acknowledged');
   });
 
   it('persists ordinary filters and Reset clears them', async () => {
@@ -363,14 +365,43 @@ describe('AIEnrichmentPage', () => {
     const user = userEvent.setup();
     const { unmount } = render(<AIEnrichmentPage />);
     await user.click(await screen.findByLabelText('jobsdb'));
-    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run')).filters.source_sites).toEqual(['jobsdb']));
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).filters.source_sites).toEqual(['jobsdb']));
     unmount();
 
     render(<AIEnrichmentPage />);
     expect(await screen.findByLabelText('jobsdb')).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Reset' }));
     expect(screen.getByLabelText('jobsdb')).not.toBeChecked();
-    expect(window.localStorage.getItem('ai-enrichment-filtered-run')).toBeNull();
+    expect(window.localStorage.getItem('ai-enrichment-filtered-run:v1')).toBeNull();
+  });
+
+  it('treats Manual Entry as an Origin without Source classification filters', async () => {
+    installFetch({
+      overviewPayload: { ...overview, active_runs: 0 },
+      runs: [completedRun],
+      filterOptions: {
+        sources: [
+          ...sourceQualifiedFilterOptions.sources,
+          { source_site: 'manual', classification_paths: [], classifications: [] },
+        ],
+      },
+    });
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    await user.click(await screen.findByLabelText('Manual Entry'));
+
+    expect(screen.queryByLabelText('Search Source Classifications')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Search Source Subclassifications')).not.toBeInTheDocument();
+    await waitFor(() => {
+      const previewCall = globalThis.fetch.mock.calls
+        .filter(([url]) => String(url).includes('/ai/pending/preview'))
+        .at(-1);
+      expect(JSON.parse(previewCall[1].body)).toMatchObject({
+        filters: { source_sites: ['manual'] },
+        all_pending_acknowledged: false,
+      });
+    });
   });
 
   it('stops an active run from its card and renders stopping as active', async () => {

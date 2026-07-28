@@ -2,7 +2,6 @@ import re
 import csv
 import html
 import json
-import uuid as uuid_lib
 from datetime import date
 from io import StringIO
 from uuid import UUID
@@ -11,7 +10,9 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session, joinedload, object_session, selectinload
 from sqlalchemy import and_, false, func, not_, or_, select
-from typing import Literal, Optional, List
+from typing import Annotated, Literal, Optional, List
+from fastapi import Header
+from sqlalchemy.exc import IntegrityError
 from app.database import get_db
 from app.job_intelligence.current_taxonomies import (
     CurrentTaxonomyReadError,
@@ -21,7 +22,6 @@ from app.job_intelligence.product_read_model import JobIntelligenceProductReadMo
 from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.api.job_search_parser import parse_search_expression, SearchExpressionError
 from app.api.job_search_query import apply_parsed_clauses
-from app.api.ai import _publish_run_request, _wait_for_terminal_run, _load_job_snapshot
 from app.config import settings
 from app.models import Job, Company
 from app.models.current_taxonomy import CurrentTaxonomyNodeRecord
@@ -36,14 +36,10 @@ from app.schemas import (
     ManualJobCreateSchema,
     JobDetailSchema,
 )
-from app.services.enrichment_run_service import (
-    ActiveEnrichmentRunError,
-    EnrichmentRunService,
-)
 from app.services.job_detail_read_service import compose_current_job_detail
-from app.services.ai_runtime_settings_service import (
-    ensure_profile_runtime_ready,
-    ProfileRuntimeNotReadyError,
+from app.services.manual_job_intake import (
+    ManualJobIntake,
+    ManualJobIntakeError,
 )
 from app.schemas.job_search import (
     JobSearchRequestSchema,
@@ -1100,87 +1096,96 @@ async def create_job(
 @router.post("/manual", response_model=JobDetailSchema)
 async def create_manual_job(
     job_data: ManualJobCreateSchema,
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ],
     db: Session = Depends(get_db),
 ):
-    """Create a manually entered job and trigger AI enrichment."""
+    """Atomically persist one Manual Job without starting AI work."""
+    return _execute_manual_job_mutation(
+        db,
+        job_data,
+        idempotency_key=idempotency_key,
+        command_kind="create",
+    )
+
+
+@router.patch("/manual/{job_id}", response_model=JobDetailSchema)
+async def update_manual_job(
+    job_id: UUID,
+    job_data: ManualJobCreateSchema,
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ],
+    db: Session = Depends(get_db),
+):
+    """Update operator-authored fields on one Manual Job."""
+    return _execute_manual_job_mutation(
+        db,
+        job_data,
+        idempotency_key=idempotency_key,
+        command_kind="update",
+        job_id=job_id,
+    )
+
+
+def _execute_manual_job_mutation(
+    db: Session,
+    job_data: ManualJobCreateSchema,
+    *,
+    idempotency_key: str,
+    command_kind: Literal["create", "update"],
+    job_id: UUID | None = None,
+) -> JobDetailSchema:
+    service = ManualJobIntake(db)
     try:
-        ensure_profile_runtime_ready("jobs")
-    except ProfileRuntimeNotReadyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    # Generate a unique job_id for manual jobs
-    manual_job_id = f"manual:{uuid_lib.uuid4()}"
-
-    employment_type_codes = list(job_data.employment_type_codes)
-    if employment_type_codes:
-        registry_rows = (
-            db.query(EmploymentType)
-            .filter(EmploymentType.code.in_(employment_type_codes))
-            .all()
+        result = (
+            service.create(job_data, idempotency_key=idempotency_key)
+            if command_kind == "create"
+            else service.update(
+                job_id,
+                job_data,
+                idempotency_key=idempotency_key,
+            )
         )
-        registry_codes = {row.code for row in registry_rows}
-        missing_codes = [
-            code for code in employment_type_codes if code not in registry_codes
-        ]
-        if missing_codes:
+        db.commit()
+    except ManualJobIntakeError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        try:
+            result = service.replay(
+                job_data,
+                idempotency_key=idempotency_key,
+                command_kind=command_kind,
+                job_id=str(job_id) if job_id is not None else None,
+            )
+        except ManualJobIntakeError as replay_exc:
+            raise HTTPException(
+                status_code=replay_exc.status_code,
+                detail=replay_exc.detail,
+            ) from replay_exc
+        if result is None:
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "code": "EMPLOYMENT_TYPE_REGISTRY_INCOMPLETE",
-                    "missing_codes": missing_codes,
+                    "code": "manual_job_write_conflict",
+                    "message": "Manual Job could not be persisted due to a conflict",
                 },
-            )
+            ) from exc
 
-    # Build the job object
-    db_job = Job(
-        job_id=manual_job_id,
-        source_site="manual",
-        source_job_id=manual_job_id,
-        company_id=job_data.company_id,
-        title=job_data.title,
-        description=job_data.description,
-        salary_range=job_data.salary_range,
-        salary_min=job_data.salary_min,
-        salary_max=job_data.salary_max,
-        salary_currency=job_data.salary_currency or "HKD",
-        location=job_data.location,
-        employment_type=job_data.employment_type,
-        posted_date=job_data.posted_date,
-        experience_min_years=job_data.experience_min_years,
-        experience_max_years=job_data.experience_max_years,
-    )
-    db.add(db_job)
-    db.flush()
-
-    for employment_type_code in employment_type_codes:
-        db.add(
-            JobEmploymentType(
-                job_id=db_job.id,
-                employment_type_code=employment_type_code,
-                evidence_label_ids=[],
-                provenance={
-                    "method": "manual_operator_selection",
-                    "actor": "local-operator",
-                    "source": "add-job",
-                },
-            )
+    job = (
+        db.query(Job)
+        .options(
+            joinedload(Job.company),
+            *_source_attribute_load_options(include_labels=True),
         )
-    db.flush()
-
-    service = EnrichmentRunService(db)
-    try:
-        run = service.create_manual_job_run(str(db_job.id))
-    except ActiveEnrichmentRunError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "active_run_exists", "run_id": exc.run_id},
-        ) from exc
-    _publish_run_request(db, service=service, run_id=run.id)
-
-    # Wait for enrichment to complete
-    await _wait_for_terminal_run(run.id)
-
-    # Return enriched job snapshot with company + skills
-    snapshot = _load_job_snapshot(db_job.id)
-    return snapshot
+        .filter(Job.id == result.job.id, Job.is_deleted.is_(False))
+        .first()
+    )
+    if job is None:
+        raise HTTPException(status_code=500, detail="Created Manual Job was not found")
+    return compose_current_job_detail(db, job)

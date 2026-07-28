@@ -11,6 +11,7 @@ POSTGRESQL_JOB_INTELLIGENCE_SUITES = (
         "SANDBOX_CUTOVER_TEST_DATABASE_URL",
     ),
     ("test_job_intelligence_response_contracts.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
+    ("test_manual_job_intake.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
     ("test_source_job_attribute_ingest.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
     ("test_source_job_attributes.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
 )
