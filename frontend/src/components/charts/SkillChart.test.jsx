@@ -174,4 +174,32 @@ describe("SkillChart", () => {
     await user.click(screen.getByRole("button", { name: "Retry skills" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
+
+  it("only exposes a Classification action for threshold-ready Candidates", () => {
+    const { rerender } = render(
+      <SkillChart data={skillData} onOpenClassification={vi.fn()} />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Open Skill Classification for 3 ready Candidates",
+      }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <SkillChart
+        data={{
+          ...skillData,
+          candidate_backlog: {
+            ...skillData.candidate_backlog,
+            ready_candidate_total: 0,
+          },
+        }}
+        onOpenClassification={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /Open Skill Classification/ }),
+    ).not.toBeInTheDocument();
+  });
 });

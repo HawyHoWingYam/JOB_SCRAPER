@@ -64,6 +64,7 @@ export default function CategoryChart({
   error = null,
   lastUpdated = null,
   onRetry,
+  onOpenClassification,
   onSelectCategory,
 }) {
   const [otherExpanded, setOtherExpanded] = useState(false);
@@ -156,6 +157,18 @@ export default function CategoryChart({
                 Unassigned Jobs with the source evidence required to attempt
                 classification.
               </small>
+              {Number(data.classification_ready_unassigned_total || 0) > 0 ? (
+                <button
+                  type="button"
+                  className="dashboard-inline-button"
+                  aria-label={`Open Job Taxonomy Classification for ${Number(
+                    data.classification_ready_unassigned_total || 0,
+                  ).toLocaleString()} ready Jobs`}
+                  onClick={onOpenClassification}
+                >
+                  Classify ready Jobs
+                </button>
+              ) : null}
             </div>
           </div>
 

@@ -66,6 +66,7 @@ export default function SkillChart({
   error = null,
   lastUpdated = null,
   onRetry,
+  onOpenClassification,
   onSelectSkill,
 }) {
   const [expandedBuckets, setExpandedBuckets] = useState(() => new Set());
@@ -162,6 +163,18 @@ export default function SkillChart({
                 {Number(backlog.ready_threshold || 0).toLocaleString()}-Job
                 Classification threshold.
               </small>
+              {Number(backlog.ready_candidate_total || 0) > 0 ? (
+                <button
+                  type="button"
+                  className="dashboard-inline-button"
+                  aria-label={`Open Skill Classification for ${Number(
+                    backlog.ready_candidate_total || 0,
+                  ).toLocaleString()} ready Candidates`}
+                  onClick={onOpenClassification}
+                >
+                  Classify ready Candidates
+                </button>
+              ) : null}
             </div>
           </div>
 

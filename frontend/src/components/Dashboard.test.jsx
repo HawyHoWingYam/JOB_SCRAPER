@@ -83,6 +83,7 @@ describe("Dashboard", () => {
   it("renders real chart contracts and all four independently fetched sections", async () => {
     const user = userEvent.setup();
     const onNavigateToJobs = vi.fn();
+    const onNavigateToClassification = vi.fn();
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
       if (url.includes("/stats/overview")) return jsonResponse(stats);
@@ -96,6 +97,7 @@ describe("Dashboard", () => {
     render(
       <Dashboard
         onNavigateToAI={vi.fn()}
+        onNavigateToClassification={onNavigateToClassification}
         onNavigateToJobs={onNavigateToJobs}
       />,
     );
@@ -126,6 +128,20 @@ describe("Dashboard", () => {
     expect(onNavigateToJobs).toHaveBeenLastCalledWith({
       canonicalSubcategoryIds: ["backend"],
     });
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open Skill Classification for 1 ready Candidates",
+      }),
+    );
+    expect(onNavigateToClassification).toHaveBeenLastCalledWith("skill");
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open Job Taxonomy Classification for 2 ready Jobs",
+      }),
+    );
+    expect(onNavigateToClassification).toHaveBeenLastCalledWith(
+      "job_taxonomy",
+    );
   });
 
   it("refreshes all sections while retaining and marking a failed section stale", async () => {

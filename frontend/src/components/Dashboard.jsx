@@ -37,7 +37,11 @@ function formatUpdatedAt(value) {
   });
 }
 
-export default function Dashboard({ onNavigateToAI, onNavigateToJobs }) {
+export default function Dashboard({
+  onNavigateToAI,
+  onNavigateToClassification,
+  onNavigateToJobs,
+}) {
   const [sections, setSections] = useState(initialSections);
   const controllersRef = useRef(new Map());
   const mountedRef = useRef(false);
@@ -387,6 +391,9 @@ export default function Dashboard({ onNavigateToAI, onNavigateToJobs }) {
           <SkillChart
             {...sections.skills}
             onRetry={() => loadSection("skills")}
+            onOpenClassification={() =>
+              onNavigateToClassification?.("skill")
+            }
             onSelectSkill={(skill) =>
               onNavigateToJobs?.({ skillIds: [skill.code] })
             }
@@ -396,6 +403,9 @@ export default function Dashboard({ onNavigateToAI, onNavigateToJobs }) {
           <CategoryChart
             {...sections.taxonomy}
             onRetry={() => loadSection("taxonomy")}
+            onOpenClassification={() =>
+              onNavigateToClassification?.("job_taxonomy")
+            }
             onSelectCategory={(category) =>
               onNavigateToJobs?.({
                 canonicalSubcategoryIds: [category.code],

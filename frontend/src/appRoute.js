@@ -16,6 +16,11 @@ const JOB_ROUTE_FILTER_KEYS = {
 };
 const MAX_JOB_ROUTE_IDS = 20;
 const STABLE_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+const DEFAULT_CLASSIFICATION_TARGET = 'job_taxonomy';
+const VALID_CLASSIFICATION_TARGETS = new Set([
+  DEFAULT_CLASSIFICATION_TARGET,
+  'skill',
+]);
 
 function normalizeStableCodes(values) {
   const normalized = [];
@@ -74,4 +79,26 @@ export function hashForJobsRoute({
   }
   const query = searchParams.toString();
   return query ? `#jobs?${query}` : '#jobs';
+}
+
+export function parseClassificationRoute(hash = window.location.hash) {
+  const rawHash = String(hash || '').replace(/^#/, '');
+  const [rawView, rawQuery = ''] = rawHash.split('?', 2);
+  if (rawView.trim().toLowerCase() !== 'classification') {
+    return { target: DEFAULT_CLASSIFICATION_TARGET };
+  }
+
+  const target = new URLSearchParams(rawQuery).get('target');
+  return {
+    target: VALID_CLASSIFICATION_TARGETS.has(target)
+      ? target
+      : DEFAULT_CLASSIFICATION_TARGET,
+  };
+}
+
+export function hashForClassificationRoute(target = DEFAULT_CLASSIFICATION_TARGET) {
+  const normalizedTarget = VALID_CLASSIFICATION_TARGETS.has(target)
+    ? target
+    : DEFAULT_CLASSIFICATION_TARGET;
+  return `#classification?target=${encodeURIComponent(normalizedTarget)}`;
 }

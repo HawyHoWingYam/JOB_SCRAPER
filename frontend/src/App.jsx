@@ -1,6 +1,11 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
-import { hashForJobsRoute, hashForView, resolveAppView } from './appRoute';
+import {
+  hashForClassificationRoute,
+  hashForJobsRoute,
+  hashForView,
+  resolveAppView,
+} from './appRoute';
 import { parseControlRoute } from './features/taskControl/shared/controlRoute';
 import './App.css';
 
@@ -37,6 +42,13 @@ function App() {
       return;
     }
     window.location.hash = hashForJobsRoute(filters);
+  };
+  const navigateToClassification = (target) => {
+    if (typeof window === 'undefined') {
+      setActiveView('classification');
+      return;
+    }
+    window.location.hash = hashForClassificationRoute(target);
   };
 
   useEffect(() => {
@@ -76,6 +88,7 @@ function App() {
             {activeView === 'dashboard' && (
               <Dashboard
                 onNavigateToAI={navigateToAI}
+                onNavigateToClassification={navigateToClassification}
                 onNavigateToJobs={navigateToJobs}
               />
             )}
@@ -83,7 +96,12 @@ function App() {
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
-            {activeView === 'classification' && <ClassificationBatchesPage />}
+            {activeView === 'classification' && (
+              <ClassificationBatchesPage
+                routeHash={locationHash}
+                onNavigateTarget={navigateToClassification}
+              />
+            )}
             {activeView === 'settings' && (
               <AISettingsPage
                 initialSection={settingsSection}

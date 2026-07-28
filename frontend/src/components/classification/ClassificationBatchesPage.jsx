@@ -6,6 +6,10 @@ import {
   startClassificationBatch,
   stopClassificationRun,
 } from '../../api/classificationBatches';
+import {
+  hashForClassificationRoute,
+  parseClassificationRoute,
+} from '../../appRoute';
 import './ClassificationBatchesPage.css';
 
 const DOMAINS = [
@@ -136,8 +140,12 @@ function RunCard({ run, busyAction, onStop, onRetry }) {
   );
 }
 
-export default function ClassificationBatchesPage() {
-  const [domain, setDomain] = useState(DOMAINS[0].id);
+export default function ClassificationBatchesPage({
+  routeHash = typeof window === 'undefined' ? '#classification' : window.location.hash,
+  onNavigateTarget,
+}) {
+  const routeTarget = parseClassificationRoute(routeHash).target;
+  const [domain, setDomain] = useState(routeTarget);
   const [limit, setLimit] = useState('100');
   const [sourceSites, setSourceSites] = useState([]);
   const [preview, setPreview] = useState(null);
@@ -173,6 +181,10 @@ export default function ClassificationBatchesPage() {
     previewRequestGeneration.current += 1;
     previewAbortController.current?.abort();
   }, []);
+
+  useEffect(() => {
+    setDomain((current) => (current === routeTarget ? current : routeTarget));
+  }, [routeTarget]);
 
   useEffect(() => {
     invalidatePreview();
@@ -263,6 +275,18 @@ export default function ClassificationBatchesPage() {
       : Number(preview.result.selected_item_count || 0) > 0
   );
 
+  const handleDomainChange = (nextDomain) => {
+    if (domain === nextDomain) return;
+    invalidatePreview();
+    setDomain(nextDomain);
+    if (nextDomain === 'company_industry') return;
+    if (onNavigateTarget) {
+      onNavigateTarget(nextDomain);
+    } else if (typeof window !== 'undefined') {
+      window.location.hash = hashForClassificationRoute(nextDomain);
+    }
+  };
+
   return (
     <section className="classification-page">
       <header>
@@ -279,10 +303,7 @@ export default function ClassificationBatchesPage() {
             role="tab"
             aria-selected={domain === item.id}
             className={domain === item.id ? 'active' : ''}
-            onClick={() => {
-              if (domain !== item.id) invalidatePreview();
-              setDomain(item.id);
-            }}
+            onClick={() => handleDomainChange(item.id)}
           >
             {item.label}
           </button>

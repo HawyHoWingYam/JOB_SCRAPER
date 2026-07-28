@@ -22,6 +22,7 @@ vi.mock('../../api/classificationBatches', () => ({
 describe('ClassificationBatchesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.location.hash = '#classification';
     fetchClassificationRuns.mockResolvedValue({ items: [] });
     previewClassificationBatch.mockResolvedValue({
       domain: 'job_taxonomy',
@@ -31,6 +32,58 @@ describe('ClassificationBatchesPage', () => {
     startClassificationBatch.mockResolvedValue({ id: 'run-new' });
     stopClassificationRun.mockResolvedValue({});
     retryClassificationRun.mockResolvedValue({});
+  });
+
+  it('hydrates a durable Skill target without previewing or mutating a batch', async () => {
+    render(<ClassificationBatchesPage routeHash="#classification?target=skill" />);
+
+    expect(screen.getByRole('tab', { name: 'Skills' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await waitFor(() => {
+      expect(fetchClassificationRuns).toHaveBeenCalledWith('skill');
+    });
+    expect(previewClassificationBatch).not.toHaveBeenCalled();
+    expect(startClassificationBatch).not.toHaveBeenCalled();
+    expect(retryClassificationRun).not.toHaveBeenCalled();
+  });
+
+  it('falls back from an invalid route target without batch mutations', async () => {
+    render(
+      <ClassificationBatchesPage
+        routeHash="#classification?target=not-a-domain"
+      />,
+    );
+
+    expect(screen.getByRole('tab', { name: 'Job Taxonomy' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await waitFor(() => {
+      expect(fetchClassificationRuns).toHaveBeenCalledWith('job_taxonomy');
+    });
+    expect(previewClassificationBatch).not.toHaveBeenCalled();
+    expect(startClassificationBatch).not.toHaveBeenCalled();
+    expect(retryClassificationRun).not.toHaveBeenCalled();
+  });
+
+  it('serializes supported tab changes through the navigation boundary', async () => {
+    const onNavigateTarget = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ClassificationBatchesPage
+        routeHash="#classification"
+        onNavigateTarget={onNavigateTarget}
+      />,
+    );
+
+    await user.click(screen.getByRole('tab', { name: 'Skills' }));
+
+    expect(onNavigateTarget).toHaveBeenCalledWith('skill');
+    expect(previewClassificationBatch).not.toHaveBeenCalled();
+    expect(startClassificationBatch).not.toHaveBeenCalled();
+    expect(retryClassificationRun).not.toHaveBeenCalled();
   });
 
   it('previews a bounded domain batch before enabling start', async () => {

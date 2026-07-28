@@ -136,4 +136,29 @@ describe("CategoryChart", () => {
     await user.click(screen.getByRole("button", { name: "Retry taxonomy" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });
+
+  it("only exposes a Classification action for a non-zero ready backlog", () => {
+    const { rerender } = render(
+      <CategoryChart data={categoryData} onOpenClassification={vi.fn()} />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: "Open Job Taxonomy Classification for 12 ready Jobs",
+      }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <CategoryChart
+        data={{
+          ...categoryData,
+          classification_ready_unassigned_total: 0,
+        }}
+        onOpenClassification={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /Open Job Taxonomy Classification/ }),
+    ).not.toBeInTheDocument();
+  });
 });
