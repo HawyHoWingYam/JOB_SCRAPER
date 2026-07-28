@@ -3,13 +3,12 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
-from typing import Any, Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.ai.llm_client import get_llm_client
 from app.ai.job_insight_extractor import get_job_insight_extractor
@@ -24,8 +23,17 @@ from app.job_intelligence.current_taxonomies.enrichment import (
     normalize_skill_text,
 )
 from app.job_intelligence.current_taxonomies.store import CurrentTaxonomyStore
+from app.job_intelligence.current_taxonomies.skill_curation import (
+    load_skill_curation_rules,
+    resolve_skill_curation,
+)
 from app.job_intelligence.current_taxonomies.company_projection import (
     project_current_company_industry,
+)
+from app.job_intelligence.current_taxonomies.company_mapping_manifest import (
+    CompanyIndustryMappingManifest,
+    CompanyIndustryMappingResolver,
+    load_company_industry_mapping_manifest,
 )
 from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.models.company import Company
@@ -39,11 +47,13 @@ from app.models.current_taxonomy import (
 )
 from app.models.job import Job
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
-from app.services.classification_batch_runtime import ClassificationCandidate
+from app.services.classification_batch_runtime import (
+    ClassificationCandidate,
+    ClassificationCandidateSelection,
+)
 from app.utils.time import utc_now
 
 
-_RULES_PATH = Path(__file__).resolve().parents[1] / "data" / "skill_curation_rules.json"
 _CODE_PART = re.compile(r"[^a-z0-9]+")
 
 
@@ -152,6 +162,40 @@ class SkillClassificationAdapter:
             for row in rows
         )
 
+    def filter_retry_candidates(
+        self,
+        db: Session,
+        candidates: tuple[ClassificationCandidate, ...],
+    ) -> tuple[ClassificationCandidate, ...]:
+        candidate_ids: dict[str, UUID] = {}
+        for candidate in candidates:
+            try:
+                candidate_ids[candidate.subject_id] = UUID(candidate.subject_id)
+            except ValueError:
+                continue
+        retryable_ids = {
+            str(candidate_id)
+            for candidate_id in db.scalars(
+                select(CurrentSkillCandidate.id)
+                .join(
+                    CurrentJobSkillMention,
+                    CurrentJobSkillMention.candidate_id == CurrentSkillCandidate.id,
+                )
+                .where(
+                    CurrentSkillCandidate.id.in_(tuple(candidate_ids.values())),
+                    CurrentSkillCandidate.resolved_skill_code.is_(None),
+                    CurrentJobSkillMention.resolution == "candidate",
+                    CurrentJobSkillMention.status == "active",
+                )
+                .distinct()
+            )
+        }
+        return tuple(
+            candidate
+            for candidate in candidates
+            if candidate.subject_id in retryable_ids
+        )
+
     async def process_candidate(
         self,
         db: Session,
@@ -181,23 +225,23 @@ class SkillClassificationAdapter:
             self._reproject_jobs(db, row.id)
             return
 
-        local_disposition = _local_disposition(row.canonical_raw_name)
-        if local_disposition == "generic":
+        local_disposition = resolve_skill_curation(row.canonical_raw_name)
+        if local_disposition is not None and local_disposition.kind == "generic":
             self._resolve_mentions(
                 db,
                 row,
                 resolution="generic_tag",
-                generic_tag=row.canonical_raw_name,
+                generic_tag=local_disposition.generic_tag,
             )
             self._finish_candidate(row)
             self._reproject_jobs(db, row.id)
             return
-        if local_disposition == "reject":
+        if local_disposition is not None and local_disposition.kind == "reject":
             self._resolve_mentions(
                 db,
                 row,
                 resolution="rejected",
-                rejection_reason="suppressed_generic_term",
+                rejection_reason=local_disposition.rejection_reason,
             )
             self._finish_candidate(row)
             self._reproject_jobs(db, row.id)
@@ -243,7 +287,7 @@ class SkillClassificationAdapter:
         candidate: CurrentSkillCandidate,
     ) -> str | None:
         exact = _exact_skill_codes(db)
-        rules = _load_rules()
+        rules = load_skill_curation_rules()
         alias_lookup = {
             normalize_exact_skill_key(key): normalize_exact_skill_key(value)
             for key, value in (rules.get("canonical_aliases") or {}).items()
@@ -516,15 +560,31 @@ class JobTaxonomyClassificationAdapter:
 class CompanyIndustryClassificationAdapter:
     domain = "company_industry"
 
+    def __init__(
+        self,
+        *,
+        manifest: CompanyIndustryMappingManifest | None = None,
+    ) -> None:
+        self.manifest = manifest
+
     def select_candidates(
         self,
         db: Session,
         *,
         filters: dict[str, object],
         limit: int,
-    ) -> tuple[ClassificationCandidate, ...]:
+    ) -> ClassificationCandidateSelection:
         query = (
             select(Company)
+            .options(
+                load_only(
+                    Company.id,
+                    Company.name,
+                    Company.source_site,
+                    Company.created_at,
+                    Company.is_deleted,
+                )
+            )
             .outerjoin(
                 CurrentCompanyIndustryAssignment,
                 CurrentCompanyIndustryAssignment.company_id == Company.id,
@@ -540,13 +600,43 @@ class CompanyIndustryClassificationAdapter:
         rows = tuple(
             db.scalars(query.order_by(Company.created_at, Company.id).limit(limit))
         )
-        return tuple(
-            ClassificationCandidate(
-                subject_id=str(company.id),
-                subject_label=company.name,
-                payload={"source_site": company.source_site},
+        return self._classify_companies(db, rows)
+
+    def filter_retry_candidates(
+        self,
+        db: Session,
+        candidates: tuple[ClassificationCandidate, ...],
+    ) -> tuple[ClassificationCandidate, ...]:
+        candidate_ids: list[UUID] = []
+        for candidate in candidates:
+            try:
+                candidate_ids.append(UUID(candidate.subject_id))
+            except ValueError:
+                continue
+        if not candidate_ids:
+            return ()
+        companies = tuple(
+            db.scalars(
+                select(Company)
+                .options(
+                    load_only(
+                        Company.id,
+                        Company.name,
+                        Company.source_site,
+                        Company.is_deleted,
+                    )
+                )
+                .where(Company.id.in_(candidate_ids), Company.is_deleted.is_(False))
             )
-            for company in rows
+        )
+        retryable_ids = {
+            candidate.subject_id
+            for candidate in self._classify_companies(db, companies).candidates
+        }
+        return tuple(
+            candidate
+            for candidate in candidates
+            if candidate.subject_id in retryable_ids
         )
 
     async def process_candidate(
@@ -554,42 +644,152 @@ class CompanyIndustryClassificationAdapter:
         db: Session,
         candidate: ClassificationCandidate,
     ) -> None:
+        payload = candidate.payload or {}
+        if payload.get("mapping_readiness") == "unsupported":
+            raise ValueError(
+                str(payload.get("mapping_error") or "Company mapping evidence is unsupported")
+            )
         company_id = UUID(candidate.subject_id)
-        company = db.get(Company, company_id)
+        company = db.scalar(
+            select(Company)
+            .options(load_only(Company.id, Company.is_deleted))
+            .where(Company.id == company_id)
+        )
         if company is None or company.is_deleted:
             raise ValueError("Company is unavailable for industry classification")
         jobs = tuple(
             db.scalars(
                 select(Job)
+                .options(
+                    load_only(
+                        Job.id,
+                        Job.company_id,
+                        Job.source_site,
+                        Job.source_job_id,
+                        Job.raw_data,
+                        Job.created_at,
+                        Job.is_deleted,
+                    )
+                )
                 .where(Job.company_id == company_id, Job.is_deleted.is_(False))
                 .order_by(Job.created_at.desc(), Job.id.desc())
             )
         )
+        resolver = CompanyIndustryMappingResolver(
+            db,
+            self.manifest or load_company_industry_mapping_manifest(),
+        )
+        unsupported_reason: str | None = None
         for job in jobs:
+            resolution = resolver.resolve(cast(str, job.source_site), job.raw_data)
+            if resolution.kind == "unsupported":
+                unsupported_reason = unsupported_reason or resolution.reason
+                continue
+            if resolution.kind != "mapped":
+                continue
             result = project_current_company_industry(db, company_id, job)
             if result is not None and result.state == "assigned":
                 return
-        raise ValueError("Company has no mapped source-industry evidence")
+        raise ValueError(
+            unsupported_reason or "Company has no mapped source-industry evidence"
+        )
 
+    def _classify_companies(
+        self,
+        db: Session,
+        companies: tuple[Company, ...],
+    ) -> ClassificationCandidateSelection:
+        company_ids = tuple(cast(UUID, company.id) for company in companies)
+        jobs_by_company: dict[UUID, list[Job]] = {company_id: [] for company_id in company_ids}
+        if company_ids:
+            jobs = db.scalars(
+                select(Job)
+                .options(
+                    load_only(
+                        Job.id,
+                        Job.company_id,
+                        Job.source_site,
+                        Job.source_job_id,
+                        Job.raw_data,
+                        Job.created_at,
+                        Job.is_deleted,
+                    )
+                )
+                .where(Job.company_id.in_(company_ids), Job.is_deleted.is_(False))
+                .order_by(Job.created_at.desc(), Job.id.desc())
+            )
+            for job in jobs:
+                jobs_by_company.setdefault(cast(UUID, job.company_id), []).append(job)
 
-def _load_rules() -> dict[str, Any]:
-    with _RULES_PATH.open(encoding="utf-8") as stream:
-        payload = json.load(stream)
-    return payload if isinstance(payload, dict) else {}
-
-
-def _local_disposition(value: str) -> str | None:
-    key = _loose_key(value)
-    rules = _load_rules()
-    generic = {_loose_key(item) for item in rules.get("generic_terms") or []}
-    suppressed = {
-        _loose_key(item) for item in rules.get("suppressed_review_terms") or []
-    }
-    if key in generic:
-        return "generic"
-    if key in suppressed:
-        return "reject"
-    return None
+        resolver = CompanyIndustryMappingResolver(
+            db,
+            self.manifest or load_company_industry_mapping_manifest(),
+        )
+        candidates: list[ClassificationCandidate] = []
+        mapped_count = 0
+        unmapped_count = 0
+        excluded_count = 0
+        for company in companies:
+            company_id = cast(UUID, company.id)
+            resolutions = tuple(
+                (
+                    job,
+                    resolver.resolve(cast(str, job.source_site), job.raw_data),
+                )
+                for job in jobs_by_company.get(company_id, ())
+            )
+            mapped = next(
+                ((job, result) for job, result in resolutions if result.kind == "mapped"),
+                None,
+            )
+            if mapped is not None:
+                job, result = mapped
+                mapped_count += 1
+                candidates.append(
+                    ClassificationCandidate(
+                        subject_id=str(company.id),
+                        subject_label=cast(str, company.name),
+                        payload={
+                            "source_site": cast(str, company.source_site),
+                            "mapping_readiness": "mapped",
+                            "source_job_id": cast(str, job.source_job_id),
+                            "source_label": result.source_label,
+                            "target_codes": list(result.target_codes),
+                        },
+                    )
+                )
+                continue
+            unsupported = next(
+                (result for _, result in resolutions if result.kind == "unsupported"),
+                None,
+            )
+            if unsupported is None and resolutions:
+                excluded_count += 1
+                continue
+            unmapped_count += 1
+            error = (
+                unsupported.reason
+                if unsupported is not None
+                else "Company has no Source Industry Label evidence"
+            )
+            candidates.append(
+                ClassificationCandidate(
+                    subject_id=str(company.id),
+                    subject_label=cast(str, company.name),
+                    payload={
+                        "source_site": cast(str, company.source_site),
+                        "mapping_readiness": "unsupported",
+                        "mapping_error": error,
+                    },
+                )
+            )
+        return ClassificationCandidateSelection(
+            selected_item_count=len(companies),
+            candidates=tuple(candidates),
+            mapped_item_count=mapped_count,
+            unmapped_item_count=unmapped_count,
+            excluded_item_count=excluded_count,
+        )
 
 
 def _exact_skill_codes(db: Session) -> dict[str, str]:
@@ -624,10 +824,6 @@ def _exact_skill_codes(db: Session) -> dict[str, str]:
 def _node_label(node: CurrentTaxonomyNodeRecord) -> str:
     labels = node.labels if isinstance(node.labels, dict) else {}
     return str(labels.get("en") or next(iter(labels.values()), node.code))
-
-
-def _loose_key(value: object) -> str:
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).split())
 
 
 def _optional_text(value: object) -> str | None:

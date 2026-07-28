@@ -13,6 +13,10 @@ from app.job_intelligence.current_taxonomies.contracts import (
     CurrentCompanyIndustryInput,
     ReplaceCurrentCompanyIndustriesCommand,
 )
+from app.job_intelligence.current_taxonomies.company_mapping_manifest import (
+    company_industry_source_key,
+    extract_source_industry_label,
+)
 from app.job_intelligence.current_taxonomies.store import CurrentTaxonomyStore
 from app.job_intelligence.foundation import normalized_content_hash
 from app.messaging.topics import STREAM_JOB_LIFECYCLE
@@ -85,22 +89,17 @@ def project_current_company_industry(
     raw_data = _field(canonical_job, "raw_data")
     if not isinstance(raw_data, Mapping):
         return None
-    label = raw_data.get("company_industry")
-    if not isinstance(label, str) or not label.strip():
-        industry = raw_data.get("industry")
-        label = industry.get("name") if isinstance(industry, Mapping) else None
-    if not isinstance(label, str) or not label.strip():
+    raw_label = extract_source_industry_label(raw_data)
+    if raw_label is None:
         return None
-    raw_label = label.strip()
-    normalized_label = " ".join(raw_label.split()).casefold()
+    source_key = company_industry_source_key(raw_label)
     mapping_rows = tuple(
         db.scalars(
             select(CurrentSourceTaxonomyMapping)
             .where(
                 CurrentSourceTaxonomyMapping.taxonomy == "company_industry",
                 CurrentSourceTaxonomyMapping.source_site == source_site,
-                CurrentSourceTaxonomyMapping.source_key
-                == f"label:{normalized_label}",
+                CurrentSourceTaxonomyMapping.source_key == source_key,
             )
             .order_by(CurrentSourceTaxonomyMapping.target_code)
         )

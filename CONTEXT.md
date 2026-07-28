@@ -162,6 +162,10 @@ _Avoid_: First industry, AI-inferred primary
 An industry label or code reported by a company-owned Source and retained as provenance for Company Industry mapping.
 _Avoid_: Company Industry, job classification
 
+**Company Industry Source Mapping**:
+A governed association from one Source Industry Label identity to an existing Company Industry or an explicit non-mapping disposition.
+_Avoid_: Free-text industry alias, Job Industry mapping, inferred company industry
+
 **Company Industry Review Item**:
 Unresolved company-level industry evidence awaiting a Taxonomy Operator decision before any Company Industry Assignment is created.
 _Avoid_: AI-assigned industry, free-text Industry
@@ -175,6 +179,10 @@ _Avoid_: Provisional Skill, raw extracted term
 **Skill Mention**:
 One occurrence of a potential skill extracted from a Job. A Skill Mention is evidence that may resolve to a Skill, a Skill Candidate, a generic tag, or rejection.
 _Avoid_: Skill, candidate
+
+**Generic Skill Tag**:
+A governed non-Skill disposition for a broad activity or workplace concept retained as Skill Mention evidence but excluded from the Skill Taxonomy, ordinary skill assignments, and Skill analytics.
+_Avoid_: Skill, rejected mention, provisional Skill
 
 **Skill Candidate**:
 An unresolved potential Skill aggregated from one or more Skill Mentions and awaiting a governance decision.

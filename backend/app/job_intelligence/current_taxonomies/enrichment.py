@@ -17,6 +17,9 @@ from app.job_intelligence.current_taxonomies.contracts import (
     ReplaceCurrentJobSkillsCommand,
 )
 from app.job_intelligence.current_taxonomies.store import CurrentTaxonomyStore
+from app.job_intelligence.current_taxonomies.skill_curation import (
+    resolve_skill_curation,
+)
 from app.job_intelligence.foundation import normalized_content_hash
 from app.job_intelligence.source_attributes import SourceJobAttributesView
 from app.models.current_taxonomy import (
@@ -313,6 +316,7 @@ class CurrentTaxonomyEnrichment:
             seen_keys.add(normalized_key)
             existing_key = normalize_exact_skill_key(payload.get("existing_skill"))
             skill_code = exact_skills.get(existing_key) or exact_skills.get(normalized_key)
+            local_disposition = resolve_skill_curation(raw_name)
             kind = str(payload.get("kind") or "technical").strip().lower()
             resolution = str(payload.get("resolution") or "").strip().lower()
             candidate_id = None
@@ -321,6 +325,14 @@ class CurrentTaxonomyEnrichment:
             if skill_code is not None and kind not in {"generic", "reject"}:
                 mention_resolution = "match_existing"
                 matched_codes.append(skill_code)
+            elif local_disposition is not None and local_disposition.kind == "generic":
+                mention_resolution = "generic_tag"
+                generic_tag = local_disposition.generic_tag
+                skill_code = None
+            elif local_disposition is not None and local_disposition.kind == "reject":
+                mention_resolution = "rejected"
+                rejection_reason = local_disposition.rejection_reason
+                skill_code = None
             elif kind == "generic" or resolution == "drop":
                 mention_resolution = "generic_tag"
                 generic_tag = raw_name

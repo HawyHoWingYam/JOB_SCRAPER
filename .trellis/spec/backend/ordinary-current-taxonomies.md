@@ -33,6 +33,16 @@ CurrentTaxonomyReader(db).get_job_skills(job_id) -> CurrentJobSkillStateView
 CurrentTaxonomyReader(db).resolve_assignable_codes(taxonomy, codes) -> tuple[str, ...]
 CurrentTaxonomyReader(db).build_job_taxonomy_embedding_document(job_id) \
     -> CurrentJobTaxonomyEmbeddingDocument | None
+
+resolve_skill_curation(raw_name) \
+    -> SkillCurationDisposition(kind, generic_tag, rejection_reason) | None
+
+load_company_industry_mapping_manifest(path) \
+    -> CompanyIndustryMappingManifest
+CompanyIndustryMappingSynchronizer(db).plan(manifest, observed_labels=...) \
+    -> CompanyIndustryMappingSyncPlan
+CompanyIndustryMappingSynchronizer(db).synchronize(manifest, observed_labels=...) \
+    -> CompanyIndustryMappingSyncPlan
 ```
 
 Current HTTP reads are:
@@ -73,6 +83,22 @@ Persistence is owned by `current_taxonomy_nodes`,
   terms live as `current_skill_candidates` plus
   `current_job_skill_mentions`; distinct-Job and occurrence counts are derived
   from Mention evidence. Candidate evidence is not a manual review queue.
+- Governed Skill curation rules are Unicode-safe and apply before Candidate
+  upsert as well as before batch placement. A multilingual generic alias keeps
+  its raw Mention evidence but stores one canonical Generic Skill Tag. A known
+  local disposition never depends on runtime translation or a fresh LLM call.
+- Company Industry Source Mapping uses one governed current-state manifest with
+  no release, revision, history, or startup synchronization. Each Source
+  section is complete, and every normalized label has exactly one `mapped` or
+  `non_mapping` disposition.
+- `python backend/scripts/sync_company_industry_source_mappings.py` validates
+  all Sources and observed-label coverage before mutation. Positive rows are
+  synchronized atomically per Source; non-mapping dispositions remain only in
+  the manifest and never create fake taxonomy targets.
+- Runtime Source Industry Label extraction prefers structured `industry.name`
+  evidence and falls back to retained `company_industry` evidence only when the
+  structured label is absent. Preview and projection share the same
+  Unicode-normalized `label:<value>` identity.
 - Product, filter, stats, search, AI Enrichment, OfferToday projection, ingest,
   and embedding workers read or write only the current tables.
 - Sandbox retention exports only current rows. No API, worker, script, or
@@ -91,6 +117,10 @@ Persistence is owned by `current_taxonomy_nodes`,
 | Source mapping is absent or has no active assignable target | Return the complete active assignable Job taxonomy |
 | Job has no current assignment | Return `state=unassigned`, `assignment=null`; no Review reference |
 | Unknown Skill term repeats | Upsert Candidate/Mention evidence and recompute metrics; do not auto-decide in this module |
+| Known multilingual generic alias is extracted as technical | Resolve directly to its canonical Generic Skill Tag; create no Candidate or Skill assignment |
+| Company mapping manifest is malformed, misses an observed label, or targets an unknown/inactive/non-assignable node | Reject before mutation |
+| Company manifest and positive database mapping rows drift | Fail closed as actionable unsupported evidence; never infer a target |
+| Company manifest disposition is `non_mapping` | Terminal exclusion; create no mapping row, Batch item, or Retry item |
 | Preservation row references an unmapped legacy identity | `TaxonomyPreservationError`; import nothing |
 | API receives an unknown Job or Company UUID | Return an empty current state for that owner; do not query legacy tables |
 
@@ -102,6 +132,8 @@ Persistence is owned by `current_taxonomy_nodes`,
   receives all active assignable Job nodes and may still classify the Job.
 - **Base:** an unenriched Job has no assignment and no Candidate Mentions. Reads
   return Unassigned plus empty arrays.
+- **Good:** `項目管理` remains the raw Mention and resolves deterministically to
+  canonical tag `Project Management` without creating a Candidate.
 - **Bad:** require a mapping release before enrichment, expose a revision route,
   or create a per-item Review row for missing coverage.
 - **Bad:** infer a Canonical Job node from a Source classification label or
@@ -119,6 +151,13 @@ Persistence is owned by `current_taxonomy_nodes`,
 - AI Enrichment and ingest tests assert current assignments, current Skill
   Candidate evidence, optional mapping behavior, and outer transaction
   ownership.
+- Skill curation tests assert Unicode alias matching, canonical Generic Skill
+  Tags, raw evidence retention, repeated-ingest determinism, and zero Candidate
+  or assignment writes for governed generic aliases.
+- Company mapping manifest tests assert normalized identity, disposition
+  exclusivity, observed coverage, target validity, deterministic planning,
+  stale-row removal, idempotence, and atomic rollback. Company adapter tests
+  assert mapped provenance writes, actionable drift, and terminal exclusions.
 - Frontend current taxonomy/API, Job Browser, Job Detail, Company Industry, and
   Dashboard tests assert stable-code payloads and absence of Governance UI.
 - Architecture searches reject every legacy taxonomy publisher, reader,
@@ -147,3 +186,23 @@ CurrentTaxonomyStore(db).assign_job(command)
 
 The ordinary store treats mapping absence as full-taxonomy fallback and writes
 stable current state in the caller's transaction.
+
+#### Wrong: trust transient extractor kind over governed curation
+
+```python
+if kind == "technical":
+    candidate = upsert_candidate(raw_name)
+```
+
+#### Correct
+
+```python
+local = resolve_skill_curation(raw_name)
+if local and local.kind == "generic":
+    persist_mention(raw_name=raw_name, generic_tag=local.generic_tag)
+else:
+    candidate = upsert_candidate(raw_name)
+```
+
+The extractor supplies evidence; explicit current curation data owns known
+terminal dispositions.

@@ -1,0 +1,33 @@
+{
+  "id": "fix-automated-classification-qa-defects",
+  "name": "fix-automated-classification-qa-defects",
+  "title": "Fix automated classification QA defects",
+  "description": "Plan and deliver independently verifiable fixes for GitHub issues #36, #37, and #38 discovered by automated-classification frontend QA.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-27-localized-generic-skill-retry",
+    "07-27-invalidate-classification-preview",
+    "07-27-company-industry-source-mapping"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Implementation and automated verification approved on 2026-07-28. Aggregate browser manual QA explicitly deferred; keep child and umbrella issues open.",
+  "meta": {
+    "github_issue": 32,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/32"
+  }
+}

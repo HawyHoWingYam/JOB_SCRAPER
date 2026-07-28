@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchClassificationRuns,
   previewClassificationBatch,
@@ -29,12 +29,39 @@ const DOMAINS = [
 const ACTIVE_STATUSES = new Set(['pending', 'running', 'stopping']);
 const SOURCE_OPTIONS = ['jobsdb', 'offertoday', 'ctgoodjobs'];
 
+function buildPreviewInputs(domain, limit, sourceSites) {
+  const normalizedSources = SOURCE_OPTIONS.filter((source) => sourceSites.includes(source));
+  return {
+    domain,
+    payload: {
+      limit: Number(limit),
+      filters: domain === 'skill' ? {} : { source_sites: normalizedSources },
+    },
+  };
+}
+
 function settledCount(run) {
   return (
     Number(run?.completed_items || 0) +
     Number(run?.failed_items || 0) +
     Number(run?.cancelled_items || 0)
   );
+}
+
+function previewSummary(preview) {
+  if (!preview) return '还没有预览。';
+  const { inputs, result } = preview;
+  if (inputs.domain !== 'company_industry') {
+    return `这次会处理 ${result.selected_item_count} 项。`;
+  }
+  const selected = Number(result.selected_item_count || 0);
+  const mapped = Number(result.mapped_item_count || 0);
+  const unmapped = Number(result.unmapped_item_count || 0);
+  const excluded = Number(result.excluded_item_count || 0);
+  const counts = `已选 ${selected} 家 Company：可映射 ${mapped}，未映射 ${unmapped}，规则排除 ${excluded}。`;
+  return mapped > 0
+    ? counts
+    : `${counts} 没有可用的 Company Industry Source Mapping；请先同步已审核的 manifest。`;
 }
 
 function RunCard({ run, busyAction, onStop, onRetry }) {
@@ -118,15 +145,14 @@ export default function ClassificationBatchesPage() {
   const [loading, setLoading] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [error, setError] = useState('');
+  const previewRequestGeneration = useRef(0);
+  const previewAbortController = useRef(null);
   const domainInfo = useMemo(
     () => DOMAINS.find((item) => item.id === domain),
     [domain],
   );
-  const payload = useMemo(
-    () => ({
-      limit: Number(limit),
-      filters: domain === 'skill' ? {} : { source_sites: sourceSites },
-    }),
+  const currentPreviewInputs = useMemo(
+    () => buildPreviewInputs(domain, limit, sourceSites),
     [domain, limit, sourceSites],
   );
 
@@ -135,11 +161,24 @@ export default function ClassificationBatchesPage() {
     setRuns(Array.isArray(response?.items) ? response.items : []);
   }, [domain]);
 
-  useEffect(() => {
+  const invalidatePreview = useCallback(() => {
+    previewRequestGeneration.current += 1;
+    previewAbortController.current?.abort();
+    previewAbortController.current = null;
     setPreview(null);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => () => {
+    previewRequestGeneration.current += 1;
+    previewAbortController.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    invalidatePreview();
     setError('');
     refreshRuns().catch((requestError) => setError(requestError.message));
-  }, [refreshRuns]);
+  }, [invalidatePreview, refreshRuns]);
 
   useEffect(() => {
     if (!runs.some((run) => ACTIVE_STATUSES.has(run.status))) return undefined;
@@ -150,15 +189,33 @@ export default function ClassificationBatchesPage() {
   }, [refreshRuns, runs]);
 
   const handlePreview = async () => {
+    const requestGeneration = previewRequestGeneration.current + 1;
+    previewRequestGeneration.current = requestGeneration;
+    const requestInputs = currentPreviewInputs;
+    previewAbortController.current?.abort();
+    const controller = new AbortController();
+    previewAbortController.current = controller;
     setLoading(true);
     setError('');
     try {
-      setPreview(await previewClassificationBatch(domain, payload));
+      const response = await previewClassificationBatch(
+        requestInputs.domain,
+        requestInputs.payload,
+        { signal: controller.signal },
+      );
+      if (previewRequestGeneration.current === requestGeneration) {
+        setPreview({ inputs: requestInputs, result: response });
+      }
     } catch (requestError) {
-      setPreview(null);
-      setError(requestError.message);
+      if (previewRequestGeneration.current === requestGeneration) {
+        setPreview(null);
+        setError(requestError.message);
+      }
     } finally {
-      setLoading(false);
+      if (previewRequestGeneration.current === requestGeneration) {
+        previewAbortController.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -166,7 +223,7 @@ export default function ClassificationBatchesPage() {
     setBusyAction(true);
     setError('');
     try {
-      await startClassificationBatch(domain, payload);
+      await startClassificationBatch(preview.inputs.domain, preview.inputs.payload);
       setPreview(null);
       await refreshRuns();
     } catch (requestError) {
@@ -200,6 +257,12 @@ export default function ClassificationBatchesPage() {
     }
   };
 
+  const canStart = Boolean(preview) && (
+    preview.inputs.domain === 'company_industry'
+      ? Number(preview.result.mapped_item_count || 0) > 0
+      : Number(preview.result.selected_item_count || 0) > 0
+  );
+
   return (
     <section className="classification-page">
       <header>
@@ -216,7 +279,10 @@ export default function ClassificationBatchesPage() {
             role="tab"
             aria-selected={domain === item.id}
             className={domain === item.id ? 'active' : ''}
-            onClick={() => setDomain(item.id)}
+            onClick={() => {
+              if (domain !== item.id) invalidatePreview();
+              setDomain(item.id);
+            }}
           >
             {item.label}
           </button>
@@ -235,11 +301,14 @@ export default function ClassificationBatchesPage() {
                   <input
                     type="checkbox"
                     checked={sourceSites.includes(source)}
-                    onChange={(event) => setSourceSites((current) => (
-                      event.target.checked
-                        ? [...current, source]
-                        : current.filter((item) => item !== source)
-                    ))}
+                    onChange={(event) => {
+                      invalidatePreview();
+                      setSourceSites((current) => (
+                        event.target.checked
+                          ? [...current, source]
+                          : current.filter((item) => item !== source)
+                      ));
+                    }}
                   />
                   {source}
                 </label>
@@ -254,20 +323,23 @@ export default function ClassificationBatchesPage() {
               min="1"
               max="5000"
               value={limit}
-              onChange={(event) => setLimit(event.target.value)}
+              onChange={(event) => {
+                invalidatePreview();
+                setLimit(event.target.value);
+              }}
             />
           </label>
           <button type="button" className="secondary-button" onClick={handlePreview} disabled={loading}>
             {loading ? '正在预览…' : '预览'}
           </button>
           <div className="classification-preview" aria-live="polite">
-            {preview ? `这次会处理 ${preview.selected_item_count} 项。` : '还没有预览。'}
+            {previewSummary(preview)}
           </div>
           <button
             type="button"
             className="primary-button"
             onClick={handleStart}
-            disabled={busyAction || !preview || preview.selected_item_count < 1}
+            disabled={busyAction || !canStart}
           >
             开始处理
           </button>

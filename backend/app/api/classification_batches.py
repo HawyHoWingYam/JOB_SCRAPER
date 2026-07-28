@@ -123,11 +123,20 @@ def preview_classification_batch(
         )
     except ClassificationBatchError as exc:
         _raise_http(exc)
-    return {
+    payload = {
         "domain": preview.domain,
         "selected_item_count": preview.selected_item_count,
         "items": [_serialize_candidate(item) for item in preview.items],
     }
+    if preview.mapped_item_count is not None:
+        payload.update(
+            {
+                "mapped_item_count": preview.mapped_item_count,
+                "unmapped_item_count": preview.unmapped_item_count,
+                "excluded_item_count": preview.excluded_item_count,
+            }
+        )
+    return payload
 
 
 @router.post("/{domain}/runs")

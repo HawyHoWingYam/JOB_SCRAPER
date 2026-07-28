@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.api.classification_batches as classification_batch_api
+from app.api.classification_batches import router as classification_batch_router
 from app.models.classification_batch import (
     ClassificationBatchRun,
     ClassificationBatchRunItem,
@@ -24,16 +26,16 @@ from app.services.ai_runtime_settings_service import (
     RuntimeSettingsValidationError,
 )
 from app.services.classification_batch_runtime import (
+    ClassificationBatchError,
+    ClassificationBatchPreview,
     ClassificationBatchRuntime,
     ClassificationCandidate,
+    ClassificationCandidateSelection,
 )
 from app.services.classification_domain_adapters import (
     SkillClassificationAdapter,
     SkillPlacementDecision,
 )
-from app.api.classification_batches import router as classification_batch_router
-
-
 @dataclass
 class _FakeAdapter:
     domain: str = "skill"
@@ -63,6 +65,35 @@ class _FakeAdapter:
         del db
         if candidate.subject_id == "two":
             raise ValueError("placement uncertain")
+
+
+@dataclass
+class _ReadinessAdapter(_FakeAdapter):
+    domain: str = "company_industry"
+    mapped: int = 1
+
+    def select_candidates(
+        self,
+        db: Session,
+        *,
+        filters: dict[str, object],
+        limit: int,
+    ) -> ClassificationCandidateSelection:
+        del db, filters, limit
+        candidates = (
+            ClassificationCandidate(subject_id="mapped", payload={"readiness": "mapped"}),
+            ClassificationCandidate(
+                subject_id="unsupported",
+                payload={"readiness": "unsupported"},
+            ),
+        )
+        return ClassificationCandidateSelection(
+            selected_item_count=3,
+            candidates=candidates,
+            mapped_item_count=self.mapped,
+            unmapped_item_count=2 - self.mapped,
+            excluded_item_count=1,
+        )
 
 
 @pytest.fixture
@@ -132,6 +163,39 @@ def test_stop_cancels_a_pending_batch_without_processing_items(db: Session):
     } == {"cancelled"}
 
 
+def test_company_preview_reports_readiness_and_start_freezes_only_non_exclusions(
+    db: Session,
+):
+    runtime = ClassificationBatchRuntime(
+        db,
+        {"company_industry": _ReadinessAdapter()},
+    )
+
+    preview = runtime.preview("company_industry", filters={}, limit=3)
+    run = runtime.start("company_industry", filters={}, limit=3)
+
+    assert preview.selected_item_count == 3
+    assert preview.mapped_item_count == 1
+    assert preview.unmapped_item_count == 1
+    assert preview.excluded_item_count == 1
+    assert [item.subject_id for item in preview.items] == ["mapped", "unsupported"]
+    assert run.total_items == 2
+
+
+def test_company_start_rejects_zero_mapped_candidates_without_creating_a_run(
+    db: Session,
+):
+    runtime = ClassificationBatchRuntime(
+        db,
+        {"company_industry": _ReadinessAdapter(mapped=0)},
+    )
+
+    with pytest.raises(ClassificationBatchError, match="usable mapped evidence"):
+        runtime.start("company_industry", filters={}, limit=3)
+
+    assert db.scalar(select(func.count()).select_from(ClassificationBatchRun)) == 0
+
+
 @pytest.mark.asyncio
 async def test_stop_on_a_running_batch_finishes_cooperatively(db: Session):
     runtime = ClassificationBatchRuntime(db, {"skill": _FakeAdapter()})
@@ -171,8 +235,10 @@ def test_skill_auto_create_threshold_defaults_to_five_and_is_configurable():
 class _PlacementClassifier:
     def __init__(self, decision: SkillPlacementDecision):
         self.decision = decision
+        self.calls = 0
 
     async def classify(self, **_kwargs) -> SkillPlacementDecision:
+        self.calls += 1
         return self.decision
 
 
@@ -461,6 +527,121 @@ async def test_skill_adapter_classifies_a_known_generic_term_without_creating_sk
         _close_skill_db(db)
 
 
+@pytest.mark.parametrize(
+    ("raw_name", "generic_tag"),
+    (
+        ("項目管理", "Project Management"),
+        ("銷售", "Sales"),
+        ("客戶服務", "Customer Service"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_skill_adapter_resolves_localized_generic_aliases_without_llm(
+    raw_name: str,
+    generic_tag: str,
+):
+    db = _skill_db()
+    try:
+        candidate = _add_skill_candidate(
+            db,
+            name=raw_name,
+            normalized_key=raw_name,
+            distinct_jobs=5,
+        )
+        classifier = _PlacementClassifier(SkillPlacementDecision(status="uncertain"))
+        adapter = SkillClassificationAdapter(placement_classifier=classifier)
+
+        await adapter.process_candidate(
+            db,
+            ClassificationCandidate(subject_id=str(candidate.id), payload={}),
+        )
+        db.commit()
+
+        mentions = tuple(
+            db.scalars(
+                select(CurrentJobSkillMention).where(
+                    CurrentJobSkillMention.origin_candidate_id == candidate.id
+                )
+            )
+        )
+        assert classifier.calls == 0
+        assert {mention.raw_name for mention in mentions} == {raw_name}
+        assert {mention.resolution for mention in mentions} == {"generic_tag"}
+        assert {mention.generic_tag for mention in mentions} == {generic_tag}
+        assert {mention.candidate_id for mention in mentions} == {None}
+        db.refresh(candidate)
+        assert candidate.occurrence_count == 0
+        assert candidate.distinct_job_count == 0
+        assert adapter.select_candidates(db, filters={}, limit=10) == ()
+        assert db.scalar(select(func.count()).select_from(CurrentJobSkillAssignment)) == 0
+        assert db.scalar(select(func.count()).select_from(CurrentTaxonomyNodeRecord)) == 0
+    finally:
+        _close_skill_db(db)
+
+
+@pytest.mark.asyncio
+async def test_retry_excludes_a_skill_candidate_resolved_after_the_source_run_failed():
+    db = _skill_db()
+    try:
+        engine = db.info["test_engine"]
+        ClassificationBatchRun.__table__.create(engine)
+        ClassificationBatchRunItem.__table__.create(engine)
+        candidate = _add_skill_candidate(
+            db,
+            name="項目管理",
+            normalized_key="項目管理",
+            distinct_jobs=5,
+        )
+        source_run = ClassificationBatchRun(
+            domain="skill",
+            status="failed",
+            filters={},
+            requested_limit=1,
+            total_items=1,
+            pending_items=0,
+            completed_items=0,
+            failed_items=1,
+            cancelled_items=0,
+        )
+        db.add(source_run)
+        db.flush()
+        db.add(
+            ClassificationBatchRunItem(
+                run_id=source_run.id,
+                subject_id=str(candidate.id),
+                subject_label=candidate.canonical_raw_name,
+                position=0,
+                payload={},
+                status="failed",
+                attempt_count=1,
+                error_code="ValueError",
+                error_message="Skill candidate placement is uncertain",
+            )
+        )
+        db.commit()
+        adapter = SkillClassificationAdapter(
+            placement_classifier=_PlacementClassifier(
+                SkillPlacementDecision(status="uncertain")
+            )
+        )
+        await adapter.process_candidate(
+            db,
+            ClassificationCandidate(subject_id=str(candidate.id), payload={}),
+        )
+        db.commit()
+        runtime = ClassificationBatchRuntime(db, {"skill": adapter})
+
+        with pytest.raises(
+            ClassificationBatchError,
+            match="no failed items that remain retryable",
+        ):
+            runtime.retry_failed(source_run.id)
+
+        assert db.scalar(select(func.count()).select_from(ClassificationBatchRun)) == 1
+    finally:
+        _close_skill_db(db)
+
+
 def test_classification_batch_api_exposes_one_shared_lifecycle_for_all_domains():
     paths = {route.path for route in classification_batch_router.routes}
 
@@ -474,3 +655,41 @@ def test_classification_batch_api_exposes_one_shared_lifecycle_for_all_domains()
     }
     assert all("governance" not in path for path in paths)
     assert all("/reviews" not in path for path in paths)
+
+
+def test_company_preview_api_serializes_mapping_readiness_counts(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class _PreviewRuntime:
+        def preview(self, domain, *, filters, limit):
+            assert (domain, filters, limit) == ("company_industry", {}, 3)
+            return ClassificationBatchPreview(
+                domain=domain,
+                selected_item_count=3,
+                items=(),
+                mapped_item_count=1,
+                unmapped_item_count=1,
+                excluded_item_count=1,
+            )
+
+    monkeypatch.setattr(
+        classification_batch_api,
+        "_runtime",
+        lambda _db: _PreviewRuntime(),
+    )
+
+    payload = classification_batch_api.preview_classification_batch(
+        "company_industry",
+        classification_batch_api.ClassificationBatchRequest(filters={}, limit=3),
+        db,
+    )
+
+    assert payload == {
+        "domain": "company_industry",
+        "selected_item_count": 3,
+        "mapped_item_count": 1,
+        "unmapped_item_count": 1,
+        "excluded_item_count": 1,
+        "items": [],
+    }

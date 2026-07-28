@@ -1,0 +1,29 @@
+{
+  "id": "company-industry-source-mapping",
+  "name": "company-industry-source-mapping",
+  "title": "Add Company Industry source-mapping setup path",
+  "description": "Fix GitHub issue #38 by providing a production-supported path to establish Company Industry source mappings and preventing guaranteed-failure batches.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-27-fix-automated-classification-qa-defects",
+  "relatedFiles": [],
+  "notes": "Current 54-entry all-non-mapping manifest approved on 2026-07-28. Browser manual QA explicitly deferred; keep task and GitHub issue open until completed.",
+  "meta": {
+    "github_issue": 38,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/38"
+  }
+}

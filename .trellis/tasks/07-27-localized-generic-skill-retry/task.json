@@ -1,0 +1,29 @@
+{
+  "id": "localized-generic-skill-retry",
+  "name": "localized-generic-skill-retry",
+  "title": "Stop localized generic Skills from retrying",
+  "description": "Fix GitHub issue #36 so localized generic Skill mentions resolve without entering an endless failed-only retry loop.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-27-fix-automated-classification-qa-defects",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 36,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/36"
+  }
+}

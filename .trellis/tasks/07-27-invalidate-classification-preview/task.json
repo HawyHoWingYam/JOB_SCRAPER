@@ -1,0 +1,29 @@
+{
+  "id": "invalidate-classification-preview",
+  "name": "invalidate-classification-preview",
+  "title": "Invalidate classification preview after scope changes",
+  "description": "Fix GitHub issue #37 so changing Source or limit after Preview invalidates confirmation and disables Start until a fresh preview.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-27-fix-automated-classification-qa-defects",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 37,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/37"
+  }
+}

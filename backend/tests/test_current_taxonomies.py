@@ -606,6 +606,56 @@ def test_current_skill_enrichment_matches_existing_and_accumulates_candidates():
         engine.dispose()
 
 
+def test_current_skill_enrichment_resolves_localized_generic_aliases_before_candidates():
+    engine = create_engine("sqlite:///:memory:")
+    for table in (
+        CurrentTaxonomyNodeRecord.__table__,
+        CurrentTaxonomyAliasRecord.__table__,
+        CurrentJobSkillAssignment.__table__,
+        CurrentSkillCandidate.__table__,
+        CurrentJobSkillMention.__table__,
+    ):
+        table.create(engine)
+    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    job_id = uuid4()
+    extracted = tuple(
+        {"name": raw_name, "kind": "technical"}
+        for raw_name in ("項目管理", "銷售", "客戶服務")
+    )
+    try:
+        enrichment = CurrentTaxonomyEnrichment(db)
+
+        for _ in range(2):
+            enrichment.replace_job_skills(
+                job_id=job_id,
+                extracted_skills=extracted,
+                confidence=0.9,
+                provenance={"model": "test"},
+            )
+
+        mentions = tuple(
+            db.scalars(
+                select(CurrentJobSkillMention).where(
+                    CurrentJobSkillMention.job_id == job_id,
+                    CurrentJobSkillMention.status == "active",
+                )
+            )
+        )
+        assert {mention.raw_name: mention.generic_tag for mention in mentions} == {
+            "項目管理": "Project Management",
+            "銷售": "Sales",
+            "客戶服務": "Customer Service",
+        }
+        assert {mention.resolution for mention in mentions} == {"generic_tag"}
+        assert {mention.candidate_id for mention in mentions} == {None}
+        assert db.scalar(select(func.count()).select_from(CurrentSkillCandidate)) == 0
+        assert db.scalar(select(func.count()).select_from(CurrentJobSkillAssignment)) == 0
+    finally:
+        db.rollback()
+        db.close()
+        engine.dispose()
+
+
 def test_current_company_projection_assigns_mapped_evidence_without_review_queue():
     engine = create_engine("sqlite:///:memory:")
     for table in (

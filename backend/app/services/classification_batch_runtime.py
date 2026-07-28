@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, runtime_checkable
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -48,6 +48,18 @@ class ClassificationBatchPreview:
     domain: str
     selected_item_count: int
     items: tuple[ClassificationCandidate, ...]
+    mapped_item_count: int | None = None
+    unmapped_item_count: int | None = None
+    excluded_item_count: int | None = None
+
+
+@dataclass(frozen=True)
+class ClassificationCandidateSelection:
+    selected_item_count: int
+    candidates: tuple[ClassificationCandidate, ...]
+    mapped_item_count: int | None = None
+    unmapped_item_count: int | None = None
+    excluded_item_count: int | None = None
 
 
 class ClassificationDomainAdapter(Protocol):
@@ -59,13 +71,22 @@ class ClassificationDomainAdapter(Protocol):
         *,
         filters: dict[str, object],
         limit: int,
-    ) -> tuple[ClassificationCandidate, ...]: ...
+    ) -> tuple[ClassificationCandidate, ...] | ClassificationCandidateSelection: ...
 
     async def process_candidate(
         self,
         db: Session,
         candidate: ClassificationCandidate,
     ) -> None: ...
+
+
+@runtime_checkable
+class ClassificationRetryFilter(Protocol):
+    def filter_retry_candidates(
+        self,
+        db: Session,
+        candidates: tuple[ClassificationCandidate, ...],
+    ) -> tuple[ClassificationCandidate, ...]: ...
 
 
 class ClassificationBatchRuntime:
@@ -88,20 +109,44 @@ class ClassificationBatchRuntime:
     ) -> ClassificationBatchPreview:
         adapter = self._adapter(domain)
         safe_limit = self._validate_limit(limit)
-        candidates = adapter.select_candidates(
+        raw_selection = adapter.select_candidates(
             self.db,
             filters=dict(filters),
             limit=safe_limit,
         )
-        if len(candidates) > safe_limit:
+        selection = (
+            raw_selection
+            if isinstance(raw_selection, ClassificationCandidateSelection)
+            else ClassificationCandidateSelection(
+                selected_item_count=len(raw_selection),
+                candidates=tuple(raw_selection),
+            )
+        )
+        candidates = selection.candidates
+        if selection.selected_item_count > safe_limit or len(candidates) > safe_limit:
             raise ClassificationBatchError("Domain adapter exceeded the requested limit")
+        if selection.selected_item_count < len(candidates):
+            raise ClassificationBatchError("Domain adapter returned invalid readiness counts")
+        readiness_counts = (
+            selection.mapped_item_count,
+            selection.unmapped_item_count,
+            selection.excluded_item_count,
+        )
+        if any(value is not None for value in readiness_counts):
+            if any(value is None or value < 0 for value in readiness_counts) or sum(
+                int(value) for value in readiness_counts if value is not None
+            ) != selection.selected_item_count:
+                raise ClassificationBatchError("Domain adapter returned invalid readiness counts")
         subject_ids = [candidate.subject_id for candidate in candidates]
         if any(not value for value in subject_ids) or len(set(subject_ids)) != len(subject_ids):
             raise ClassificationBatchError("Domain adapter returned invalid candidate identities")
         return ClassificationBatchPreview(
             domain=domain,
-            selected_item_count=len(candidates),
+            selected_item_count=selection.selected_item_count,
             items=tuple(candidates),
+            mapped_item_count=selection.mapped_item_count,
+            unmapped_item_count=selection.unmapped_item_count,
+            excluded_item_count=selection.excluded_item_count,
         )
 
     def start(
@@ -113,6 +158,10 @@ class ClassificationBatchRuntime:
     ) -> ClassificationBatchRun:
         preview = self.preview(domain, filters=filters, limit=limit)
         self._require_no_active_run(domain)
+        if domain == "company_industry" and not preview.mapped_item_count:
+            raise ClassificationBatchError(
+                "Selected Companies have no usable mapped evidence from Source Industry Labels"
+            )
         run = self._create_run(
             domain=domain,
             filters=filters,
@@ -192,6 +241,13 @@ class ClassificationBatchRuntime:
             )
             for item in failed_items
         )
+        adapter = self._adapter(source_run.domain)
+        if isinstance(adapter, ClassificationRetryFilter):
+            candidates = adapter.filter_retry_candidates(self.db, candidates)
+        if not candidates:
+            raise ClassificationBatchError(
+                "The batch has no failed items that remain retryable"
+            )
         run = self._create_run(
             domain=source_run.domain,
             filters=dict(source_run.filters or {}),
@@ -407,7 +463,9 @@ __all__ = [
     "ClassificationBatchPreview",
     "ClassificationBatchRuntime",
     "ClassificationCandidate",
+    "ClassificationCandidateSelection",
     "ClassificationDomainAdapter",
+    "ClassificationRetryFilter",
     "SUPPORTED_DOMAINS",
     "TERMINAL_STATUSES",
 ]

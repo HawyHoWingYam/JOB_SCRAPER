@@ -38,6 +38,11 @@
     "pci dss": "PCI DSS",
     "pci-dss": "PCI DSS"
   },
+  "generic_aliases": {
+    "項目管理": "Project Management",
+    "銷售": "Sales",
+    "客戶服務": "Customer Service"
+  },
   "generic_terms": [
     "Project Management",
     "Business Analysis",
