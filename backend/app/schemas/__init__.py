@@ -19,11 +19,12 @@ from app.schemas.job_search import (
     JobSearchErrorSchema,
 )
 from app.schemas.stats import (
-    DashboardCategoryStatsSchema,
     DashboardCategoryItemSchema,
-    DashboardCategorySourceBreakdownSchema,
-    DashboardFallbackBucketSchema,
-    DashboardOtherSpecificCategoriesSchema,
+    DashboardCategoryStatsSchema,
+    DashboardOtherCategoriesSchema,
+    DashboardSkillCandidateBacklogSchema,
+    DashboardSkillItemSchema,
+    DashboardSkillStatsSchema,
 )
 from app.schemas.job_intelligence import (
     GovernanceAuditEventSchema,
@@ -49,9 +50,10 @@ __all__ = [
     "JobSearchErrorSchema",
     "DashboardCategoryStatsSchema",
     "DashboardCategoryItemSchema",
-    "DashboardCategorySourceBreakdownSchema",
-    "DashboardFallbackBucketSchema",
-    "DashboardOtherSpecificCategoriesSchema",
+    "DashboardOtherCategoriesSchema",
+    "DashboardSkillCandidateBacklogSchema",
+    "DashboardSkillItemSchema",
+    "DashboardSkillStatsSchema",
     "GovernanceAuditEventSchema",
     "GovernanceAuditPageSchema",
 ]
