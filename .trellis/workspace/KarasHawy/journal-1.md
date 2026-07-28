@@ -1793,3 +1793,38 @@ Implemented atomic Manual Job intake/editing with flexible Companies, origin-awa
 ### Next Steps
 
 - None - task complete
+
+
+## Session 52: Dashboard Classification actions
+
+**Date**: 2026-07-28
+**Task**: Dashboard Classification actions
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Aligned Dashboard and Job Taxonomy Classification readiness on one accepted-assignment/source-projection query, added durable Job Taxonomy and Skill Classification routes and zero-safe Dashboard actions, verified frontend/backend contracts and browser navigation, synchronized specs, archived the child task, and updated GitHub issue #42 as awaiting manual QA.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e060a7ab` | (see git log) |
+| `cc681a22` | (see git log) |
+| `edfe0044` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

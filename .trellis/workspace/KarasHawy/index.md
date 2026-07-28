@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 51
+- **Total Sessions**: 52
 - **Last Active**: 2026-07-28
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1795 | Active |
+| `journal-1.md` | ~1830 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 52 | 2026-07-28 | Dashboard Classification actions | `e060a7ab`, `cc681a22`, `edfe0044` | `codex/offertoday-it-coverage-20260702` |
 | 51 | 2026-07-28 | Manual Job and Company AI enrichment batches | `101ce999`, `4d981263` | `codex/offertoday-it-coverage-20260702` |
 | 50 | 2026-07-27 | OfferToday classification keyword sweeps | `5a0f3089` | `codex/offertoday-it-coverage-20260702` |
 | 49 | 2026-07-27 | Prevent non-executable Source classification synchronization | `7e63f851` | `codex/offertoday-it-coverage-20260702` |
