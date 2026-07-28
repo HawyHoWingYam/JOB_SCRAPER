@@ -172,11 +172,36 @@ class JobSearchRequestSchema(BaseModel):
     retrieval_mode: Literal["lexical", "semantic", "hybrid"] = "lexical"
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
+    include_facets: bool = True
 
 
 class JobSearchLayerSummarySchema(BaseModel):
     client_id: str
     label: str
+
+
+class JobSearchFacetOptionSchema(BaseModel):
+    id: str
+    label: str
+    count: int = Field(ge=0)
+    order: int = 0
+    parent_id: Optional[str] = None
+    level: Optional[str] = None
+    source: Optional[str] = None
+    path: Optional[str] = None
+    is_selectable: bool = True
+
+
+class JobSearchFacetsSchema(BaseModel):
+    sources: List[JobSearchFacetOptionSchema] = Field(default_factory=list)
+    employment_types: List[JobSearchFacetOptionSchema] = Field(default_factory=list)
+    source_classifications: List[JobSearchFacetOptionSchema] = Field(
+        default_factory=list
+    )
+    canonical_job_taxonomy: List[JobSearchFacetOptionSchema] = Field(
+        default_factory=list
+    )
+    company_industries: List[JobSearchFacetOptionSchema] = Field(default_factory=list)
 
 
 class JobSearchErrorSchema(BaseModel):
@@ -218,3 +243,4 @@ class JobSearchResponse(BaseModel):
     total_pages: int
     applied_scope: Optional[JobSearchScopeSchema] = None
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None
+    facets: Optional[JobSearchFacetsSchema] = None

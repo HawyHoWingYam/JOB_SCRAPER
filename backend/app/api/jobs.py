@@ -37,6 +37,7 @@ from app.schemas import (
     JobDetailSchema,
 )
 from app.services.job_detail_read_service import compose_current_job_detail
+from app.services.job_search_facets import JobSearchFacets
 from app.services.manual_job_intake import (
     ManualJobIntake,
     ManualJobIntakeError,
@@ -52,6 +53,7 @@ from app.schemas.job_search import (
     LocationHierarchyItem,
     SourceClassificationOption,
     SourceSiteFilter,
+    JobSearchFacetsSchema,
     JobSearchResponse,
     JobWithCompanySchema,
 )
@@ -560,6 +562,8 @@ def _build_search_response(
     applied_scope: Optional[JobSearchScopeSchema] = None,
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None,
     preserve_query_order: bool = False,
+    include_facets: bool = False,
+    facet_scope: Optional[JobSearchScopeSchema] = None,
 ):
     offset = (page - 1) * page_size
     total = query.order_by(None).count()
@@ -569,6 +573,11 @@ def _build_search_response(
             func.coalesce(Job.posted_date, Job.created_at).desc()
         )
     results = results_query.offset(offset).limit(page_size).all()
+    facets = (
+        JobSearchFacets(query.session).build(facet_scope or applied_scope)
+        if include_facets and (facet_scope is not None or applied_scope is not None)
+        else None
+    )
     return _build_search_response_from_results(
         results,
         total=total,
@@ -576,6 +585,7 @@ def _build_search_response(
         page_size=page_size,
         applied_scope=applied_scope,
         layer_summaries=layer_summaries,
+        facets=facets,
         db=query.session,
     )
 
@@ -588,6 +598,7 @@ def _build_search_response_from_results(
     page_size: int,
     applied_scope: Optional[JobSearchScopeSchema] = None,
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None,
+    facets: Optional[JobSearchFacetsSchema] = None,
     db: Session | None = None,
 ):
     product_payloads: dict[UUID, dict[str, object]] = {}
@@ -628,6 +639,7 @@ def _build_search_response_from_results(
         total_pages=total_pages,
         applied_scope=applied_scope,
         layer_summaries=layer_summaries,
+        facets=facets,
     )
 
 

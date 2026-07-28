@@ -40,6 +40,7 @@ class RetrievalService:
         from app.api import jobs as jobs_api
 
         retrieval_mode = getattr(request, "retrieval_mode", "lexical")
+        include_facets = getattr(request, "include_facets", True)
         if retrieval_mode == "lexical":
             query = build_lexical_query(self.db, request.scope)
             return jobs_api._build_search_response(
@@ -48,6 +49,7 @@ class RetrievalService:
                 page_size=request.page_size,
                 applied_scope=request.scope,
                 layer_summaries=layer_summaries,
+                include_facets=include_facets,
             )
 
         query_text = extract_semantic_query_text(request.scope)
@@ -59,6 +61,7 @@ class RetrievalService:
                 page_size=request.page_size,
                 applied_scope=request.scope,
                 layer_summaries=layer_summaries,
+                include_facets=include_facets,
             )
 
         candidate_scope = build_semantic_candidate_scope(request.scope)
@@ -77,9 +80,13 @@ class RetrievalService:
                 applied_scope=request.scope,
                 layer_summaries=layer_summaries,
                 preserve_query_order=True,
+                include_facets=include_facets,
+                facet_scope=candidate_scope,
             )
 
         if retrieval_mode == "hybrid":
+            from app.services.job_search_facets import JobSearchFacets
+
             candidate_query = build_lexical_query(self.db, candidate_scope)
             rows = fetch_embedding_rows(candidate_query)
             ranked_rows = rank_hybrid_rows(
@@ -96,6 +103,11 @@ class RetrievalService:
                 page_size=request.page_size,
                 applied_scope=request.scope,
                 layer_summaries=layer_summaries,
+                facets=(
+                    JobSearchFacets(self.db).build(candidate_scope)
+                    if include_facets
+                    else None
+                ),
                 db=self.db,
             )
 
