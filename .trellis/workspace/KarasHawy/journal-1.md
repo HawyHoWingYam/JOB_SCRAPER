@@ -1759,3 +1759,37 @@ Implemented OfferToday-only A-Z and 0-9 keyword listing targets for one classifi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 51: Manual Job and Company AI enrichment batches
+
+**Date**: 2026-07-28
+**Task**: Manual Job and Company AI enrichment batches
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Implemented atomic Manual Job intake/editing with flexible Companies, origin-aware batch Job enrichment, quantity-driven Company Generate/Regenerate runs, retained-data cutover updates, frontend workflows, tests, and executable specs.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `101ce999` | (see git log) |
+| `4d981263` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
