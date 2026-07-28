@@ -1,0 +1,35 @@
+{
+  "id": "excluded-jobs-governance-handoff",
+  "name": "excluded-jobs-governance-handoff",
+  "title": "Remove application version systems and simplify classification",
+  "description": "Replace application-owned catalog, taxonomy, automation, API/event, embedding, projection, and migration version systems with ordinary current-state data and atomic sandbox operations while preserving accepted business data.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": "fullstack data-model cutover",
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-26",
+  "completedAt": "2026-07-27",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-26-ordinary-source-classifications",
+    "07-26-ordinary-current-taxonomies",
+    "07-26-unversioned-runtime-protocols",
+    "07-26-automated-classification-batches",
+    "07-26-unversioned-sandbox-cutover"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 26,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/26"
+  }
+}
