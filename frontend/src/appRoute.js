@@ -10,6 +10,26 @@ export const VALID_APP_VIEWS = new Set([
   'crawl-tasks',
 ]);
 
+const JOB_ROUTE_FILTER_KEYS = {
+  canonicalSubcategoryIds: 'canonical_subcategory_ids',
+  skillIds: 'skill_ids',
+};
+const MAX_JOB_ROUTE_IDS = 20;
+const STABLE_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
+
+function normalizeStableCodes(values) {
+  const normalized = [];
+  for (const rawValue of values || []) {
+    const value = String(rawValue || '').trim();
+    if (!STABLE_CODE_PATTERN.test(value) || normalized.includes(value)) {
+      continue;
+    }
+    normalized.push(value);
+    if (normalized.length === MAX_JOB_ROUTE_IDS) break;
+  }
+  return normalized;
+}
+
 export function resolveAppView(hash = window.location.hash) {
   const normalized = String(hash || '')
     .replace(/^#/, '')
@@ -21,4 +41,37 @@ export function resolveAppView(hash = window.location.hash) {
 
 export function hashForView(view) {
   return `#${VALID_APP_VIEWS.has(view) ? view : 'dashboard'}`;
+}
+
+export function parseJobsRoute(hash = window.location.hash) {
+  const rawHash = String(hash || '').replace(/^#/, '');
+  const [rawView, rawQuery = ''] = rawHash.split('?', 2);
+  if (rawView.trim().toLowerCase() !== 'jobs') {
+    return { canonicalSubcategoryIds: [], skillIds: [] };
+  }
+
+  const searchParams = new URLSearchParams(rawQuery);
+  return {
+    canonicalSubcategoryIds: normalizeStableCodes(
+      searchParams.getAll(JOB_ROUTE_FILTER_KEYS.canonicalSubcategoryIds),
+    ),
+    skillIds: normalizeStableCodes(
+      searchParams.getAll(JOB_ROUTE_FILTER_KEYS.skillIds),
+    ),
+  };
+}
+
+export function hashForJobsRoute({
+  canonicalSubcategoryIds = [],
+  skillIds = [],
+} = {}) {
+  const searchParams = new URLSearchParams();
+  for (const code of normalizeStableCodes(canonicalSubcategoryIds)) {
+    searchParams.append(JOB_ROUTE_FILTER_KEYS.canonicalSubcategoryIds, code);
+  }
+  for (const code of normalizeStableCodes(skillIds)) {
+    searchParams.append(JOB_ROUTE_FILTER_KEYS.skillIds, code);
+  }
+  const query = searchParams.toString();
+  return query ? `#jobs?${query}` : '#jobs';
 }

@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
-import { hashForView, resolveAppView } from './appRoute';
+import { hashForJobsRoute, hashForView, resolveAppView } from './appRoute';
 import { parseControlRoute } from './features/taskControl/shared/controlRoute';
 import './App.css';
 
@@ -31,6 +31,13 @@ function App() {
   const settingsSection = 'ai-runtime';
   const navigateToAI = () => setActiveView('ai');
   const navigateToCrawlTasks = () => setActiveView('crawl-tasks');
+  const navigateToJobs = (filters) => {
+    if (typeof window === 'undefined') {
+      setActiveView('jobs');
+      return;
+    }
+    window.location.hash = hashForJobsRoute(filters);
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -66,8 +73,13 @@ function App() {
       <main className="app-main">
         <div className="app-content-wrapper">
           <Suspense fallback={<div className="app-view-loading">Loading view...</div>}>
-            {activeView === 'dashboard' && <Dashboard onNavigateToAI={navigateToAI} />}
-            {activeView === 'jobs' && <JobBrowser />}
+            {activeView === 'dashboard' && (
+              <Dashboard
+                onNavigateToAI={navigateToAI}
+                onNavigateToJobs={navigateToJobs}
+              />
+            )}
+            {activeView === 'jobs' && <JobBrowser routeHash={locationHash} />}
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}

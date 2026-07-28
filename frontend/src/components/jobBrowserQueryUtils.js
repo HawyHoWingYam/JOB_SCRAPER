@@ -8,6 +8,7 @@ const EMPTY_QUERY = {
   canonical_subcategory_ids: [],
   canonical_category_ids: [],
   canonical_domain_ids: [],
+  skill_ids: [],
   industry: '',
   company_industry_node_ids: [],
   posted_date_from: '',
@@ -102,6 +103,7 @@ export function normalizeQueryForSubmit(query) {
     ),
     canonical_category_ids: normalizeIdArray(query?.canonical_category_ids),
     canonical_domain_ids: normalizeIdArray(query?.canonical_domain_ids),
+    skill_ids: normalizeIdArray(query?.skill_ids),
     industry: normalizeValue(query?.industry),
     company_industry_node_ids: normalizeIdArray(
       query?.company_industry_node_ids,
@@ -162,6 +164,9 @@ export function countPendingQueryChanges(appliedQuery, draftQuery) {
     JSON.stringify(applied.canonical_domain_ids) !==
       JSON.stringify(draft.canonical_domain_ids)
   ) {
+    count += 1;
+  }
+  if (JSON.stringify(applied.skill_ids) !== JSON.stringify(draft.skill_ids)) {
     count += 1;
   }
   if (applied.industry !== draft.industry) {

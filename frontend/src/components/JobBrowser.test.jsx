@@ -97,6 +97,7 @@ function currentCompanyIndustryTree() {
 
 describe('JobBrowser governed filters', () => {
   beforeEach(() => {
+    window.location.hash = '#jobs';
     api.apiFetchJson.mockReset();
     api.fetchCapabilities.mockReset();
     api.fetchCapabilities.mockResolvedValue({
@@ -258,6 +259,49 @@ describe('JobBrowser governed filters', () => {
         employment_type: '',
         industry: '',
         subcategory_ids: [],
+      }),
+    );
+  });
+
+  it('hydrates exact canonical route filters and responds to in-place route changes', async () => {
+    globalThis.fetch = vi.fn((_url, options) => {
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          ...productFixture.job_search,
+          applied_scope: request.scope,
+          layer_summaries: request.scope.layers.map((layer) => ({
+            client_id: layer.client_id,
+            label: 'Structured filters only',
+          })),
+        }),
+      });
+    });
+
+    const { rerender } = render(
+      <JobBrowser routeHash="#jobs?skill_ids=python" />,
+    );
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    let request = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(request.scope.layers[0].structured_filters).toEqual(
+      expect.objectContaining({
+        skill_ids: ['python'],
+        canonical_subcategory_ids: [],
+      }),
+    );
+
+    rerender(
+      <JobBrowser routeHash="#jobs?canonical_subcategory_ids=job.backend" />,
+    );
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    request = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    expect(request.scope.layers[0].structured_filters).toEqual(
+      expect.objectContaining({
+        skill_ids: [],
+        canonical_subcategory_ids: ['job.backend'],
       }),
     );
   });

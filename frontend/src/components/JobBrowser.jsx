@@ -13,6 +13,7 @@ import {
     fetchCompanyIndustryTree,
 } from '../api/jobIntelligence';
 import { createMonitoringId, logError } from '../monitoring';
+import { hashForJobsRoute, parseJobsRoute } from '../appRoute';
 import {
     createEmptyJobBrowserLayer,
     createEmptyJobBrowserScope,
@@ -127,9 +128,52 @@ function formatPendingChangesLabel(count) {
     return `${count} pending change${count === 1 ? '' : 's'} armed`;
 }
 
-function JobBrowser() {
+function createScopeFromRouteHash(routeHash) {
+    const route = parseJobsRoute(routeHash);
+    if (
+        route.canonicalSubcategoryIds.length === 0
+        && route.skillIds.length === 0
+    ) {
+        return createEmptyJobBrowserScope();
+    }
+
+    const layer = createEmptyJobBrowserLayer('root');
+    layer.structured_filters = {
+        ...layer.structured_filters,
+        canonical_subcategory_ids: route.canonicalSubcategoryIds,
+        skill_ids: route.skillIds,
+    };
+    return replaceScopeWithLayer(createEmptyJobBrowserScope(), layer);
+}
+
+function routeFiltersFromScope(scope) {
+    if (!scope?.layers?.length) {
+        return { canonicalSubcategoryIds: [], skillIds: [] };
+    }
+    if (scope.layers.length !== 1) return null;
+
+    const layer = normalizeLayerForSubmit(scope.layers[0]);
+    if (layer.text_expression) return null;
+
+    const supportedKeys = new Set(['canonical_subcategory_ids', 'skill_ids']);
+    const hasUnsupportedFilter = Object.entries(layer.structured_filters).some(
+        ([key, value]) => !supportedKeys.has(key) && hasQueryValue(value),
+    );
+    if (hasUnsupportedFilter) return null;
+
+    return {
+        canonicalSubcategoryIds:
+            layer.structured_filters.canonical_subcategory_ids || [],
+        skillIds: layer.structured_filters.skill_ids || [],
+    };
+}
+
+function JobBrowser({
+    routeHash = typeof window === 'undefined' ? '#jobs' : window.location.hash,
+}) {
     const searchRequestSequenceRef = useRef(0);
     const searchAbortControllerRef = useRef(null);
+    const lastWrittenRouteHashRef = useRef(null);
     const [jobs, setJobs] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState(null);
@@ -166,6 +210,15 @@ function JobBrowser() {
     const dateValidationError = getDateValidationError(draftLayer.structured_filters);
     const semanticAvailable = capabilities?.search?.semantic?.available !== false;
     const hybridAvailable = capabilities?.search?.hybrid?.available !== false;
+
+    const syncRouteToScope = (scope) => {
+        if (typeof window === 'undefined') return;
+        const routeFilters = routeFiltersFromScope(scope);
+        const nextHash = routeFilters ? hashForJobsRoute(routeFilters) : '#jobs';
+        if (window.location.hash === nextHash) return;
+        lastWrittenRouteHashRef.current = nextHash;
+        window.location.hash = nextHash;
+    };
 
     const fetchJobs = async ({
         scope,
@@ -322,11 +375,6 @@ function JobBrowser() {
         };
 
         fetchFilterOptions();
-        fetchJobs({
-            scope: createEmptyJobBrowserScope(),
-            page: 1,
-            pageSize: pagination.pageSize,
-        });
         return () => {
             searchRequestSequenceRef.current += 1;
             searchAbortControllerRef.current?.abort();
@@ -334,6 +382,27 @@ function JobBrowser() {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    useEffect(() => {
+        const normalizedRouteHash = String(routeHash || '#jobs');
+        if (lastWrittenRouteHashRef.current === normalizedRouteHash) {
+            lastWrittenRouteHashRef.current = null;
+            return;
+        }
+
+        const scope = createScopeFromRouteHash(normalizedRouteHash);
+        setSelectedJobId(null);
+        setDraftLayer(createEmptyJobBrowserLayer());
+        fetchJobs({
+            scope,
+            page: 1,
+            pageSize: pagination.pageSize,
+            commitScope: true,
+            clearDraft: true,
+        });
+        // fetchJobs intentionally follows the route boundary, not render identity.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [routeHash]);
 
     useEffect(() => {
         let cancelled = false;
@@ -408,13 +477,14 @@ function JobBrowser() {
                 client_id: 'root',
             });
 
-        await fetchJobs({
+        const succeeded = await fetchJobs({
             scope,
             page: 1,
             pageSize: pagination.pageSize,
             commitScope: true,
             clearDraft: true,
         });
+        if (succeeded) syncRouteToScope(scope);
     };
 
     const handleSearchWithinResults = async () => {
@@ -427,13 +497,14 @@ function JobBrowser() {
             client_id: `refine-${activeScope.layers.length}`,
         });
 
-        await fetchJobs({
+        const succeeded = await fetchJobs({
             scope,
             page: 1,
             pageSize: pagination.pageSize,
             commitScope: true,
             clearDraft: true,
         });
+        if (succeeded) syncRouteToScope(scope);
     };
 
     const handleSubmit = () => {
@@ -454,12 +525,13 @@ function JobBrowser() {
 
     const handleRemoveLayer = async (clientId) => {
         const nextScope = removeLayerFromScope(activeScope, clientId);
-        await fetchJobs({
+        const succeeded = await fetchJobs({
             scope: nextScope,
             page: 1,
             pageSize: pagination.pageSize,
             commitScope: true,
         });
+        if (succeeded) syncRouteToScope(nextScope);
     };
 
     const handleExport = async () => {
