@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 53
-- **Last Active**: 2026-07-28
+- **Total Sessions**: 54
+- **Last Active**: 2026-07-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1865 | Active |
+| `journal-1.md` | ~1901 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 54 | 2026-07-29 | Remove canonical job taxonomy | `0a88ab68`, `e5697cb2`, `1e0afa04`, `19c74554` | `codex/offertoday-it-coverage-20260702` |
 | 53 | 2026-07-28 | Improve Job Browser filters and layered search | `ecdb7e3c`, `7d13a75e`, `ed39ae09` | `codex/offertoday-it-coverage-20260702` |
 | 52 | 2026-07-28 | Dashboard Classification actions | `e060a7ab`, `cc681a22`, `edfe0044` | `codex/offertoday-it-coverage-20260702` |
 | 51 | 2026-07-28 | Manual Job and Company AI enrichment batches | `101ce999`, `4d981263` | `codex/offertoday-it-coverage-20260702` |

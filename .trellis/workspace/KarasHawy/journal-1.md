@@ -1863,3 +1863,39 @@ Added atomic contextual search facets, parent-first selector cards, editable lay
 ### Next Steps
 
 - None - task complete
+
+
+## Session 54: Remove canonical job taxonomy
+
+**Date**: 2026-07-29
+**Task**: Remove canonical job taxonomy
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Removed the cross-source Canonical Job Taxonomy end to end while preserving Source Classification Paths, Company Industry, Governed Skills, and Skill Candidate Evidence; safely cut over retained data, rebuilt all Job embeddings, updated Related Jobs scoring, and recorded the narrowed product and operational contracts.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0a88ab68` | (see git log) |
+| `e5697cb2` | (see git log) |
+| `1e0afa04` | (see git log) |
+| `19c74554` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
