@@ -255,7 +255,11 @@ describe('CompaniesPage', () => {
     render(<CompaniesPage />);
 
     const runSize = await screen.findByLabelText(/run size/i);
+    expect(runSize).toHaveValue(50);
     expect(runSize).not.toHaveAttribute('max');
+    expect(runSize).toHaveAccessibleDescription(
+      /50 is a safe default, not a maximum.*eligible companies/i,
+    );
     await user.clear(runSize);
     await user.type(runSize, '100000');
     await user.click(screen.getByRole('button', { name: /generate missing descriptions/i }));

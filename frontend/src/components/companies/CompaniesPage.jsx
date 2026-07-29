@@ -288,14 +288,20 @@ function CompaniesPage() {
               <span>Run size</span>
               <input
                 id="company-enrichment-limit"
+                className="companies-run-size-input"
                 type="number"
                 min="1"
                 step="1"
                 value={requestedLimit}
                 onChange={(event) => setRequestedLimit(event.target.value)}
                 disabled={isLoading || isCreatingRun || hasActiveRun}
+                aria-describedby="company-enrichment-limit-help"
               />
             </label>
+            <p id="company-enrichment-limit-help" className="companies-run-size-help">
+              50 is a safe default, not a maximum. The run processes up to the
+              currently eligible Companies.
+            </p>
             <label className="companies-web-search-option">
               <input
                 type="checkbox"
