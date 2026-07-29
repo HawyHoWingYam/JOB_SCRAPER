@@ -15,7 +15,6 @@ from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
 from app.models import Company, Job
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
-    CurrentJobTaxonomyAssignment,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.source_job_attributes import EmploymentType, JobEmploymentType
@@ -53,7 +52,6 @@ def _facet_session():
             JobSourceClassificationPathNode.__table__,
             JobEmploymentType.__table__,
             CurrentTaxonomyNodeRecord.__table__,
-            CurrentJobTaxonomyAssignment.__table__,
             CurrentCompanyIndustryAssignment.__table__,
         ],
     )
@@ -311,141 +309,6 @@ def test_source_classification_facet_uses_retained_paths_and_distinct_job_counts
         assert options["jobsdb:6287"].path == (
             "Information Technology / Developers and Programmers"
         )
-    finally:
-        db.close()
-        engine.dispose()
-
-
-def test_job_taxonomy_facet_keeps_full_tree_and_aggregates_descendant_jobs():
-    db, engine = _facet_session()
-    try:
-        company = Company(
-            company_id="facet-taxonomy-company",
-            source_site="jobsdb",
-            source_company_id="facet-taxonomy-company",
-            name="Taxonomy Company",
-        )
-        backend_job = Job(
-            job_id="facet-taxonomy-backend",
-            source_site="jobsdb",
-            source_job_id="facet-taxonomy-backend",
-            company=company,
-            title="Backend Engineer",
-        )
-        frontend_job = Job(
-            job_id="facet-taxonomy-frontend",
-            source_site="jobsdb",
-            source_job_id="facet-taxonomy-frontend",
-            company=company,
-            title="Frontend Engineer",
-        )
-        db.add_all([backend_job, frontend_job])
-        db.flush()
-        domain_code = "technology"
-        category_code = "technology.software-development"
-        backend_code = f"{category_code}.backend-development"
-        frontend_code = f"{category_code}.frontend-development"
-        db.add_all(
-            [
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="job",
-                    code=domain_code,
-                    parent_code=None,
-                    level="domain",
-                    labels={"en": "Technology"},
-                    sort_order=1,
-                    is_assignable=False,
-                    is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="job",
-                    code=category_code,
-                    parent_code=domain_code,
-                    level="category",
-                    labels={"en": "Software Development"},
-                    sort_order=1,
-                    is_assignable=False,
-                    is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="job",
-                    code=backend_code,
-                    parent_code=category_code,
-                    level="subcategory",
-                    labels={"en": "Backend Development"},
-                    sort_order=1,
-                    is_assignable=True,
-                    is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="job",
-                    code=frontend_code,
-                    parent_code=category_code,
-                    level="subcategory",
-                    labels={"en": "Frontend Development"},
-                    sort_order=2,
-                    is_assignable=True,
-                    is_active=True,
-                ),
-            ]
-        )
-        db.flush()
-        db.add_all(
-            [
-                CurrentJobTaxonomyAssignment(
-                    job_id=backend_job.id,
-                    taxonomy="job",
-                    taxonomy_code=backend_code,
-                    method="fixture",
-                    evidence_hash="1" * 64,
-                    source_evidence_refs=[],
-                    mapping_ids=[],
-                    model_provenance=None,
-                    breadcrumb={},
-                ),
-                CurrentJobTaxonomyAssignment(
-                    job_id=frontend_job.id,
-                    taxonomy="job",
-                    taxonomy_code=frontend_code,
-                    method="fixture",
-                    evidence_hash="2" * 64,
-                    source_evidence_refs=[],
-                    mapping_ids=[],
-                    model_provenance=None,
-                    breadcrumb={},
-                ),
-            ]
-        )
-        db.commit()
-
-        scope = JobSearchScopeSchema(
-            layers=[
-                JobSearchLayerSchema(
-                    client_id="root",
-                    structured_filters=JobSearchFiltersSchema(
-                        canonical_subcategory_ids=[backend_code],
-                    ),
-                )
-            ]
-        )
-
-        options = {
-            option.id: option
-            for option in JobSearchFacets(db).build(scope).canonical_job_taxonomy
-        }
-
-        assert list(options) == [
-            domain_code,
-            category_code,
-            backend_code,
-            frontend_code,
-        ]
-        assert options[domain_code].count == 2
-        assert options[category_code].count == 2
-        assert options[backend_code].count == 1
-        assert options[frontend_code].count == 1
-        assert options[category_code].parent_id == domain_code
-        assert options[frontend_code].level == "subcategory"
     finally:
         db.close()
         engine.dispose()

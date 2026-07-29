@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from app.models import Job
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
-    CurrentJobTaxonomyAssignment,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.source_job_attributes import (
@@ -25,16 +24,6 @@ from app.search.lexical_query import build_lexical_query
 
 _SOURCE_FIELDS = frozenset({"source_site"})
 _SOURCE_CLASSIFICATION_FIELDS = frozenset({"source_classification_ids"})
-_JOB_TAXONOMY_FIELDS = frozenset(
-    {
-        "canonical_domain_ids",
-        "canonical_category_ids",
-        "canonical_subcategory_ids",
-        "domain_ids",
-        "job_category_ids",
-        "subcategory_ids",
-    }
-)
 _COMPANY_INDUSTRY_FIELDS = frozenset(
     {
         "company_industry_node_ids",
@@ -78,7 +67,6 @@ class JobSearchFacets:
             sources=self._source_options(scope),
             employment_types=self._employment_type_options(scope),
             source_classifications=self._source_classification_options(scope),
-            canonical_job_taxonomy=self._job_taxonomy_options(scope),
             company_industries=self._company_industry_options(scope),
         )
 
@@ -237,35 +225,6 @@ class JobSearchFacets:
                 )
             parent_id = classification_id
         return options
-
-    def _job_taxonomy_options(
-        self,
-        scope: JobSearchScopeSchema,
-    ) -> list[JobSearchFacetOptionSchema]:
-        candidate_jobs = self._candidate_job_ids(
-            scope,
-            without_fields=_JOB_TAXONOMY_FIELDS,
-        )
-        assignment_rows = (
-            self.db.query(
-                candidate_jobs.c.job_id,
-                CurrentJobTaxonomyAssignment.taxonomy_code,
-            )
-            .join(
-                CurrentJobTaxonomyAssignment,
-                CurrentJobTaxonomyAssignment.job_id == candidate_jobs.c.job_id,
-            )
-            .all()
-        )
-        nodes = (
-            self.db.query(CurrentTaxonomyNodeRecord)
-            .filter(
-                CurrentTaxonomyNodeRecord.taxonomy == "job",
-                CurrentTaxonomyNodeRecord.is_active.is_(True),
-            )
-            .all()
-        )
-        return self._hierarchy_options(nodes, assignment_rows)
 
     def _company_industry_options(
         self,

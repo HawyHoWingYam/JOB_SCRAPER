@@ -3,8 +3,6 @@ import {
   fetchCurrentCompanyIndustryState,
   fetchCurrentCompanyIndustryTree,
   fetchCurrentJobSkills,
-  fetchCurrentJobTaxonomyState,
-  fetchCurrentJobTaxonomyTree,
   fetchCurrentSkillTree,
 } from './currentTaxonomies';
 
@@ -22,8 +20,6 @@ describe('current taxonomy API', () => {
   });
 
   it('uses only ordinary current-state routes', async () => {
-    await fetchCurrentJobTaxonomyTree();
-    await fetchCurrentJobTaxonomyState('job/id');
     await fetchCurrentCompanyIndustryTree();
     await fetchCurrentCompanyIndustryState('company/id');
     await fetchCurrentSkillTree();
@@ -31,8 +27,6 @@ describe('current taxonomy API', () => {
 
     const paths = globalThis.fetch.mock.calls.map(([path]) => path);
     expect(paths).toEqual([
-      '/api/job-intelligence/job-taxonomy/tree',
-      '/api/job-intelligence/jobs/job%2Fid/job-taxonomy',
       '/api/job-intelligence/company-industries/tree',
       '/api/job-intelligence/companies/company%2Fid/industries',
       '/api/job-intelligence/skills/tree',

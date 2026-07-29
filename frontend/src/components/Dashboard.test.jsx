@@ -41,31 +41,6 @@ const skills = {
   ],
 };
 
-function taxonomy(assignmentCoverage = 75) {
-  return {
-    population_total: 12,
-    assigned_total: assignmentCoverage === 75 ? 9 : 10,
-    unassigned_total: assignmentCoverage === 75 ? 3 : 2,
-    assignment_coverage: assignmentCoverage,
-    classification_ready_unassigned_total: 2,
-    top_categories: [
-      {
-        code: "backend",
-        path: "Technology / Software Engineering / Backend Development",
-        label: "Backend Development",
-        count: 4,
-        share_of_assigned: 44,
-      },
-    ],
-    other_categories: {
-      count: 0,
-      bucket_count: 0,
-      share_of_assigned: 0,
-      items: [],
-    },
-  };
-}
-
 function jsonResponse(payload) {
   return Promise.resolve({
     ok: true,
@@ -80,7 +55,7 @@ describe("Dashboard", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders real chart contracts and all four independently fetched sections", async () => {
+  it("renders real chart contracts and all three independently fetched sections", async () => {
     const user = userEvent.setup();
     const onNavigateToJobs = vi.fn();
     const onNavigateToClassification = vi.fn();
@@ -89,8 +64,6 @@ describe("Dashboard", () => {
       if (url.includes("/stats/overview")) return jsonResponse(stats);
       if (url.includes("/ai/overview")) return jsonResponse(aiOverview);
       if (url.includes("/stats/skills")) return jsonResponse(skills);
-      if (url.includes("/stats/categories/dashboard"))
-        return jsonResponse(taxonomy());
       return Promise.reject(new Error(`Unhandled request: ${url}`));
     });
 
@@ -106,15 +79,11 @@ describe("Dashboard", () => {
     expect(
       screen.getByText("Top Matched Canonical Skills"),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("Jobs by Canonical Job Taxonomy"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("75% assigned")).toBeInTheDocument();
     expect(screen.getByText("Python")).toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "Job Intelligence Governance" }),
     ).not.toBeInTheDocument();
-    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
     expect(await screen.findByText(/last refreshed at/i)).toBeInTheDocument();
     await user.click(
       screen.getByRole("button", { name: "View 4 Jobs matched to Python" }),
@@ -122,32 +91,15 @@ describe("Dashboard", () => {
     expect(onNavigateToJobs).toHaveBeenLastCalledWith({ skillIds: ["python"] });
     await user.click(
       screen.getByRole("button", {
-        name: /View 4 Jobs in Technology \/ Software Engineering \/ Backend Development/,
-      }),
-    );
-    expect(onNavigateToJobs).toHaveBeenLastCalledWith({
-      canonicalSubcategoryIds: ["backend"],
-    });
-    await user.click(
-      screen.getByRole("button", {
         name: "Open Skill Classification for 1 ready Candidates",
       }),
     );
     expect(onNavigateToClassification).toHaveBeenLastCalledWith("skill");
-    await user.click(
-      screen.getByRole("button", {
-        name: "Open Job Taxonomy Classification for 2 ready Jobs",
-      }),
-    );
-    expect(onNavigateToClassification).toHaveBeenLastCalledWith(
-      "job_taxonomy",
-    );
   });
 
   it("refreshes all sections while retaining and marking a failed section stale", async () => {
     const user = userEvent.setup();
     let skillRequests = 0;
-    let taxonomyRequests = 0;
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
       if (url.includes("/stats/overview")) return jsonResponse(stats);
@@ -158,20 +110,14 @@ describe("Dashboard", () => {
           ? jsonResponse(skills)
           : Promise.reject(new Error("skills offline"));
       }
-      if (url.includes("/stats/categories/dashboard")) {
-        taxonomyRequests += 1;
-        return jsonResponse(taxonomy(taxonomyRequests === 1 ? 75 : 83));
-      }
       return Promise.reject(new Error(`Unhandled request: ${url}`));
     });
 
     render(<Dashboard onNavigateToAI={vi.fn()} />);
-    expect(await screen.findByText("75% assigned")).toBeInTheDocument();
-    expect(screen.getByText("Python")).toBeVisible();
+    expect(await screen.findByText("Python")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Refresh" }));
 
-    expect(await screen.findByText("83% assigned")).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Skills data is stale.",
     );
@@ -181,6 +127,6 @@ describe("Dashboard", () => {
         screen.getByText("Refresh completed with stale sections."),
       ).toBeInTheDocument();
     });
-    expect(globalThis.fetch).toHaveBeenCalledTimes(8);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(6);
   });
 });

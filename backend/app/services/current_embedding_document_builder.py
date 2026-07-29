@@ -11,7 +11,6 @@ from app.services.embedding_document_builder import (
 
 SUPPORTED_CURRENT_EMBEDDING_EVENTS = frozenset(
     {
-        "job.canonical_taxonomy_changed",
         "job.enriched",
         "job.ingested",
         "job.skill_projection_changed",
@@ -32,15 +31,9 @@ class CurrentEmbeddingDocumentBuilder:
     def build_for_job(self, db: Session, job) -> EmbeddingDocument:
         reader = CurrentTaxonomyReader(db)
         skill_state = reader.get_job_skills(job.id)
-        taxonomy_document = reader.build_job_taxonomy_embedding_document(job.id)
         return self.document_builder.build_for_job(
             job,
             governed_skill_names=(skill.name for skill in skill_state.skills),
-            governed_taxonomy_document=(
-                taxonomy_document.document_text
-                if taxonomy_document is not None
-                else None
-            ),
         )
 
 

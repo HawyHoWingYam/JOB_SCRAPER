@@ -7,18 +7,12 @@ const EMPTY_QUERY = {
   source_classification_ids: [],
   employment_type: '',
   employment_type_codes: [],
-  subcategory_ids: [],
-  canonical_subcategory_ids: [],
-  canonical_category_ids: [],
-  canonical_domain_ids: [],
   skill_ids: [],
   skills: [],
   technology_ids: [],
   skill_category_ids: [],
   industry: '',
   company_industry_node_ids: [],
-  job_category_ids: [],
-  domain_ids: [],
   posted_date_from: '',
   posted_date_to: '',
   experience_years_from: '',
@@ -110,12 +104,6 @@ export function normalizeQueryForSubmit(query) {
     ),
     employment_type: normalizeValue(query?.employment_type),
     employment_type_codes: normalizeIdArray(query?.employment_type_codes),
-    subcategory_ids: normalizeIdArray(query?.subcategory_ids),
-    canonical_subcategory_ids: normalizeIdArray(
-      query?.canonical_subcategory_ids,
-    ),
-    canonical_category_ids: normalizeIdArray(query?.canonical_category_ids),
-    canonical_domain_ids: normalizeIdArray(query?.canonical_domain_ids),
     skill_ids: normalizeIdArray(query?.skill_ids),
     skills: normalizeIdArray(query?.skills),
     technology_ids: normalizeIdArray(query?.technology_ids),
@@ -124,8 +112,6 @@ export function normalizeQueryForSubmit(query) {
     company_industry_node_ids: normalizeIdArray(
       query?.company_industry_node_ids,
     ),
-    job_category_ids: normalizeIdArray(query?.job_category_ids),
-    domain_ids: normalizeIdArray(query?.domain_ids),
     posted_date_from: normalizeValue(query?.posted_date_from),
     posted_date_to: normalizeValue(query?.posted_date_to),
     experience_years_from: normalizeNumericString(query?.experience_years_from),
@@ -170,19 +156,6 @@ export function countPendingQueryChanges(appliedQuery, draftQuery) {
   if (
     JSON.stringify(applied.employment_type_codes) !==
     JSON.stringify(draft.employment_type_codes)
-  ) {
-    count += 1;
-  }
-  if (JSON.stringify(applied.subcategory_ids) !== JSON.stringify(draft.subcategory_ids)) {
-    count += 1;
-  }
-  if (
-    JSON.stringify(applied.canonical_subcategory_ids) !==
-      JSON.stringify(draft.canonical_subcategory_ids) ||
-    JSON.stringify(applied.canonical_category_ids) !==
-      JSON.stringify(draft.canonical_category_ids) ||
-    JSON.stringify(applied.canonical_domain_ids) !==
-      JSON.stringify(draft.canonical_domain_ids)
   ) {
     count += 1;
   }

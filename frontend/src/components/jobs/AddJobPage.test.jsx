@@ -66,7 +66,7 @@ describe('AddJobPage manual persistence', () => {
     expect(payload).not.toHaveProperty('employment_type');
     expect(submissions[0].headers['Idempotency-Key']).toBeTruthy();
     expect(await screen.findByRole('status')).toHaveTextContent('was added successfully');
-    expect(screen.queryByText(/AI Summary|Canonical Job Taxonomy/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/AI Summary/)).not.toBeInTheDocument();
   });
 
   it('keeps a New Company draft local and submits it atomically with the Job', async () => {

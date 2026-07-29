@@ -26,61 +26,6 @@ def _required_text(value: object, *, field: str) -> str:
     return normalized
 
 
-def transform_job_taxonomy(seed: Mapping[str, Any]) -> CurrentTaxonomySnapshot:
-    nodes: list[CurrentTaxonomyNode] = []
-    for domain in _objects(seed.get("domains"), field="domains"):
-        domain_code = _required_text(domain.get("code"), field="domain.code")
-        nodes.append(
-            CurrentTaxonomyNode(
-                taxonomy="job",
-                code=domain_code,
-                parent_code=None,
-                level="domain",
-                labels={"en": _required_text(domain.get("label"), field="domain.label")},
-                order=int(domain["order"]),
-                is_assignable=False,
-            )
-        )
-        for category in _objects(domain.get("categories"), field="domain.categories"):
-            category_code = _required_text(category.get("code"), field="category.code")
-            nodes.append(
-                CurrentTaxonomyNode(
-                    taxonomy="job",
-                    code=category_code,
-                    parent_code=domain_code,
-                    level="category",
-                    labels={
-                        "en": _required_text(
-                            category.get("label"), field="category.label"
-                        )
-                    },
-                    order=int(category["order"]),
-                    is_assignable=False,
-                )
-            )
-            for subcategory in _objects(
-                category.get("subcategories"), field="category.subcategories"
-            ):
-                nodes.append(
-                    CurrentTaxonomyNode(
-                        taxonomy="job",
-                        code=_required_text(
-                            subcategory.get("code"), field="subcategory.code"
-                        ),
-                        parent_code=category_code,
-                        level="subcategory",
-                        labels={
-                            "en": _required_text(
-                                subcategory.get("label"), field="subcategory.label"
-                            )
-                        },
-                        order=int(subcategory["order"]),
-                        is_assignable=bool(subcategory.get("is_assignable")),
-                    )
-                )
-    return _validated_snapshot(CurrentTaxonomySnapshot(taxonomy="job", nodes=tuple(nodes)))
-
-
 def transform_company_industry_taxonomy(
     seed: Mapping[str, Any],
 ) -> CurrentTaxonomySnapshot:

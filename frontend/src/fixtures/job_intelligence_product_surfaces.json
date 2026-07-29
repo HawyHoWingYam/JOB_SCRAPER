@@ -55,15 +55,6 @@
         "salary_range": null,
         "employment_type": "Legacy Contract",
         "subcategory_id": "41000000-0000-0000-0000-000000000013",
-        "job_taxonomy": {
-          "domain_id": "41000000-0000-0000-0000-000000000011",
-          "domain_name": "Legacy",
-          "category_id": "41000000-0000-0000-0000-000000000012",
-          "category_name": "AI",
-          "subcategory_id": "41000000-0000-0000-0000-000000000013",
-          "subcategory_name": "Category",
-          "path": "Legacy / AI / Category"
-        },
         "company_name": "Fixture Company",
         "posted_date": "2026-07-18T08:00:00Z",
         "source_classification_paths": [],
@@ -78,43 +69,7 @@
             "label": "Permanent",
             "sort_order": 3
           }
-        ],
-        "canonical_taxonomy": {
-          "job_id": "40000000-0000-0000-0000-000000000010",
-          "state": "assigned",
-          "assignment": {
-            "job_id": "40000000-0000-0000-0000-000000000010",
-            "taxonomy_code": "backend-development",
-            "method": "constrained_ai",
-            "breadcrumb": {
-              "domain": {
-                "id": "10000000-0000-0000-0000-000000000011",
-                "code": "technology",
-                "label": "Technology"
-              },
-              "category": {
-                "id": "10000000-0000-0000-0000-000000000012",
-                "code": "software-development",
-                "label": "Software Development"
-              },
-              "subcategory": {
-                "id": "10000000-0000-0000-0000-000000000013",
-                "code": "backend-development",
-                "label": "Backend Development"
-              }
-            },
-            "model_provenance": {
-              "provider": "openai",
-              "name": "fixture-model",
-              "version": "2026-07-19"
-            }
-          },
-          "reasons": []
-        },
-        "canonical_taxonomy_availability": {
-          "available": true,
-          "unavailable_code": null
-        }
+        ]
       },
       {
         "id": "40000000-0000-0000-0000-000000000020",
@@ -125,31 +80,10 @@
         "salary_range": null,
         "employment_type": "Legacy Full-time",
         "subcategory_id": null,
-        "job_taxonomy": {
-          "domain_id": "42000000-0000-0000-0000-000000000011",
-          "domain_name": "Legacy",
-          "category_id": "42000000-0000-0000-0000-000000000012",
-          "category_name": "Review",
-          "subcategory_id": "42000000-0000-0000-0000-000000000013",
-          "subcategory_name": "Category",
-          "path": "Legacy Review Category"
-        },
         "company_name": "Review Company",
         "posted_date": null,
         "source_classification_paths": [],
-        "employment_types": [],
-        "canonical_taxonomy": {
-          "job_id": "40000000-0000-0000-0000-000000000020",
-          "state": "unassigned",
-          "assignment": null,
-          "reasons": [
-            "unmapped_source_classification"
-          ]
-        },
-        "canonical_taxonomy_availability": {
-          "available": true,
-          "unavailable_code": null
-        }
+        "employment_types": []
       },
       {
         "id": "40000000-0000-0000-0000-000000000030",
@@ -160,24 +94,10 @@
         "salary_range": null,
         "employment_type": "Legacy Temporary",
         "subcategory_id": "43000000-0000-0000-0000-000000000013",
-        "job_taxonomy": {
-          "domain_id": "43000000-0000-0000-0000-000000000011",
-          "domain_name": "Legacy",
-          "category_id": "43000000-0000-0000-0000-000000000012",
-          "category_name": "Operations",
-          "subcategory_id": "43000000-0000-0000-0000-000000000013",
-          "subcategory_name": "Taxonomy",
-          "path": "Legacy Operations Taxonomy"
-        },
         "company_name": "Legacy Company",
         "posted_date": null,
         "source_classification_paths": [],
-        "employment_types": [],
-        "canonical_taxonomy": null,
-        "canonical_taxonomy_availability": {
-          "available": false,
-          "unavailable_code": "CANONICAL_TAXONOMY_NOT_ACTIVE"
-        }
+        "employment_types": []
       }
     ],
     "total": 3,
@@ -314,7 +234,6 @@
     "id": "40000000-0000-0000-0000-000000000010",
     "created_at": "2026-07-18T08:05:00Z",
     "updated_at": "2026-07-18T08:05:00Z",
-    "job_taxonomy": null,
     "source_classification_paths": [
       {
         "id": "50000000-0000-0000-0000-000000000010",
@@ -420,38 +339,6 @@
         }
       }
     ],
-    "canonical_taxonomy": {
-      "job_id": "40000000-0000-0000-0000-000000000010",
-      "state": "assigned",
-      "assignment": {
-        "job_id": "40000000-0000-0000-0000-000000000010",
-        "taxonomy_code": "backend-development",
-        "method": "constrained_ai",
-        "breadcrumb": {
-          "domain": {
-            "id": "10000000-0000-0000-0000-000000000011",
-            "code": "technology",
-            "label": "Technology"
-          },
-          "category": {
-            "id": "10000000-0000-0000-0000-000000000012",
-            "code": "software-development",
-            "label": "Software Development"
-          },
-          "subcategory": {
-            "id": "10000000-0000-0000-0000-000000000013",
-            "code": "backend-development",
-            "label": "Backend Development"
-          }
-        },
-        "model_provenance": {
-          "provider": "openai",
-          "name": "fixture-model",
-          "version": "2026-07-19"
-        }
-      },
-      "reasons": []
-    },
     "company_industries": {
       "company_id": "30000000-0000-0000-0000-000000000010",
       "assignments": [
@@ -512,10 +399,6 @@
         "available": true,
         "unavailable_code": null
       },
-      "canonical_taxonomy": {
-        "available": true,
-        "unavailable_code": null
-      },
       "company_industries": {
         "available": true,
         "unavailable_code": null
@@ -548,44 +431,8 @@
           }
         ],
         "posted_date": "2026-07-19T08:00:00+00:00",
-        "canonical_taxonomy": {
-          "job_id": "40000000-0000-0000-0000-000000000040",
-          "state": "assigned",
-          "assignment": {
-            "job_id": "40000000-0000-0000-0000-000000000040",
-            "taxonomy_code": "backend-development",
-            "method": "constrained_ai",
-            "breadcrumb": {
-              "domain": {
-                "id": "10000000-0000-0000-0000-000000000011",
-                "code": "technology",
-                "label": "Technology"
-              },
-              "category": {
-                "id": "10000000-0000-0000-0000-000000000012",
-                "code": "software-development",
-                "label": "Software Development"
-              },
-              "subcategory": {
-                "id": "10000000-0000-0000-0000-000000000013",
-                "code": "backend-development",
-                "label": "Backend Development"
-              }
-            },
-            "model_provenance": {
-              "provider": "openai",
-              "name": "fixture-model",
-              "version": "2026-07-19"
-            }
-          },
-          "reasons": []
-        },
         "job_intelligence_availability": {
           "source_attributes": {
-            "available": true,
-            "unavailable_code": null
-          },
-          "canonical_taxonomy": {
             "available": true,
             "unavailable_code": null
           },
@@ -596,9 +443,8 @@
         },
         "semantic_score": 0.97,
         "skill_overlap_score": 1.0,
-        "taxonomy_score": 1.0,
         "freshness_score": 1.0,
-        "combined_score": 0.9805
+        "combined_score": 0.976
       }
     ]
   }

@@ -338,7 +338,7 @@ class _StubInsightExtractor:
         }
 
 
-class _StubCurrentTaxonomyEnrichment:
+class _StubCurrentSkillEnrichment:
     def __init__(self, _db):
         pass
 
@@ -430,8 +430,8 @@ async def test_manual_enrichment_preserves_operator_experience_and_fills_only_om
     db.commit()
 
     monkeypatch.setattr(
-        "app.services.ai_enrichment_service.CurrentTaxonomyEnrichment",
-        _StubCurrentTaxonomyEnrichment,
+        "app.services.ai_enrichment_service.CurrentSkillEnrichment",
+        _StubCurrentSkillEnrichment,
     )
     monkeypatch.setattr(
         "app.services.ai_enrichment_service.get_llm_status",
@@ -476,13 +476,13 @@ async def test_failed_manual_enrichment_preserves_old_intelligence_and_stale_has
     job.ai_enriched_at = old_enriched_at
     db.commit()
 
-    class FailingTaxonomy(_StubCurrentTaxonomyEnrichment):
+    class FailingSkillEnrichment(_StubCurrentSkillEnrichment):
         def replace_job_skills(self, **_kwargs):
             raise RuntimeError("skill replacement failed")
 
     monkeypatch.setattr(
-        "app.services.ai_enrichment_service.CurrentTaxonomyEnrichment",
-        FailingTaxonomy,
+        "app.services.ai_enrichment_service.CurrentSkillEnrichment",
+        FailingSkillEnrichment,
     )
     monkeypatch.setattr(
         "app.services.ai_enrichment_service.get_llm_status",

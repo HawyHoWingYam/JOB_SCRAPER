@@ -30,12 +30,17 @@ from app.models.classification_batch import (
 from app.models.app_runtime_settings import AppRuntimeSettings
 from app.models.scraper_pacing_settings import ScraperPacingSettings
 from app.models.source_classification import SourceClassification
+from app.models.offertoday_coverage import (
+    OfferTodayKeywordCsvReview,
+    OfferTodayKeywordEntry,
+    OfferTodayKeywordMutationLog,
+    OfferTodayTaxonomySnapshot,
+)
 from app.models.current_taxonomy import (
     CurrentTaxonomyAliasRecord,
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillMention,
     CurrentJobSkillAssignment,
-    CurrentJobTaxonomyAssignment,
     CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
     CurrentSourceTaxonomyMapping,
@@ -81,11 +86,14 @@ __all__ = [
     "AppRuntimeSettings",
     "ScraperPacingSettings",
     "SourceClassification",
+    "OfferTodayKeywordCsvReview",
+    "OfferTodayKeywordEntry",
+    "OfferTodayKeywordMutationLog",
+    "OfferTodayTaxonomySnapshot",
     "CurrentTaxonomyAliasRecord",
     "CurrentCompanyIndustryAssignment",
     "CurrentJobSkillMention",
     "CurrentJobSkillAssignment",
-    "CurrentJobTaxonomyAssignment",
     "CurrentSkillCandidate",
     "CurrentTaxonomyNodeRecord",
     "CurrentSourceTaxonomyMapping",

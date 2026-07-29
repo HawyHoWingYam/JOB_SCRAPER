@@ -4,7 +4,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.current_taxonomies.contracts import (
-    AssignCurrentJobTaxonomyCommand,
     CurrentTaxonomySnapshot,
     ReplaceCurrentCompanyIndustriesCommand,
     ReplaceCurrentJobSkillsCommand,
@@ -13,10 +12,8 @@ from app.job_intelligence.current_taxonomies.contracts import (
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
-    CurrentJobTaxonomyAssignment,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
-    CurrentSourceTaxonomyMapping,
 )
 
 
@@ -94,74 +91,6 @@ class CurrentTaxonomyStore:
                 )
             )
         )
-
-    def resolve_allowed_codes(
-        self,
-        taxonomy: TaxonomyKind,
-        *,
-        source_site: str,
-        source_key: str,
-    ) -> tuple[str, ...]:
-        mapped_codes = tuple(
-            self.db.scalars(
-                select(CurrentSourceTaxonomyMapping.target_code)
-                .join(
-                    CurrentTaxonomyNodeRecord,
-                    (
-                        CurrentTaxonomyNodeRecord.taxonomy
-                        == CurrentSourceTaxonomyMapping.taxonomy
-                    )
-                    & (
-                        CurrentTaxonomyNodeRecord.code
-                        == CurrentSourceTaxonomyMapping.target_code
-                    ),
-                )
-                .where(
-                    CurrentSourceTaxonomyMapping.taxonomy == taxonomy,
-                    CurrentSourceTaxonomyMapping.source_site == source_site,
-                    CurrentSourceTaxonomyMapping.source_key == source_key,
-                    CurrentTaxonomyNodeRecord.is_active.is_(True),
-                    CurrentTaxonomyNodeRecord.is_assignable.is_(True),
-                )
-                .order_by(CurrentSourceTaxonomyMapping.target_code)
-            )
-        )
-        if mapped_codes:
-            return mapped_codes
-        return tuple(
-            self.db.scalars(
-                select(CurrentTaxonomyNodeRecord.code)
-                .where(
-                    CurrentTaxonomyNodeRecord.taxonomy == taxonomy,
-                    CurrentTaxonomyNodeRecord.is_active.is_(True),
-                    CurrentTaxonomyNodeRecord.is_assignable.is_(True),
-                )
-                .order_by(CurrentTaxonomyNodeRecord.code)
-            )
-        )
-
-    def assign_job(self, command: AssignCurrentJobTaxonomyCommand) -> None:
-        self._require_assignable_codes("job", (command.taxonomy_code,))
-        row = self.db.get(CurrentJobTaxonomyAssignment, command.job_id)
-        if row is None:
-            row = CurrentJobTaxonomyAssignment(
-                job_id=command.job_id,
-                taxonomy="job",
-            )
-            self.db.add(row)
-        row.taxonomy_code = command.taxonomy_code
-        row.method = command.method
-        row.evidence_hash = command.evidence_hash
-        row.source_evidence_refs = list(command.source_evidence_refs)
-        row.mapping_ids = list(command.mapping_ids)
-        row.model_provenance = (
-            dict(command.model_provenance)
-            if command.model_provenance is not None
-            else None
-        )
-        row.breadcrumb = dict(command.breadcrumb)
-        row.captured_at = command.captured_at
-        self.db.flush()
 
     def replace_company_industries(
         self,

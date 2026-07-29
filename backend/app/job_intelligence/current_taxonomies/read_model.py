@@ -2,20 +2,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import exists, false, select
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.current_taxonomies.contracts import TaxonomyKind
-from app.job_intelligence.foundation import normalized_content_hash
 from app.models.company import Company
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
-    CurrentJobTaxonomyAssignment,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.job import Job
@@ -49,22 +47,6 @@ class CurrentTaxonomyNodeView:
 class CurrentTaxonomyTreeView:
     taxonomy: TaxonomyKind
     nodes: tuple[CurrentTaxonomyNodeView, ...]
-
-
-@dataclass(frozen=True)
-class CurrentJobTaxonomyAssignmentView:
-    job_id: UUID
-    taxonomy_code: str
-    method: str
-    breadcrumb: dict[str, object]
-    model_provenance: dict[str, object] | None
-
-
-@dataclass(frozen=True)
-class CurrentJobTaxonomyStateView:
-    job_id: UUID
-    state: Literal["assigned", "unassigned"]
-    assignment: CurrentJobTaxonomyAssignmentView | None
 
 
 @dataclass(frozen=True)
@@ -113,16 +95,6 @@ class CurrentJobSkillStateView:
     candidate_mentions: tuple[CurrentSkillCandidateMentionView, ...]
 
 
-@dataclass(frozen=True)
-class CurrentJobTaxonomyEmbeddingDocument:
-    job_id: UUID
-    taxonomy_code: str
-    method: str
-    breadcrumb: dict[str, object]
-    document_text: str
-    document_hash: str
-
-
 class CurrentTaxonomyReader:
     """Read ordinary mutable taxonomies without release or revision identity."""
 
@@ -145,27 +117,6 @@ class CurrentTaxonomyReader:
                 for row in rows
             ),
         )
-
-    def get_job_taxonomy_state(self, job_id: UUID) -> CurrentJobTaxonomyStateView:
-        return self.get_job_taxonomy_states((job_id,))[job_id]
-
-    def get_job_taxonomy_states(
-        self,
-        job_ids: tuple[UUID, ...],
-    ) -> dict[UUID, CurrentJobTaxonomyStateView]:
-        ordered_ids = tuple(dict.fromkeys(job_ids))
-        assignments = {
-            row.job_id: row
-            for row in self.db.scalars(
-                select(CurrentJobTaxonomyAssignment).where(
-                    CurrentJobTaxonomyAssignment.job_id.in_(ordered_ids)
-                )
-            )
-        } if ordered_ids else {}
-        return {
-            job_id: self._job_taxonomy_state(job_id, assignments.get(job_id))
-            for job_id in ordered_ids
-        }
 
     def get_company_industry_state(
         self,
@@ -285,42 +236,6 @@ class CurrentTaxonomyReader:
             for job_id in ordered_ids
         }
 
-    def build_job_taxonomy_embedding_document(
-        self,
-        job_id: UUID,
-    ) -> CurrentJobTaxonomyEmbeddingDocument | None:
-        assignment = self.db.get(CurrentJobTaxonomyAssignment, job_id)
-        if assignment is None:
-            return None
-        breadcrumb = dict(assignment.breadcrumb)
-        nodes = self._job_breadcrumb_nodes(breadcrumb)
-        labels = " / ".join(label for _code, label in nodes)
-        codes = " / ".join(code for code, _label in nodes)
-        document_text = "\n".join(
-            (
-                f"Job Taxonomy: {labels}",
-                f"Job Taxonomy Codes: {codes}",
-                f"Assignment Method: {assignment.method}",
-            )
-        )
-        document_hash = normalized_content_hash(
-            {
-                "job_id": str(job_id),
-                "taxonomy_code": assignment.taxonomy_code,
-                "method": assignment.method,
-                "breadcrumb": breadcrumb,
-                "document_text": document_text,
-            }
-        )
-        return CurrentJobTaxonomyEmbeddingDocument(
-            job_id=job_id,
-            taxonomy_code=assignment.taxonomy_code,
-            method=assignment.method,
-            breadcrumb=breadcrumb,
-            document_text=document_text,
-            document_hash=document_hash,
-        )
-
     def resolve_assignable_codes(
         self,
         taxonomy: TaxonomyKind,
@@ -352,15 +267,6 @@ class CurrentTaxonomyReader:
                 visited.add(cursor.code)
                 cursor = by_code.get(cursor.parent_code) if cursor.parent_code else None
         return tuple(resolved)
-
-    def job_taxonomy_filter(self, codes: tuple[str, ...]) -> object:
-        assignable_codes = self.resolve_assignable_codes("job", codes)
-        if not assignable_codes:
-            return false()
-        return exists().where(
-            CurrentJobTaxonomyAssignment.job_id == Job.id,
-            CurrentJobTaxonomyAssignment.taxonomy_code.in_(assignable_codes),
-        )
 
     def company_industry_filter(self, codes: tuple[str, ...]) -> object:
         assignable_codes = self.resolve_assignable_codes("company_industry", codes)
@@ -400,33 +306,6 @@ class CurrentTaxonomyReader:
         )
 
     @staticmethod
-    def _job_taxonomy_state(
-        job_id: UUID,
-        row: CurrentJobTaxonomyAssignment | None,
-    ) -> CurrentJobTaxonomyStateView:
-        if row is None:
-            return CurrentJobTaxonomyStateView(
-                job_id=job_id,
-                state="unassigned",
-                assignment=None,
-            )
-        return CurrentJobTaxonomyStateView(
-            job_id=job_id,
-            state="assigned",
-            assignment=CurrentJobTaxonomyAssignmentView(
-                job_id=row.job_id,
-                taxonomy_code=row.taxonomy_code,
-                method=row.method,
-                breadcrumb=dict(row.breadcrumb),
-                model_provenance=(
-                    dict(row.model_provenance)
-                    if row.model_provenance is not None
-                    else None
-                ),
-            ),
-        )
-
-    @staticmethod
     def _company_industry_assignment(
         row: CurrentCompanyIndustryAssignment,
     ) -> CurrentCompanyIndustryAssignmentView:
@@ -452,38 +331,12 @@ class CurrentTaxonomyReader:
             "",
         )
 
-    @staticmethod
-    def _job_breadcrumb_nodes(
-        breadcrumb: dict[str, object],
-    ) -> tuple[tuple[str, str], ...]:
-        nodes: list[tuple[str, str]] = []
-        for level in ("domain", "category", "subcategory"):
-            node = breadcrumb.get(level)
-            if not isinstance(node, dict):
-                raise CurrentTaxonomyReadError(
-                    "CURRENT_JOB_TAXONOMY_BREADCRUMB_INVALID",
-                    "Current Job Taxonomy assignment has an invalid breadcrumb",
-                )
-            code = str(node.get("code") or "").strip()
-            label = str(node.get("label") or "").strip()
-            if not code or not label:
-                raise CurrentTaxonomyReadError(
-                    "CURRENT_JOB_TAXONOMY_BREADCRUMB_INVALID",
-                    "Current Job Taxonomy assignment has an invalid breadcrumb",
-                )
-            nodes.append((code, label))
-        return tuple(nodes)
-
-
 __all__ = [
     "CurrentCompanyIndustryAssignmentView",
     "CurrentCompanyIndustryStateView",
     "CurrentJobSkillStateView",
     "CurrentJobSkillView",
     "CurrentSkillCandidateMentionView",
-    "CurrentJobTaxonomyAssignmentView",
-    "CurrentJobTaxonomyEmbeddingDocument",
-    "CurrentJobTaxonomyStateView",
     "CurrentTaxonomyNodeView",
     "CurrentTaxonomyReadError",
     "CurrentTaxonomyReader",

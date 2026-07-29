@@ -22,7 +22,7 @@ TERMINAL_STATUSES = (
     "cancelled",
 )
 ITEM_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
-SUPPORTED_DOMAINS = ("job_taxonomy", "company_industry", "skill")
+SUPPORTED_DOMAINS = ("company_industry", "skill")
 
 
 class ClassificationBatchError(ValueError):

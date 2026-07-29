@@ -19,7 +19,7 @@ describe('Job Browser scope transitions', () => {
       text_expression: 'platform engineer',
       structured_filters: {
         ...root.structured_filters,
-        canonical_subcategory_ids: ['technology.backend'],
+        source_classification_ids: ['jobsdb:technology.backend'],
       },
     };
 
@@ -39,7 +39,7 @@ describe('Job Browser scope transitions', () => {
         skill_ids: ['python'],
         technology_ids: ['react'],
         salary_min: '30000',
-        canonical_subcategory_ids: ['technology.backend'],
+        source_classification_ids: ['jobsdb:technology.backend'],
       }),
     }));
     expect(scope.layers[1].structured_filters.employment_type_codes).toEqual([

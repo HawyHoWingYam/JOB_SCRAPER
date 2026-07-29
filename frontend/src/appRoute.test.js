@@ -24,40 +24,32 @@ describe('app hash routing', () => {
     expect(resolveAppView('#unknown')).toBe('dashboard');
   });
 
-  it('round-trips exact canonical Job and Skill codes', () => {
+  it('round-trips exact Skill codes', () => {
     const hash = hashForJobsRoute({
-      canonicalSubcategoryIds: ['job.backend'],
       skillIds: ['skill:python'],
     });
 
-    expect(hash).toBe(
-      '#jobs?canonical_subcategory_ids=job.backend&skill_ids=skill%3Apython',
-    );
+    expect(hash).toBe('#jobs?skill_ids=skill%3Apython');
     expect(parseJobsRoute(hash)).toEqual({
-      canonicalSubcategoryIds: ['job.backend'],
       skillIds: ['skill:python'],
     });
   });
 
   it('keeps bare Jobs navigation and safely drops invalid route values', () => {
     expect(parseJobsRoute('#jobs')).toEqual({
-      canonicalSubcategoryIds: [],
       skillIds: [],
     });
     expect(
       parseJobsRoute(
         '#jobs?skill_ids=python%20label&skill_ids=python&skill_ids=python',
       ),
-    ).toEqual({ canonicalSubcategoryIds: [], skillIds: ['python'] });
+    ).toEqual({ skillIds: ['python'] });
     expect(hashForJobsRoute({ skillIds: ['python label'] })).toBe('#jobs');
   });
 
   it('parses durable Classification targets and keeps the bare default', () => {
     expect(parseClassificationRoute('#classification')).toEqual({
-      target: 'job_taxonomy',
-    });
-    expect(parseClassificationRoute('#classification?target=job_taxonomy')).toEqual({
-      target: 'job_taxonomy',
+      target: 'skill',
     });
     expect(parseClassificationRoute('#classification?target=skill')).toEqual({
       target: 'skill',
@@ -70,9 +62,9 @@ describe('app hash routing', () => {
     );
     expect(
       parseClassificationRoute('#classification?target=company_industry'),
-    ).toEqual({ target: 'job_taxonomy' });
+    ).toEqual({ target: 'company_industry' });
     expect(hashForClassificationRoute('unknown')).toBe(
-      '#classification?target=job_taxonomy',
+      '#classification?target=skill',
     );
   });
 });

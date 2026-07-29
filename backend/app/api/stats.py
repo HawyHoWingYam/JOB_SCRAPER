@@ -1,31 +1,22 @@
 """Statistics endpoints backed by ordinary current taxonomy assignments."""
 
-from typing import Annotated, Any, Dict, List
+from typing import Annotated, Any, Dict
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, case, desc, func, select
+from sqlalchemy import and_, case, desc, func
 from sqlalchemy.orm import Session, aliased
 
 from app.database import get_db
 from app.models.current_taxonomy import (
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
-    CurrentJobTaxonomyAssignment,
     CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.job import Job
-from app.schemas.stats import (
-    DashboardCategoryItemSchema,
-    DashboardCategoryStatsSchema,
-    DashboardOtherCategoriesSchema,
-    DashboardSkillStatsSchema,
-)
+from app.schemas.stats import DashboardSkillStatsSchema
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.enrichment_run_service import EnrichmentRunService
-from app.services.job_taxonomy_classification_readiness import (
-    job_taxonomy_classification_ready_jobs,
-)
 
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -86,63 +77,6 @@ def _percentage(numerator: int, denominator: int) -> int:
 def _dashboard_job_population_predicate():
     """Return the shared retained-corpus predicate for Dashboard Job metrics."""
     return Job.is_deleted.is_(False)
-
-
-def _current_job_category_rows(db: Session):
-    subcategory = aliased(CurrentTaxonomyNodeRecord)
-    category = aliased(CurrentTaxonomyNodeRecord)
-    domain = aliased(CurrentTaxonomyNodeRecord)
-    return (
-        db.query(
-            subcategory.code.label("subcategory_code"),
-            _english_label(domain).label("domain_label"),
-            _english_label(category).label("category_label"),
-            _english_label(subcategory).label("subcategory_label"),
-            func.count(Job.id).label("count"),
-        )
-        .join(
-            CurrentJobTaxonomyAssignment, CurrentJobTaxonomyAssignment.job_id == Job.id
-        )
-        .join(
-            subcategory,
-            and_(
-                subcategory.taxonomy == "job",
-                subcategory.code == CurrentJobTaxonomyAssignment.taxonomy_code,
-                subcategory.is_active.is_(True),
-                subcategory.is_assignable.is_(True),
-            ),
-        )
-        .join(
-            category,
-            and_(
-                category.taxonomy == "job",
-                category.code == subcategory.parent_code,
-                category.is_active.is_(True),
-            ),
-        )
-        .join(
-            domain,
-            and_(
-                domain.taxonomy == "job",
-                domain.code == category.parent_code,
-                domain.is_active.is_(True),
-            ),
-        )
-        .filter(_dashboard_job_population_predicate())
-        .group_by(
-            subcategory.code,
-            _english_label(domain),
-            _english_label(category),
-            _english_label(subcategory),
-        )
-        .order_by(
-            desc("count"),
-            _english_label(domain).asc(),
-            _english_label(category).asc(),
-            _english_label(subcategory).asc(),
-        )
-        .all()
-    )
 
 
 @router.get("/overview")
@@ -311,77 +245,4 @@ async def get_skill_stats(
             }
             for row in results
         ],
-    }
-
-
-@router.get("/categories")
-async def get_category_stats(db: Session = Depends(get_db)) -> List[Dict[str, Any]]:
-    return [
-        {
-            "category": " / ".join(
-                (row.domain_label, row.category_label, row.subcategory_label)
-            ),
-            "count": row.count,
-        }
-        for row in _current_job_category_rows(db)
-    ]
-
-
-@router.get("/categories/dashboard", response_model=DashboardCategoryStatsSchema)
-async def get_dashboard_category_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    results = _current_job_category_rows(db)
-    specific_items = [
-        {
-            "code": row.subcategory_code,
-            "path": " / ".join(
-                (row.domain_label, row.category_label, row.subcategory_label)
-            ),
-            "label": row.subcategory_label,
-            "count": int(row.count or 0),
-        }
-        for row in results
-    ]
-    assigned_total = sum(item["count"] for item in specific_items)
-    population_total = int(
-        db.query(func.count(Job.id))
-        .filter(_dashboard_job_population_predicate())
-        .scalar()
-        or 0
-    )
-    unassigned_total = max(population_total - assigned_total, 0)
-    classification_ready_unassigned_total = int(
-        db.scalar(
-            select(func.count()).select_from(
-                job_taxonomy_classification_ready_jobs()
-                .with_only_columns(Job.id)
-                .subquery()
-            )
-        )
-        or 0
-    )
-
-    def serialize_item(item: dict[str, Any]) -> dict[str, Any]:
-        return DashboardCategoryItemSchema(
-            **item,
-            share_of_assigned=_percentage(item["count"], assigned_total),
-        ).model_dump(mode="json")
-
-    top_categories = specific_items[:6]
-    other_items = specific_items[6:]
-    other_count = sum(item["count"] for item in other_items)
-    return {
-        "population_total": population_total,
-        "assigned_total": assigned_total,
-        "unassigned_total": unassigned_total,
-        "assignment_coverage": _percentage(assigned_total, population_total),
-        "classification_ready_unassigned_total": (
-            classification_ready_unassigned_total
-        ),
-        "top_categories": [serialize_item(item) for item in top_categories],
-        "other_categories": DashboardOtherCategoriesSchema(
-            count=other_count,
-            bucket_count=len(other_items),
-            share_of_assigned=_percentage(other_count, assigned_total),
-            items=[serialize_item(item) for item in other_items],
-        ).model_dump(mode="json"),
     }

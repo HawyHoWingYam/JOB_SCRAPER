@@ -183,15 +183,6 @@ function sourceClassificationPathLabel(path) {
   return labels.length > 0 ? labels.join(' / ') : 'Unknown Source Classification Path';
 }
 
-function canonicalBreadcrumbLabel(breadcrumb) {
-  const labels = [
-    breadcrumb?.domain?.label,
-    breadcrumb?.category?.label,
-    breadcrumb?.subcategory?.label,
-  ].filter(Boolean);
-  return labels.length === 3 ? labels.join(' / ') : null;
-}
-
 function relatedEmploymentTypesLabel(relatedJob) {
   if (relatedJob?.job_intelligence_availability?.source_attributes?.available === false) {
     return 'Employment Types unavailable';
@@ -201,22 +192,6 @@ function relatedEmploymentTypesLabel(relatedJob) {
     ? relatedJob.employment_types.map((employmentType) => employmentType?.label).filter(Boolean)
     : [];
   return labels.length > 0 ? labels.join(', ') : 'Employment Types Unknown';
-}
-
-function relatedCanonicalTaxonomyLabel(relatedJob) {
-  if (relatedJob?.job_intelligence_availability?.canonical_taxonomy?.available === false) {
-    return 'Canonical Job Taxonomy unavailable';
-  }
-
-  const canonicalState = relatedJob?.canonical_taxonomy;
-  if (canonicalState?.state === 'assigned' && canonicalState.assignment) {
-    return canonicalBreadcrumbLabel(canonicalState.assignment.breadcrumb)
-      || 'Canonical Job Taxonomy breadcrumb unavailable';
-  }
-  if (canonicalState?.state === 'unassigned') {
-    return 'Unassigned Canonical Taxonomy';
-  }
-  return 'Canonical Job Taxonomy Unknown';
 }
 
 function companyIndustryBreadcrumbLabel(breadcrumb) {
@@ -411,8 +386,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const sourceEmploymentLabels = Array.isArray(job?.source_employment_labels)
     ? job.source_employment_labels
     : [];
-  const canonicalState = job?.canonical_taxonomy || null;
-  const canonicalAvailability = job?.job_intelligence_availability?.canonical_taxonomy;
   const companyIndustryState = job?.company_industries || null;
   const companyIndustryAvailability = job?.job_intelligence_availability?.company_industries;
   const companyIndustryAssignments = Array.isArray(companyIndustryState?.assignments)
@@ -594,40 +567,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
             <section
               className="modal-section"
               role="region"
-              aria-labelledby="canonical-job-taxonomy-heading"
-            >
-              <h3 id="canonical-job-taxonomy-heading">Canonical Job Taxonomy</h3>
-              {canonicalAvailability?.available === false ? (
-                <p className="modal-empty">
-                  Unavailable ({canonicalAvailability.unavailable_code || 'UNKNOWN'})
-                </p>
-              ) : canonicalState?.state === 'assigned' && canonicalState.assignment ? (
-                <div className="modal-contract-state">
-                  <p className="modal-contract-primary">
-                    {canonicalBreadcrumbLabel(canonicalState.assignment.breadcrumb)
-                      || 'Assigned breadcrumb unavailable'}
-                  </p>
-                  <p>
-                    Assignment method: {humanizeContractValue(canonicalState.assignment.method)}
-                  </p>
-                </div>
-              ) : canonicalState?.state === 'unassigned' ? (
-                <div className="modal-contract-state">
-                  <p className="modal-empty">Unassigned Canonical Taxonomy</p>
-                  <p>
-                    Reasons: {canonicalState.reasons?.length > 0
-                      ? canonicalState.reasons.map(humanizeContractValue).join(', ')
-                      : 'Unknown'}
-                  </p>
-                </div>
-              ) : (
-                <p className="modal-empty">Canonical Job Taxonomy state is Unknown</p>
-              )}
-            </section>
-
-            <section
-              className="modal-section"
-              role="region"
               aria-labelledby="company-industries-heading"
             >
               <h3 id="company-industries-heading">Company Industries</h3>
@@ -747,9 +686,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                         <span>{relatedEmploymentTypesLabel(relatedJob)}</span>
                         {relatedJob.posted_date && <span>{formatRelativePostedState(relatedJob.posted_date)}</span>}
                       </div>
-                      <p className="related-job-taxonomy">
-                        {relatedCanonicalTaxonomyLabel(relatedJob)}
-                      </p>
                     </article>
                   ))}
                 </div>

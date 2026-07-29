@@ -8,7 +8,6 @@ import {
   RefreshCw,
 } from "lucide-react";
 import SkillChart from "./charts/SkillChart";
-import CategoryChart from "./charts/CategoryChart";
 import { apiPath } from "../api/base";
 import "./Dashboard.css";
 
@@ -16,7 +15,6 @@ const SECTION_ENDPOINTS = {
   overview: "/stats/overview",
   aiOverview: "/ai/overview",
   skills: "/stats/skills?limit=30",
-  taxonomy: "/stats/categories/dashboard",
 };
 
 function initialSections() {
@@ -164,7 +162,7 @@ export default function Dashboard({
         <div className="dashboard-header-copy">
           <h2>Command Center</h2>
           <p className="subtitle">
-            Scrape volume, enrichment coverage, and canonical-assignment health.
+            Scrape volume, enrichment coverage, and governed-skill health.
           </p>
           <p className="dashboard-refresh-status" role="status">
             {isRefreshing
@@ -396,20 +394,6 @@ export default function Dashboard({
             }
             onSelectSkill={(skill) =>
               onNavigateToJobs?.({ skillIds: [skill.code] })
-            }
-          />
-        </div>
-        <div className="chart-wrapper glass-panel dashboard-chart-panel">
-          <CategoryChart
-            {...sections.taxonomy}
-            onRetry={() => loadSection("taxonomy")}
-            onOpenClassification={() =>
-              onNavigateToClassification?.("job_taxonomy")
-            }
-            onSelectCategory={(category) =>
-              onNavigateToJobs?.({
-                canonicalSubcategoryIds: [category.code],
-              })
             }
           />
         </div>

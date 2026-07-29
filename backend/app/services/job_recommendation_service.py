@@ -48,6 +48,18 @@ def _skill_overlap_score(source_skills: set[str], candidate_skills: set[str]) ->
     return len(source_skills & candidate_skills) / len(source_skills)
 
 
+def _combined_score(
+    semantic_score: float,
+    skill_overlap_score: float,
+    freshness_score: float,
+) -> float:
+    return (
+        (semantic_score * 0.80)
+        + (skill_overlap_score * 0.15)
+        + (freshness_score * 0.05)
+    )
+
+
 def _normalized_governed_skill_names(state: object) -> set[str]:
     if not isinstance(state, dict):
         return set()
@@ -55,47 +67,6 @@ def _normalized_governed_skill_names(state: object) -> set[str]:
     if not isinstance(names, (list, tuple)):
         return set()
     return {normalized for name in names if (normalized := str(name).strip().lower())}
-
-
-def _canonical_taxonomy_segments(state: object) -> list[str]:
-    if not isinstance(state, dict) or state.get("state") != "assigned":
-        return []
-    assignment = state.get("assignment")
-    if not isinstance(assignment, dict):
-        return []
-    breadcrumb = assignment.get("breadcrumb")
-    if not isinstance(breadcrumb, dict):
-        return []
-
-    segments: list[str] = []
-    for level in ("domain", "category", "subcategory"):
-        node = breadcrumb.get(level)
-        if not isinstance(node, dict):
-            return []
-        code = str(node.get("code") or "").strip().lower()
-        if not code:
-            return []
-        segments.append(code)
-    return segments
-
-
-def _taxonomy_score(
-    source_segments: list[str],
-    candidate_segments: list[str],
-) -> float:
-    if not source_segments or not candidate_segments:
-        return 0.0
-
-    common_prefix = 0
-    for source_segment, candidate_segment in zip(source_segments, candidate_segments):
-        if source_segment != candidate_segment:
-            break
-        common_prefix += 1
-
-    if common_prefix == 0:
-        return 0.0
-
-    return common_prefix / max(len(source_segments), len(candidate_segments))
 
 
 class JobRecommendationService:
@@ -120,12 +91,8 @@ class JobRecommendationService:
         ]
         product_reads = JobIntelligenceProductReadModel(self.db)
         employment_states = product_reads.get_employment_type_states(projection_job_ids)
-        canonical_states = product_reads.get_canonical_job_states(projection_job_ids)
         skill_states = product_reads.get_governed_skill_name_states(projection_job_ids)
         source_skills = _normalized_governed_skill_names(skill_states[source_job.id])
-        source_taxonomy_segments = _canonical_taxonomy_segments(
-            canonical_states[source_job.id]["canonical_taxonomy"]
-        )
 
         ranked: list[tuple[float, float, float, Job, Company | None]] = []
         for job, company, embedding_row in candidate_rows:
@@ -134,18 +101,11 @@ class JobRecommendationService:
                 source_vector, list(embedding_row.embedding)
             )
             skill_overlap_score = _skill_overlap_score(source_skills, candidate_skills)
-            taxonomy_score = _taxonomy_score(
-                source_taxonomy_segments,
-                _canonical_taxonomy_segments(
-                    canonical_states[job.id]["canonical_taxonomy"]
-                ),
-            )
             freshness_score = _freshness_score(getattr(job, "posted_date", None))
-            combined_score = (
-                (semantic_score * 0.65)
-                + (skill_overlap_score * 0.15)
-                + (taxonomy_score * 0.15)
-                + (freshness_score * 0.05)
+            combined_score = _combined_score(
+                semantic_score,
+                skill_overlap_score,
+                freshness_score,
             )
             ranked.append(
                 (
@@ -186,7 +146,6 @@ class JobRecommendationService:
         ]:
             candidate_skills = _normalized_governed_skill_names(skill_states[job.id])
             employment_state = employment_states[job.id]
-            canonical_state = canonical_states[job.id]
             skill_state = skill_states[job.id]
             recommendations.append(
                 {
@@ -201,28 +160,15 @@ class JobRecommendationService:
                     "posted_date": job.posted_date.isoformat()
                     if job.posted_date
                     else None,
-                    "canonical_taxonomy": canonical_state["canonical_taxonomy"],
                     "job_intelligence_availability": {
                         "source_attributes": employment_state[
                             "source_attributes_availability"
-                        ],
-                        "canonical_taxonomy": canonical_state[
-                            "canonical_taxonomy_availability"
                         ],
                         "skills": skill_state["skills_availability"],
                     },
                     "semantic_score": round(semantic_score, 4),
                     "skill_overlap_score": round(
                         _skill_overlap_score(source_skills, candidate_skills), 4
-                    ),
-                    "taxonomy_score": round(
-                        _taxonomy_score(
-                            source_taxonomy_segments,
-                            _canonical_taxonomy_segments(
-                                canonical_state["canonical_taxonomy"]
-                            ),
-                        ),
-                        4,
                     ),
                     "freshness_score": round(freshness_score, 4),
                     "combined_score": round(combined_score, 4),

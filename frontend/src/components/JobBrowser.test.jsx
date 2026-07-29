@@ -49,34 +49,6 @@ function searchPayloadWithTitle(title) {
 }
 
 function searchFacets() {
-  const canonicalJobTaxonomy = [];
-  for (const domain of taxonomyFixture.job_tree.domains) {
-    canonicalJobTaxonomy.push({
-      id: domain.code,
-      label: domain.label,
-      parent_id: null,
-      level: 'domain',
-      count: 3,
-    });
-    for (const category of domain.categories) {
-      canonicalJobTaxonomy.push({
-        id: category.code,
-        label: category.label,
-        parent_id: domain.code,
-        level: 'category',
-        count: 2,
-      });
-      for (const subcategory of category.subcategories) {
-        canonicalJobTaxonomy.push({
-          id: subcategory.code,
-          label: subcategory.label,
-          parent_id: category.code,
-          level: 'subcategory',
-          count: 1,
-        });
-      }
-    }
-  }
   const sourceClassifications = productFixture.job_filters.source_classifications.map(
     (option, index) => ({
       ...option,
@@ -94,7 +66,6 @@ function searchFacets() {
       (option) => ({ ...option, id: option.code, count: 2 }),
     ),
     source_classifications: sourceClassifications,
-    canonical_job_taxonomy: canonicalJobTaxonomy,
     company_industries: [
       {
         id: taxonomyFixture.company_tree.nodes[0].code,
@@ -113,41 +84,6 @@ function jobSearchPayload(overrides = {}) {
     facets: searchFacets(),
     ...overrides,
   };
-}
-
-function currentJobTaxonomyTree() {
-  const nodes = [];
-  for (const domain of taxonomyFixture.job_tree.domains) {
-    nodes.push({
-      code: domain.code,
-      parent_code: null,
-      level: 'domain',
-      labels: { en: domain.label },
-      order: domain.order,
-      is_assignable: false,
-    });
-    for (const category of domain.categories) {
-      nodes.push({
-        code: category.code,
-        parent_code: domain.code,
-        level: 'category',
-        labels: { en: category.label },
-        order: category.order,
-        is_assignable: false,
-      });
-      for (const subcategory of category.subcategories) {
-        nodes.push({
-          code: subcategory.code,
-          parent_code: category.code,
-          level: 'subcategory',
-          labels: { en: subcategory.label },
-          order: subcategory.order,
-          is_assignable: true,
-        });
-      }
-    }
-  }
-  return { taxonomy: 'job', nodes };
 }
 
 function currentCompanyIndustryTree() {
@@ -180,9 +116,6 @@ describe('JobBrowser governed filters', () => {
       const path = String(url);
       if (path.includes('/jobs/filters')) {
         return Promise.resolve(productFixture.job_filters);
-      }
-      if (path.includes('/job-taxonomy/tree')) {
-        return Promise.resolve(currentJobTaxonomyTree());
       }
       if (path.includes('/company-industries/tree')) {
         return Promise.resolve(currentCompanyIndustryTree());
@@ -221,12 +154,6 @@ describe('JobBrowser governed filters', () => {
       name: 'Full-time (2 jobs)',
     })).toBeInTheDocument();
     await user.click(screen.getByRole('button', {
-      name: 'Canonical Job Taxonomy, 0 selected',
-    }));
-    expect(screen.getByRole('checkbox', {
-      name: 'Job Domain · Accounting (3 jobs)',
-    })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', {
       name: 'Company Industry, 0 selected',
     }));
     expect(screen.getByRole('checkbox', {
@@ -242,7 +169,7 @@ describe('JobBrowser governed filters', () => {
     expect(api.apiFetchJson).not.toHaveBeenCalled();
   });
 
-  it('renders governed Employment Types and Canonical Job Taxonomy without legacy fallback', async () => {
+  it('renders governed Employment Types without legacy fallback', async () => {
     render(<JobBrowser />);
 
     const assignedCard = await screen.findByRole('article', {
@@ -250,11 +177,6 @@ describe('JobBrowser governed filters', () => {
     });
     expect(within(assignedCard).getByText('Full-time')).toBeInTheDocument();
     expect(within(assignedCard).getByText('Permanent')).toBeInTheDocument();
-    expect(
-      within(assignedCard).getByText(
-        'Canonical Job Taxonomy: Technology / Software Development / Backend Development',
-      ),
-    ).toBeInTheDocument();
     expect(within(assignedCard).queryByText('Legacy Contract')).not.toBeInTheDocument();
     expect(
       within(assignedCard).queryByText('Legacy / AI / Category'),
@@ -266,16 +188,10 @@ describe('JobBrowser governed filters', () => {
     expect(
       within(unassignedCard).getByText('Employment Type: Unknown'),
     ).toBeInTheDocument();
-    expect(
-      within(unassignedCard).getByText('Canonical Job Taxonomy: Unassigned'),
-    ).toBeInTheDocument();
 
     const unavailableCard = screen.getByRole('article', {
       name: 'Operations Coordinator at Legacy Company',
     });
-    expect(
-      within(unavailableCard).getByText('Canonical Job Taxonomy: Unavailable'),
-    ).toBeInTheDocument();
     expect(
       within(unavailableCard).queryByText('Legacy Operations Taxonomy'),
     ).not.toBeInTheDocument();
@@ -301,7 +217,6 @@ describe('JobBrowser governed filters', () => {
 
   it('submits every governed multi-value filter through the Job Browser scope', async () => {
     const user = userEvent.setup();
-    const domain = taxonomyFixture.job_tree.domains[0];
     const industryNode = taxonomyFixture.company_tree.nodes[0];
 
     render(<JobBrowser />);
@@ -320,12 +235,6 @@ describe('JobBrowser governed filters', () => {
       name: 'JobsDB · Information Technology (3 jobs)',
     }));
     await user.click(screen.getByRole('button', {
-      name: 'Canonical Job Taxonomy, 0 selected',
-    }));
-    await user.click(screen.getByRole('checkbox', {
-      name: 'Job Domain · Accounting (3 jobs)',
-    }));
-    await user.click(screen.getByRole('button', {
       name: 'Company Industry, 0 selected',
     }));
     await user.click(screen.getByRole('checkbox', {
@@ -340,18 +249,14 @@ describe('JobBrowser governed filters', () => {
       expect.objectContaining({
         employment_type_codes: ['full_time', 'permanent'],
         source_classification_ids: ['jobsdb:6281'],
-        canonical_domain_ids: [domain.code],
-        canonical_category_ids: [],
-        canonical_subcategory_ids: [],
         company_industry_node_ids: [industryNode.code],
         employment_type: '',
         industry: '',
-        subcategory_ids: [],
       }),
     );
   });
 
-  it('hydrates exact canonical route filters and responds to in-place route changes', async () => {
+  it('hydrates exact Skill route filters and responds to in-place route changes', async () => {
     window.sessionStorage.setItem(JOB_BROWSER_SESSION_KEY, JSON.stringify({
       version: 1,
       scope: {
@@ -386,21 +291,19 @@ describe('JobBrowser governed filters', () => {
     expect(request.scope.layers[0].structured_filters).toEqual(
       expect.objectContaining({
         skill_ids: ['python'],
-        canonical_subcategory_ids: [],
       }),
     );
     expect(request.scope.layers[0].text_expression).toBe('');
 
     rerender(
-      <JobBrowser routeHash="#jobs?canonical_subcategory_ids=job.backend" />,
+      <JobBrowser routeHash="#jobs?skill_ids=docker" />,
     );
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
     request = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
     expect(request.scope.layers[0].structured_filters).toEqual(
       expect.objectContaining({
-        skill_ids: [],
-        canonical_subcategory_ids: ['job.backend'],
+        skill_ids: ['docker'],
       }),
     );
   });

@@ -213,7 +213,7 @@ def _derive_excluded_details(
         normalized_source_name = authoritative_name or (
             str(source_name).strip() if source_name is not None else None
         ) or None
-        reason = str(error_message or "canonical_taxonomy_preflight_blocked")
+        reason = str(error_message or "job_enrichment_not_supported")
         key = (str(run_id), normalized_source_id, normalized_source_name, reason)
         group = grouped.setdefault(
             key,

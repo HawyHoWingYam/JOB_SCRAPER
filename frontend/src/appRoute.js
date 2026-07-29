@@ -5,21 +5,21 @@ export const VALID_APP_VIEWS = new Set([
   'companies',
   'ai',
   'classification',
+  'offertoday-keywords',
   'settings',
   'scheduler',
   'crawl-tasks',
 ]);
 
 const JOB_ROUTE_FILTER_KEYS = {
-  canonicalSubcategoryIds: 'canonical_subcategory_ids',
   skillIds: 'skill_ids',
 };
 const MAX_JOB_ROUTE_IDS = 20;
 const STABLE_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
-const DEFAULT_CLASSIFICATION_TARGET = 'job_taxonomy';
+const DEFAULT_CLASSIFICATION_TARGET = 'skill';
 const VALID_CLASSIFICATION_TARGETS = new Set([
   DEFAULT_CLASSIFICATION_TARGET,
-  'skill',
+  'company_industry',
 ]);
 
 function normalizeStableCodes(values) {
@@ -52,14 +52,11 @@ export function parseJobsRoute(hash = window.location.hash) {
   const rawHash = String(hash || '').replace(/^#/, '');
   const [rawView, rawQuery = ''] = rawHash.split('?', 2);
   if (rawView.trim().toLowerCase() !== 'jobs') {
-    return { canonicalSubcategoryIds: [], skillIds: [] };
+    return { skillIds: [] };
   }
 
   const searchParams = new URLSearchParams(rawQuery);
   return {
-    canonicalSubcategoryIds: normalizeStableCodes(
-      searchParams.getAll(JOB_ROUTE_FILTER_KEYS.canonicalSubcategoryIds),
-    ),
     skillIds: normalizeStableCodes(
       searchParams.getAll(JOB_ROUTE_FILTER_KEYS.skillIds),
     ),
@@ -67,13 +64,9 @@ export function parseJobsRoute(hash = window.location.hash) {
 }
 
 export function hashForJobsRoute({
-  canonicalSubcategoryIds = [],
   skillIds = [],
 } = {}) {
   const searchParams = new URLSearchParams();
-  for (const code of normalizeStableCodes(canonicalSubcategoryIds)) {
-    searchParams.append(JOB_ROUTE_FILTER_KEYS.canonicalSubcategoryIds, code);
-  }
   for (const code of normalizeStableCodes(skillIds)) {
     searchParams.append(JOB_ROUTE_FILTER_KEYS.skillIds, code);
   }

@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.job_intelligence.current_taxonomies.read_model import (
     CurrentCompanyIndustryStateView,
     CurrentJobSkillStateView,
-    CurrentJobTaxonomyStateView,
     CurrentTaxonomyReader,
 )
 from app.job_intelligence.source_attributes import (
@@ -21,33 +20,6 @@ from app.models.source_job_attributes import (
     JobEmploymentType,
     JobSourceAttributeProjection,
 )
-
-
-def _current_job_state_payload(
-    state: CurrentJobTaxonomyStateView | None,
-) -> dict[str, object] | None:
-    if state is None:
-        return None
-    assignment = state.assignment
-    return {
-        "job_id": str(state.job_id),
-        "state": state.state,
-        "assignment": (
-            {
-                "job_id": str(assignment.job_id),
-                "taxonomy_code": assignment.taxonomy_code,
-                "method": assignment.method,
-                "breadcrumb": dict(assignment.breadcrumb),
-                "model_provenance": (
-                    dict(assignment.model_provenance)
-                    if assignment.model_provenance is not None
-                    else None
-                ),
-            }
-            if assignment is not None
-            else None
-        ),
-    }
 
 
 def _current_company_state_payload(
@@ -122,8 +94,6 @@ class JobIntelligenceDomainAvailabilityView:
 class JobIntelligenceJobDetailView:
     source_attributes: SourceJobAttributesView | None
     source_attributes_availability: JobIntelligenceDomainAvailabilityView
-    canonical_taxonomy: CurrentJobTaxonomyStateView | None
-    canonical_taxonomy_availability: JobIntelligenceDomainAvailabilityView
     company_industries: CurrentCompanyIndustryStateView | None
     company_industries_availability: JobIntelligenceDomainAvailabilityView
     skill_state: CurrentJobSkillStateView | None
@@ -134,9 +104,6 @@ class JobIntelligenceJobDetailView:
         skill_payload = _current_skill_state_payload(self.skill_state)
         return {
             **source_payload,
-            "canonical_taxonomy": (
-                _current_job_state_payload(self.canonical_taxonomy)
-            ),
             "company_industries": (
                 _current_company_state_payload(self.company_industries)
             ),
@@ -151,9 +118,6 @@ class JobIntelligenceJobDetailView:
             ),
             "job_intelligence_availability": {
                 "source_attributes": (self.source_attributes_availability.to_payload()),
-                "canonical_taxonomy": (
-                    self.canonical_taxonomy_availability.to_payload()
-                ),
                 "company_industries": (
                     self.company_industries_availability.to_payload()
                 ),
@@ -229,7 +193,6 @@ class JobIntelligenceProductReadModel:
         company_id: UUID,
     ) -> JobIntelligenceJobDetailView:
         source_attributes, source_availability = self._source_attributes(job_id)
-        canonical_taxonomy, canonical_availability = self._canonical_job_state(job_id)
         company_industries, industry_availability = self._company_industry_state(
             company_id
         )
@@ -237,8 +200,6 @@ class JobIntelligenceProductReadModel:
         return JobIntelligenceJobDetailView(
             source_attributes=source_attributes,
             source_attributes_availability=source_availability,
-            canonical_taxonomy=canonical_taxonomy,
-            canonical_taxonomy_availability=canonical_availability,
             company_industries=company_industries,
             company_industries_availability=industry_availability,
             skill_state=skill_state,
@@ -268,26 +229,6 @@ class JobIntelligenceProductReadModel:
                 "company_industry_availability": available,
             }
             for company_id in ordered_ids
-        }
-
-    def get_canonical_job_states(
-        self,
-        job_ids: tuple[UUID, ...] | list[UUID],
-    ) -> dict[UUID, dict[str, object]]:
-        ordered_ids = tuple(dict.fromkeys(job_ids))
-        if not ordered_ids:
-            return {}
-        states = CurrentTaxonomyReader(self.db).get_job_taxonomy_states(ordered_ids)
-        available = JobIntelligenceDomainAvailabilityView(
-            available=True,
-            unavailable_code=None,
-        ).to_payload()
-        return {
-            job_id: {
-                "canonical_taxonomy": _current_job_state_payload(states[job_id]),
-                "canonical_taxonomy_availability": available,
-            }
-            for job_id in ordered_ids
         }
 
     def get_employment_type_states(
@@ -381,19 +322,6 @@ class JobIntelligenceProductReadModel:
                 available=False,
                 unavailable_code="SOURCE_JOB_ATTRIBUTES_NOT_PROJECTED",
             )
-        return view, JobIntelligenceDomainAvailabilityView(
-            available=True,
-            unavailable_code=None,
-        )
-
-    def _canonical_job_state(
-        self,
-        job_id: UUID,
-    ) -> tuple[
-        CurrentJobTaxonomyStateView | None,
-        JobIntelligenceDomainAvailabilityView,
-    ]:
-        view = CurrentTaxonomyReader(self.db).get_job_taxonomy_state(job_id)
         return view, JobIntelligenceDomainAvailabilityView(
             available=True,
             unavailable_code=None,

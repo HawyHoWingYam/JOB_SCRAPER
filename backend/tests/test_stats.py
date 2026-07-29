@@ -12,8 +12,6 @@ from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.compiler import compiles
 
 from app.api.stats import (
-    get_dashboard_category_stats,
-    get_overview,
     get_skill_dashboard_bucket,
     get_skill_stats,
     router,
@@ -24,7 +22,6 @@ from app.models.company import Company
 from app.models.current_taxonomy import (
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
-    CurrentJobTaxonomyAssignment,
     CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
 )
@@ -32,9 +29,6 @@ from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
 from app.models.manual_job import ManualJobEvidence
 from app.models.source_job_attributes import JobSourceAttributeProjection
-from app.services.classification_domain_adapters import (
-    JobTaxonomyClassificationAdapter,
-)
 
 
 @compiles(SQLAlchemyUUID, "sqlite")
@@ -63,7 +57,6 @@ def stats_db():
         ManualJobEvidence.__table__,
         JobSourceAttributeProjection.__table__,
         CurrentTaxonomyNodeRecord.__table__,
-        CurrentJobTaxonomyAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
         CurrentJobSkillMention.__table__,
@@ -148,21 +141,6 @@ def _node(
     )
 
 
-def _assign_taxonomy(db, job: Job, code: str) -> None:
-    db.add(
-        CurrentJobTaxonomyAssignment(
-            job_id=job.id,
-            taxonomy="job",
-            taxonomy_code=code,
-            method="ai",
-            evidence_hash="t" * 64,
-            source_evidence_refs=[],
-            mapping_ids=[],
-            breadcrumb={"subcategory": {"code": code}},
-        )
-    )
-
-
 def _assign_skill(db, job: Job, code: str) -> None:
     db.add(
         CurrentJobSkillAssignment(
@@ -206,229 +184,6 @@ def _candidate_mention(db, job: Job, candidate: CurrentSkillCandidate) -> None:
             evidence_hash=uuid4().hex * 2,
         )
     )
-
-
-@pytest.mark.asyncio
-async def test_overview_and_taxonomy_share_non_deleted_job_population(stats_db):
-    company = _company(stats_db)
-    _job(stats_db, company)
-    _job(stats_db, company, deleted=True)
-    stats_db.commit()
-
-    overview = await get_overview(stats_db)
-    taxonomy = await get_dashboard_category_stats(stats_db)
-
-    assert overview["total_jobs"] == 1
-    assert taxonomy["population_total"] == overview["total_jobs"]
-
-
-@pytest.mark.asyncio
-async def test_dashboard_category_stats_expose_coverage_readiness_and_other_items(
-    stats_db,
-):
-    company = _company(stats_db)
-    stats_db.add_all(
-        [
-            _node("job", "domain", "Technology", "domain"),
-            _node(
-                "job",
-                "category",
-                "Engineering",
-                "category",
-                parent_code="domain",
-            ),
-            *[
-                _node(
-                    "job",
-                    f"subcategory-{index}",
-                    f"Subcategory {index}",
-                    "subcategory",
-                    parent_code="category",
-                    assignable=True,
-                )
-                for index in range(8)
-            ],
-        ]
-    )
-    stats_db.flush()
-
-    for index in range(8):
-        job = _job(stats_db, company)
-        _assign_taxonomy(stats_db, job, f"subcategory-{index}")
-    _job(stats_db, company, ready=True)
-    _job(stats_db, company)
-    deleted = _job(stats_db, company, deleted=True)
-    _assign_taxonomy(stats_db, deleted, "subcategory-0")
-    stats_db.commit()
-
-    payload = await get_dashboard_category_stats(stats_db)
-
-    assert payload["population_total"] == 10
-    assert payload["assigned_total"] == 8
-    assert payload["unassigned_total"] == 2
-    assert payload["assignment_coverage"] == 80
-    assert payload["classification_ready_unassigned_total"] == 1
-    assert [item["code"] for item in payload["top_categories"]] == [
-        f"subcategory-{index}" for index in range(6)
-    ]
-    assert payload["other_categories"] == {
-        "count": 2,
-        "bucket_count": 2,
-        "share_of_assigned": 25,
-        "items": [
-            {
-                "code": "subcategory-6",
-                "path": "Technology / Engineering / Subcategory 6",
-                "label": "Subcategory 6",
-                "count": 1,
-                "share_of_assigned": 12,
-            },
-            {
-                "code": "subcategory-7",
-                "path": "Technology / Engineering / Subcategory 7",
-                "label": "Subcategory 7",
-                "count": 1,
-                "share_of_assigned": 12,
-            },
-        ],
-    }
-
-
-@pytest.mark.asyncio
-async def test_dashboard_category_readiness_uses_accepted_assignment_semantics(
-    stats_db,
-):
-    company = _company(stats_db)
-    stats_db.add_all(
-        [
-            _node("job", "domain", "Technology", "domain"),
-            _node(
-                "job",
-                "category",
-                "Engineering",
-                "category",
-                parent_code="domain",
-            ),
-            _node(
-                "job",
-                "accepted",
-                "Accepted",
-                "subcategory",
-                parent_code="category",
-                assignable=True,
-            ),
-            _node(
-                "job",
-                "inactive",
-                "Inactive",
-                "subcategory",
-                parent_code="category",
-                assignable=True,
-                active=False,
-            ),
-        ]
-    )
-    stats_db.flush()
-
-    accepted = _job(stats_db, company, ready=True)
-    effectively_unassigned = _job(stats_db, company, ready=True)
-    _assign_taxonomy(stats_db, accepted, "accepted")
-    _assign_taxonomy(stats_db, effectively_unassigned, "inactive")
-    stats_db.commit()
-
-    payload = await get_dashboard_category_stats(stats_db)
-
-    assert payload["population_total"] == 2
-    assert payload["assigned_total"] == 1
-    assert payload["unassigned_total"] == 1
-    assert payload["classification_ready_unassigned_total"] == 1
-
-
-@pytest.mark.asyncio
-async def test_dashboard_and_taxonomy_preview_share_the_ready_population(stats_db):
-    company = _company(stats_db)
-    stats_db.add_all(
-        [
-            _node("job", "domain", "Technology", "domain"),
-            _node(
-                "job",
-                "category",
-                "Engineering",
-                "category",
-                parent_code="domain",
-            ),
-            _node(
-                "job",
-                "accepted",
-                "Accepted",
-                "subcategory",
-                parent_code="category",
-                assignable=True,
-            ),
-            _node(
-                "job",
-                "inactive",
-                "Inactive",
-                "subcategory",
-                parent_code="category",
-                assignable=True,
-                active=False,
-            ),
-            _node(
-                "job",
-                "unassignable",
-                "Unassignable",
-                "subcategory",
-                parent_code="category",
-            ),
-        ]
-    )
-    stats_db.flush()
-
-    ready_jobsdb = _job(stats_db, company, ready=True)
-    ready_offertoday = _job(
-        stats_db,
-        company,
-        ready=True,
-        source_site="offertoday",
-    )
-    _job(stats_db, company)
-    _job(stats_db, company, ready=True, deleted=True)
-    accepted = _job(stats_db, company, ready=True)
-    stale_inactive = _job(stats_db, company, ready=True)
-    stale_unassignable = _job(stats_db, company, ready=True)
-    _assign_taxonomy(stats_db, accepted, "accepted")
-    _assign_taxonomy(stats_db, stale_inactive, "inactive")
-    _assign_taxonomy(stats_db, stale_unassignable, "unassignable")
-    stats_db.commit()
-
-    adapter = JobTaxonomyClassificationAdapter()
-    selected = adapter.select_candidates(stats_db, filters={}, limit=100)
-    dashboard = await get_dashboard_category_stats(stats_db)
-    expected_ids = {
-        str(ready_jobsdb.id),
-        str(ready_offertoday.id),
-        str(stale_inactive.id),
-        str(stale_unassignable.id),
-    }
-
-    assert {candidate.subject_id for candidate in selected} == expected_ids
-    assert dashboard["classification_ready_unassigned_total"] == len(selected)
-    assert {
-        candidate.subject_id
-        for candidate in adapter.select_candidates(
-            stats_db,
-            filters={"source_sites": ["offertoday"]},
-            limit=100,
-        )
-    } == {str(ready_offertoday.id)}
-    assert len(
-        adapter.select_candidates(
-            stats_db,
-            filters={"source_sites": ["jobsdb"]},
-            limit=1,
-        )
-    ) == 1
 
 
 @pytest.mark.asyncio

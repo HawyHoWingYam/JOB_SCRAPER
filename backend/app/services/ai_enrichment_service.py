@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.ai.job_insight_extractor import get_job_insight_extractor
 from app.ai.llm_client import LLMResponseFormatError, LLMUpstreamError, get_llm_status
 from app.job_intelligence.current_taxonomies.enrichment import (
-    CurrentTaxonomyEnrichment,
+    CurrentSkillEnrichment,
 )
 from app.job_intelligence.enrichment_evidence import JobEnrichmentEvidence
 from app.job_intelligence.foundation import normalized_content_hash
@@ -54,23 +54,17 @@ class AIEnrichmentService:
                 source_subclassification_name=job.source_subclassification_name or "",
                 source_classification_name=job.source_classification_name or "",
             )
-            source_attributes = enrichment_input.evidence
-            current_taxonomies = CurrentTaxonomyEnrichment(db)
-            classifier_context = current_taxonomies.build_job_context(source_attributes)
-            category_candidates = classifier_context.prompt_payload
-            skill_candidates = current_taxonomies.build_skill_prompt(
+            skill_enrichment = CurrentSkillEnrichment(db)
+            skill_candidates = skill_enrichment.build_skill_prompt(
                 role_mode=role_mode,
             )
             insight = await self.insight_extractor.extract(
                 title=job.title,
                 description=job.description or "",
-                taxonomy_candidates=category_candidates,
                 skill_taxonomy_candidates=skill_candidates,
             )
 
-            classification = insight.get("classification") or {}
             llm_status = get_llm_status("jobs")
-            results["classification"] = classification
             extracted_skills = insight.get("skills") or []
             results["skills"] = {
                 "skills": extracted_skills,
@@ -78,15 +72,6 @@ class AIEnrichmentService:
             }
 
             model_provenance = self._model_provenance(llm_status)
-            results["canonical_taxonomy"] = (
-                current_taxonomies.assign_job_from_classification(
-                    job_id=job.id,
-                    evidence=source_attributes,
-                    classification=classification,
-                    context=classifier_context,
-                    model_provenance=model_provenance,
-                )
-            )
             job.ai_enriched_at = utc_now()
 
             job.ai_summary = insight.get("summary")
@@ -117,7 +102,7 @@ class AIEnrichmentService:
                 if isinstance(raw_confidence, (int, float))
                 else None
             )
-            results["skill_projection"] = current_taxonomies.replace_job_skills(
+            results["skill_projection"] = skill_enrichment.replace_job_skills(
                 job_id=job.id,
                 extracted_skills=extracted_skills,
                 confidence=confidence,

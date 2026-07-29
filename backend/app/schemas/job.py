@@ -8,7 +8,6 @@ from uuid import UUID
 from app.schemas.current_taxonomy import (
     CurrentCompanyIndustryStateSchema,
     CurrentJobSkillStateSchema,
-    CurrentJobTaxonomyStateSchema,
 )
 from app.company_website import normalize_company_website
 
@@ -211,9 +210,6 @@ class JobIntelligenceAvailabilitySchema(BaseModel):
     source_attributes: JobIntelligenceDomainAvailabilitySchema = Field(
         default_factory=JobIntelligenceDomainAvailabilitySchema
     )
-    canonical_taxonomy: JobIntelligenceDomainAvailabilitySchema = Field(
-        default_factory=JobIntelligenceDomainAvailabilitySchema
-    )
     company_industries: JobIntelligenceDomainAvailabilitySchema = Field(
         default_factory=JobIntelligenceDomainAvailabilitySchema
     )
@@ -268,7 +264,6 @@ class JobDetailSchema(JobSchema):
     source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
         default_factory=list
     )
-    canonical_taxonomy: Optional[CurrentJobTaxonomyStateSchema] = None
     company_industries: Optional[CurrentCompanyIndustryStateSchema] = None
     skill_state: Optional[CurrentJobSkillStateSchema] = None
     job_intelligence_availability: JobIntelligenceAvailabilitySchema = Field(
@@ -280,7 +275,6 @@ class JobDetailSchema(JobSchema):
     def require_composed_governed_states(cls, value):
         if isinstance(value, Mapping):
             required_fields = {
-                "canonical_taxonomy",
                 "company_industries",
                 "skill_state",
                 "job_intelligence_availability",

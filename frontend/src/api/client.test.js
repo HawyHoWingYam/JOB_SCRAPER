@@ -88,7 +88,7 @@ describe('api client', () => {
     }));
 
     await expect(
-      apiFetchJson('/api/job-intelligence/job-taxonomy/tree', {
+      apiFetchJson('/api/job-intelligence/skills/tree', {
         retryTransient: true,
       }),
     ).rejects.toMatchObject({ status: 431 });

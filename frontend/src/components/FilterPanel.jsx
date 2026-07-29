@@ -25,66 +25,6 @@ function sourceClassificationLabel(option) {
     return `${formatSourceLabel(option.source)} · ${option.path || option.label}`;
 }
 
-function canonicalTaxonomyOptions(tree) {
-    if (Array.isArray(tree)) {
-        const byId = new Map(tree.map((option) => [option.id, option]));
-        const breadcrumbFor = (option) => {
-            const labels = [option.label];
-            const visited = new Set([option.id]);
-            let parent = byId.get(option.parent_id);
-            while (parent && !visited.has(parent.id)) {
-                visited.add(parent.id);
-                labels.unshift(parent.label);
-                parent = byId.get(parent.parent_id);
-            }
-            return labels.join(' / ');
-        };
-        const levelLabels = {
-            domain: 'Job Domain',
-            category: 'Job Category',
-            subcategory: 'Job Subcategory',
-        };
-        return tree.map((option) => {
-            const breadcrumb = breadcrumbFor(option);
-            return {
-                ...option,
-                label: `${levelLabels[option.level] || 'Job Taxonomy'} · ${breadcrumb}`,
-                chipLabel: breadcrumb,
-            };
-        });
-    }
-    return (tree?.domains || []).flatMap((domain) => [
-        {
-            id: domain.id,
-            parent_id: null,
-            level: 'domain',
-            label: `Job Domain · ${domain.label}`,
-            chipLabel: domain.label,
-            count: domain.count,
-        },
-        ...(domain.categories || []).flatMap((category) => [
-            {
-                id: category.id,
-                parent_id: domain.id,
-                level: 'category',
-                label: `Job Category · ${domain.label} / ${category.label}`,
-                chipLabel: `${domain.label} / ${category.label}`,
-                count: category.count,
-            },
-            ...(category.subcategories || []).map((subcategory) => ({
-                id: subcategory.id,
-                parent_id: category.id,
-                level: 'subcategory',
-                label:
-                    `Job Subcategory · ${domain.label} / ${category.label} / ${subcategory.label}`,
-                chipLabel:
-                    `${domain.label} / ${category.label} / ${subcategory.label}`,
-                count: subcategory.count,
-            })),
-        ]),
-    ]);
-}
-
 function normalizeEmploymentTypeOption(option) {
     if (typeof option === 'string') {
         return {
@@ -133,11 +73,6 @@ function FilterPanel({
     const employmentTypeOptions = (filterOptions.employment_types || [])
         .map(normalizeEmploymentTypeOption)
         .filter(Boolean);
-    const taxonomyOptions = canonicalTaxonomyOptions(
-        filterOptions.canonical_job_taxonomy?.length
-            ? filterOptions.canonical_job_taxonomy
-            : filterOptions.canonical_taxonomy,
-    );
     const sourceOptions = filterOptions.sources?.length
         ? [SOURCE_OPTIONS[0], ...filterOptions.sources.map((option) => ({
             value: option.id,
@@ -177,25 +112,6 @@ function FilterPanel({
         });
     };
 
-    const handleCanonicalTaxonomyChange = (selectedIds) => {
-        const selectedOptions = taxonomyOptions.filter((option) =>
-            selectedIds.includes(option.id),
-        );
-        onFilterChange({
-            ...filters,
-            canonical_domain_ids: selectedOptions
-                .filter((option) => option.level === 'domain')
-                .map((option) => option.id),
-            canonical_category_ids: selectedOptions
-                .filter((option) => option.level === 'category')
-                .map((option) => option.id),
-            canonical_subcategory_ids: selectedOptions
-                .filter((option) => option.level === 'subcategory')
-                .map((option) => option.id),
-            subcategory_ids: [],
-        });
-    };
-
     const activeFilters = [
         filters.source_site && `Source: ${formatSourceLabel(filters.source_site)}`,
         filters.source_classification_ids?.length > 0 &&
@@ -215,21 +131,6 @@ function FilterPanel({
                 )
                 .join(', ')}`,
         filters.employment_type && `Employment Type: ${filters.employment_type}`,
-        [
-            ...(filters.canonical_domain_ids || []),
-            ...(filters.canonical_category_ids || []),
-            ...(filters.canonical_subcategory_ids || []),
-        ].length > 0 &&
-            `Canonical Job Taxonomy: ${[
-                ...(filters.canonical_domain_ids || []),
-                ...(filters.canonical_category_ids || []),
-                ...(filters.canonical_subcategory_ids || []),
-            ]
-                .map((id) =>
-                    taxonomyOptions.find((option) => option.id === id)
-                        ?.chipLabel || id,
-                )
-                .join(', ')}`,
         filters.company_industry_node_ids?.length > 0 &&
             `Company Industry: ${filters.company_industry_node_ids
                 .map(companyIndustryLabel)
@@ -257,7 +158,7 @@ function FilterPanel({
                         <p className="filter-card-title">Search Lenses</p>
                         <h3>Filters</h3>
                         <p className="filter-card-hint">
-                            Active taxonomy, industry, date, and experience constraints.
+                            Active source, industry, date, and experience constraints.
                         </p>
                     </div>
                     <div className="filter-deck-actions">
@@ -331,18 +232,6 @@ function FilterPanel({
                                 : []),
                         ]}
                         onChange={handleEmploymentTypeChange}
-                        disabled={isLoading}
-                    />
-
-                    <HierarchyFacetSelector
-                        title="Canonical Job Taxonomy"
-                        options={taxonomyOptions}
-                        selectedIds={[
-                            ...(filters.canonical_domain_ids || []),
-                            ...(filters.canonical_category_ids || []),
-                            ...(filters.canonical_subcategory_ids || []),
-                        ]}
-                        onChange={handleCanonicalTaxonomyChange}
                         disabled={isLoading}
                     />
 

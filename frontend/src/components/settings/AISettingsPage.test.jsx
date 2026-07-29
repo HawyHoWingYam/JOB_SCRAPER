@@ -6,10 +6,6 @@ vi.mock("../charts/SkillChart", () => ({
   default: () => <div>Skill Chart Stub</div>,
 }));
 
-vi.mock("../charts/CategoryChart", () => ({
-  default: () => <div>Category Chart Stub</div>,
-}));
-
 import App from "../../App";
 import AISettingsPage from "./AISettingsPage";
 

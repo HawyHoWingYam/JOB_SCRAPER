@@ -14,11 +14,6 @@ import './ClassificationBatchesPage.css';
 
 const DOMAINS = [
   {
-    id: 'job_taxonomy',
-    label: 'Job Taxonomy',
-    description: '给还没有大分类的 Job 自动分类。',
-  },
-  {
     id: 'company_industry',
     label: 'Company Industry',
     description: '根据已有来源证据，为 Company 补上行业分类。',
@@ -279,7 +274,6 @@ export default function ClassificationBatchesPage({
     if (domain === nextDomain) return;
     invalidatePreview();
     setDomain(nextDomain);
-    if (nextDomain === 'company_industry') return;
     if (onNavigateTarget) {
       onNavigateTarget(nextDomain);
     } else if (typeof window !== 'undefined') {

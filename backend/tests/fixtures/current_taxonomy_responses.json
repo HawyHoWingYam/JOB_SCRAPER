@@ -1,31 +1,4 @@
 {
-  "job_tree": {
-    "domains": [
-      {
-        "id": "accounting",
-        "code": "accounting",
-        "label": "Accounting",
-        "order": 1,
-        "categories": [
-          {
-            "id": "accounting.financial_accounting",
-            "code": "accounting.financial_accounting",
-            "label": "Financial Accounting",
-            "order": 1,
-            "subcategories": [
-              {
-                "id": "accounting.financial_accounting.accounts_payable",
-                "code": "accounting.financial_accounting.accounts_payable",
-                "label": "Accounts Payable",
-                "order": 1,
-                "is_assignable": true
-              }
-            ]
-          }
-        ]
-      }
-    ]
-  },
   "company_tree": {
     "nodes": [
       {

@@ -28,9 +28,6 @@ function createJobPayload(overrides = {}) {
     skills: ['Python', 'FastAPI'],
     skill_candidate_mentions: [],
     ai_summary: 'Builds internal platform services and backend APIs.',
-    job_taxonomy: {
-      path: 'Information & Communication Technology / Software Development / Backend Development',
-    },
     ai_enriched_at: '2026-04-15T12:34:56Z',
     source_classification_name: 'Information & Communication Technology',
     source_subclassification_name: 'Platform Engineering',
@@ -87,16 +84,6 @@ function createSkillState(overrides = {}) {
     ...productFixture.job_detail.skill_state,
     skills: [],
     candidate_mentions: [],
-    ...overrides,
-  };
-}
-
-function createUnassignedCanonicalState(overrides = {}) {
-  return {
-    job_id: productFixture.job_detail.id,
-    state: 'unassigned',
-    assignment: null,
-    reasons: [],
     ...overrides,
   };
 }
@@ -295,15 +282,6 @@ describe('JobDetailModal', () => {
     );
     expect(roleEvidence).toHaveTextContent('Not declared Primary');
 
-    const canonical = screen.getByRole('region', {
-      name: 'Canonical Job Taxonomy',
-    });
-    expect(canonical).toHaveTextContent(
-      'Technology / Software Development / Backend Development',
-    );
-    expect(canonical).toHaveTextContent('Assignment method: Constrained AI');
-    expect(within(canonical).queryByRole('link')).not.toBeInTheDocument();
-
     const industries = screen.getByRole('region', { name: 'Company Industries' });
     expect(industries).toHaveTextContent('J · Information and communications');
     expect(industries).toHaveTextContent('Primary Company Industry');
@@ -342,30 +320,16 @@ describe('JobDetailModal', () => {
     expect(within(industries).getAllByText('Additional Company Industry')).toHaveLength(2);
   });
 
-  it('renders Unassigned states without exposing retired review queues', async () => {
+  it('renders unassigned Company Industry state without exposing retired review queues', async () => {
     renderModalWithPayload({
       ...productFixture.job_detail,
-      canonical_taxonomy: {
-        job_id: productFixture.job_detail.id,
-        state: 'unassigned',
-        assignment: null,
-        reasons: ['classifier_provenance_missing'],
-      },
       company_industries: {
         company_id: productFixture.job_detail.company_id,
         assignments: [],
       },
     });
 
-    const canonical = await screen.findByRole('region', {
-      name: 'Canonical Job Taxonomy',
-    });
-    expect(canonical).toHaveTextContent('Unassigned Canonical Taxonomy');
-    expect(canonical).toHaveTextContent('Classifier Provenance Missing');
-    expect(within(canonical).queryByRole('link', { name: 'Open review item' }))
-      .not.toBeInTheDocument();
-
-    const industries = screen.getByRole('region', { name: 'Company Industries' });
+    const industries = await screen.findByRole('region', { name: 'Company Industries' });
     expect(industries).toHaveTextContent('No governed Company Industry assignment');
     expect(within(industries).queryByRole('link', { name: 'Open Industry review item' }))
       .not.toBeInTheDocument();
@@ -373,17 +337,12 @@ describe('JobDetailModal', () => {
       .not.toBeInTheDocument();
   });
 
-  it('shows governed domains as unavailable without consulting legacy values', async () => {
+  it('shows Company Industry as unavailable without consulting legacy values', async () => {
     renderModalWithPayload({
       ...productFixture.job_detail,
-      canonical_taxonomy: null,
       company_industries: null,
       job_intelligence_availability: {
         ...productFixture.job_detail.job_intelligence_availability,
-        canonical_taxonomy: {
-          available: false,
-          unavailable_code: 'CANONICAL_TAXONOMY_NOT_ACTIVE',
-        },
         company_industries: {
           available: false,
           unavailable_code: 'COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE',
@@ -391,13 +350,7 @@ describe('JobDetailModal', () => {
       },
     });
 
-    const canonical = await screen.findByRole('region', {
-      name: 'Canonical Job Taxonomy',
-    });
-    expect(canonical).toHaveTextContent(
-      'Unavailable (CANONICAL_TAXONOMY_NOT_ACTIVE)',
-    );
-    const industries = screen.getByRole('region', { name: 'Company Industries' });
+    const industries = await screen.findByRole('region', { name: 'Company Industries' });
     expect(industries).toHaveTextContent(
       'Unavailable (COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE)',
     );
@@ -412,7 +365,6 @@ describe('JobDetailModal', () => {
         skill_candidate_mentions: [],
         skill_state: createSkillState(),
         ai_summary: null,
-        job_taxonomy: null,
         experience_level: null,
         experience_summary: null,
       }),
@@ -431,8 +383,6 @@ describe('JobDetailModal', () => {
         skill_candidate_mentions: [],
         skill_state: createSkillState(),
         ai_summary: null,
-        job_taxonomy: null,
-        canonical_taxonomy: createUnassignedCanonicalState(),
         experience_level: 'not_specified',
         experience_summary: null,
       }),
@@ -441,7 +391,6 @@ describe('JobDetailModal', () => {
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
     expect(screen.getByText('No technical skills extracted from this posting')).toBeInTheDocument();
     expect(screen.getByText('No AI summary extracted from this posting')).toBeInTheDocument();
-    expect(screen.getByText('Unassigned Canonical Taxonomy')).toBeInTheDocument();
     expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
   });
 
@@ -535,9 +484,6 @@ describe('JobDetailModal', () => {
         {
           ...productFixture.job_recommendations.recommendations[0],
           employment_type: 'Legacy Contract',
-          job_taxonomy: {
-            path: 'Legacy / AI / Category',
-          },
         },
       ],
     );
@@ -549,9 +495,6 @@ describe('JobDetailModal', () => {
     const relatedJobCard = screen.getByRole('article');
     expect(relatedJobCard).toHaveTextContent('Full-time');
     expect(relatedJobCard).toHaveTextContent('Permanent');
-    expect(relatedJobCard).toHaveTextContent(
-      'Technology / Software Development / Backend Development',
-    );
     expect(relatedJobCard).not.toHaveTextContent('Legacy Contract');
     expect(relatedJobCard).not.toHaveTextContent('Legacy / AI / Category');
   });
@@ -568,9 +511,6 @@ describe('JobDetailModal', () => {
           location: 'Hong Kong',
           employment_type: 'Full-time',
           posted_date: '2026-04-15T00:00:00Z',
-          job_taxonomy: {
-            path: 'Information & Communication Technology / Software Development / Backend Development',
-          },
         },
       ],
     );

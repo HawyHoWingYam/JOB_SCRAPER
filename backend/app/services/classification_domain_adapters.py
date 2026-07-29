@@ -11,14 +11,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, load_only
 
 from app.ai.llm_client import get_llm_client
-from app.ai.job_insight_extractor import get_job_insight_extractor
-from app.ai.llm_client import get_llm_status
 from app.job_intelligence.current_taxonomies.contracts import (
     CurrentJobSkillInput,
     ReplaceCurrentJobSkillsCommand,
 )
 from app.job_intelligence.current_taxonomies.enrichment import (
-    CurrentTaxonomyEnrichment,
     normalize_exact_skill_key,
     normalize_skill_text,
 )
@@ -35,7 +32,6 @@ from app.job_intelligence.current_taxonomies.company_mapping_manifest import (
     CompanyIndustryMappingResolver,
     load_company_industry_mapping_manifest,
 )
-from app.job_intelligence.source_attributes import SourceJobAttributes
 from app.models.company import Company
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
@@ -49,9 +45,6 @@ from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.classification_batch_runtime import (
     ClassificationCandidate,
     ClassificationCandidateSelection,
-)
-from app.services.job_taxonomy_classification_readiness import (
-    job_taxonomy_classification_ready_jobs,
 )
 from app.utils.time import utc_now
 
@@ -487,68 +480,6 @@ class SkillClassificationAdapter:
             )
 
 
-class JobTaxonomyClassificationAdapter:
-    domain = "job_taxonomy"
-
-    def select_candidates(
-        self,
-        db: Session,
-        *,
-        filters: dict[str, object],
-        limit: int,
-    ) -> tuple[ClassificationCandidate, ...]:
-        query = job_taxonomy_classification_ready_jobs()
-        source_sites = _string_filter(filters.get("source_sites"))
-        if source_sites:
-            query = query.where(Job.source_site.in_(source_sites))
-        rows = tuple(db.scalars(query.order_by(Job.created_at, Job.id).limit(limit)))
-        return tuple(
-            ClassificationCandidate(
-                subject_id=str(job.id),
-                subject_label=job.title,
-                payload={"source_site": job.source_site},
-            )
-            for job in rows
-        )
-
-    async def process_candidate(
-        self,
-        db: Session,
-        candidate: ClassificationCandidate,
-    ) -> None:
-        job = db.get(Job, UUID(candidate.subject_id))
-        if job is None or job.is_deleted:
-            raise ValueError("Job is unavailable for taxonomy classification")
-        current = CurrentTaxonomyEnrichment(db)
-        evidence = SourceJobAttributes(db).get(job.id)
-        context = current.build_job_context(evidence)
-        insight = await get_job_insight_extractor().extract_taxonomy(
-            title=job.title,
-            description=job.description or "",
-            taxonomy_candidates=context.prompt_payload,
-        )
-        llm_status = get_llm_status("jobs")
-        provenance = {
-            key: value
-            for key, value in {
-                "provider": llm_status.get("active_provider"),
-                "name": llm_status.get("active_model"),
-            }.items()
-            if isinstance(value, str) and value.strip()
-        }
-        result = current.assign_job_from_classification(
-            job_id=job.id,
-            evidence=evidence,
-            classification=insight.get("classification"),
-            context=context,
-            model_provenance=provenance,
-        )
-        if result["state"] != "assigned":
-            raise ValueError(
-                "Job taxonomy classifier did not choose a reliable current code"
-            )
-
-
 class CompanyIndustryClassificationAdapter:
     domain = "company_industry"
 
@@ -837,7 +768,6 @@ def _string_filter(value: object) -> tuple[str, ...]:
 
 __all__ = [
     "CompanyIndustryClassificationAdapter",
-    "JobTaxonomyClassificationAdapter",
     "LLMSkillPlacementClassifier",
     "SkillClassificationAdapter",
     "SkillPlacementClassifier",

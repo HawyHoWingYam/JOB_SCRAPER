@@ -8,10 +8,8 @@ from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
 from app.schemas.job import (
     EmploymentTypeCode,
     EmploymentTypeSchema,
-    JobIntelligenceDomainAvailabilitySchema,
     SourceClassificationPathSchema,
 )
-from app.schemas.current_taxonomy import CurrentJobTaxonomyStateSchema
 
 SourceSiteFilter = Literal["jobsdb", "ctgoodjobs", "offertoday"]
 _EMPLOYMENT_TYPE_CODE_BY_LABEL = {
@@ -68,13 +66,7 @@ class JobSearchFiltersSchema(BaseModel):
     skill_ids: Optional[List[str]] = None
     technology_ids: Optional[List[str]] = None
     skill_category_ids: Optional[List[str]] = None
-    canonical_subcategory_ids: Optional[List[str]] = None
-    canonical_category_ids: Optional[List[str]] = None
-    canonical_domain_ids: Optional[List[str]] = None
     company_industry_node_ids: Optional[List[str]] = None
-    subcategory_ids: Optional[List[str]] = None
-    job_category_ids: Optional[List[str]] = None
-    domain_ids: Optional[List[str]] = None
     salary_min: Optional[int] = Field(default=None, ge=0)
     salary_max: Optional[int] = Field(default=None, ge=0)
 
@@ -198,9 +190,6 @@ class JobSearchFacetsSchema(BaseModel):
     source_classifications: List[JobSearchFacetOptionSchema] = Field(
         default_factory=list
     )
-    canonical_job_taxonomy: List[JobSearchFacetOptionSchema] = Field(
-        default_factory=list
-    )
     company_industries: List[JobSearchFacetOptionSchema] = Field(default_factory=list)
 
 
@@ -229,8 +218,6 @@ class JobWithCompanySchema(BaseModel):
         default_factory=list
     )
     employment_types: List[EmploymentTypeSchema] = Field(default_factory=list)
-    canonical_taxonomy: Optional[CurrentJobTaxonomyStateSchema]
-    canonical_taxonomy_availability: JobIntelligenceDomainAvailabilitySchema
 
 
 class JobSearchResponse(BaseModel):

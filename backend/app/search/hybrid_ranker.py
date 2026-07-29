@@ -61,7 +61,7 @@ def _lexical_score(query_tokens: set[str], job, company) -> float:
     )
 
 
-def _taxonomy_score(query_tokens: set[str], job) -> float:
+def _source_classification_score(query_tokens: set[str], job) -> float:
     return _overlap_score(
         query_tokens,
         [
@@ -81,13 +81,13 @@ def rank_hybrid_rows(rows, *, query_text: str, query_vector):
     for job, company, embedding_row in rows:
         semantic_score = _cosine_similarity(list(embedding_row.embedding), list(query_vector))
         lexical_score = _lexical_score(query_tokens, job, company)
-        taxonomy_score = _taxonomy_score(query_tokens, job)
+        source_classification_score = _source_classification_score(query_tokens, job)
         skills_score = _skills_score(query_tokens, job)
         freshness_score = _freshness_score(getattr(job, "posted_date", None))
         combined_score = (
             (semantic_score * 0.65)
             + (lexical_score * 0.15)
-            + (taxonomy_score * 0.10)
+            + (source_classification_score * 0.10)
             + (skills_score * 0.05)
             + (freshness_score * 0.05)
         )

@@ -179,23 +179,3 @@ def test_catalog_diff_separates_operator_visible_and_query_semantic_changes():
         "offertoday:118101"
     ]
     assert diff.removed == ()
-
-
-def test_catalog_fingerprint_ignores_optional_canonical_taxonomy_annotations():
-    catalog = _offertoday_like_catalog()
-    annotated = replace(
-        catalog,
-        nodes=(
-            replace(
-                catalog.nodes[0],
-                source_metadata={
-                    "canonical_job_taxonomy": {"category": "software"},
-                    "mapping_status": "reviewed",
-                },
-            ),
-            *catalog.nodes[1:],
-        ),
-        provenance={"discovered_at": "another-time"},
-    )
-
-    assert annotated.fingerprint == catalog.fingerprint

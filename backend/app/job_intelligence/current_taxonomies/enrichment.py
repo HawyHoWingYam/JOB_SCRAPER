@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
 import re
 import unicodedata
 from typing import Mapping, Sequence
@@ -11,9 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.current_taxonomies.contracts import (
-    AssignCurrentJobTaxonomyCommand,
     CurrentJobSkillInput,
-    JobTaxonomyBreadcrumb,
     ReplaceCurrentJobSkillsCommand,
 )
 from app.job_intelligence.current_taxonomies.store import CurrentTaxonomyStore
@@ -21,11 +18,9 @@ from app.job_intelligence.current_taxonomies.skill_curation import (
     resolve_skill_curation,
 )
 from app.job_intelligence.foundation import normalized_content_hash
-from app.job_intelligence.source_attributes import SourceJobAttributesView
 from app.models.current_taxonomy import (
     CurrentJobSkillMention,
     CurrentSkillCandidate,
-    CurrentSourceTaxonomyMapping,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
 )
@@ -61,188 +56,12 @@ def _display_label(labels: Mapping[str, object]) -> str:
     )
 
 
-@dataclass(frozen=True)
-class CurrentJobClassifierContext:
-    prompt_payload: dict[str, object]
-    allowed_codes: frozenset[str]
-    breadcrumbs: dict[str, JobTaxonomyBreadcrumb]
-    mapping_refs_by_code: dict[str, tuple[dict[str, str], ...]]
-
-
-class CurrentTaxonomyEnrichment:
-    """Build AI prompt context and persist revision-free enrichment results."""
+class CurrentSkillEnrichment:
+    """Build Skill prompt context and persist governed Skill evidence."""
 
     def __init__(self, db: Session) -> None:
         self.db = db
         self.store = CurrentTaxonomyStore(db)
-
-    def build_job_context(
-        self,
-        evidence: SourceJobAttributesView,
-    ) -> CurrentJobClassifierContext:
-        nodes = tuple(
-            self.db.scalars(
-                select(CurrentTaxonomyNodeRecord)
-                .where(
-                    CurrentTaxonomyNodeRecord.taxonomy == "job",
-                    CurrentTaxonomyNodeRecord.is_active.is_(True),
-                )
-                .order_by(
-                    CurrentTaxonomyNodeRecord.sort_order,
-                    CurrentTaxonomyNodeRecord.code,
-                )
-            )
-        )
-        by_code = {node.code: node for node in nodes}
-        assignable = {
-            node.code: node for node in nodes if bool(node.is_assignable)
-        }
-        source_keys = tuple(
-            dict.fromkeys(
-                node.source_classification_id
-                for path in evidence.source_classification_paths
-                for node in path.nodes
-            )
-        )
-        mapping_rows = tuple(
-            self.db.scalars(
-                select(CurrentSourceTaxonomyMapping)
-                .join(
-                    CurrentTaxonomyNodeRecord,
-                    (
-                        CurrentTaxonomyNodeRecord.taxonomy
-                        == CurrentSourceTaxonomyMapping.taxonomy
-                    )
-                    & (
-                        CurrentTaxonomyNodeRecord.code
-                        == CurrentSourceTaxonomyMapping.target_code
-                    ),
-                )
-                .where(
-                    CurrentSourceTaxonomyMapping.taxonomy == "job",
-                    CurrentSourceTaxonomyMapping.source_site == evidence.source_site,
-                    CurrentSourceTaxonomyMapping.source_key.in_(source_keys),
-                    CurrentTaxonomyNodeRecord.is_active.is_(True),
-                    CurrentTaxonomyNodeRecord.is_assignable.is_(True),
-                )
-                .order_by(
-                    CurrentSourceTaxonomyMapping.target_code,
-                    CurrentSourceTaxonomyMapping.source_key,
-                )
-            )
-        ) if source_keys else ()
-
-        target_codes = tuple(
-            dict.fromkeys(row.target_code for row in mapping_rows)
-        ) or tuple(assignable)
-        breadcrumbs = {
-            code: self._job_breadcrumb(assignable[code], by_code)
-            for code in target_codes
-        }
-        refs_by_code: dict[str, list[dict[str, str]]] = {}
-        for row in mapping_rows:
-            refs_by_code.setdefault(row.target_code, []).append(
-                {
-                    "source_site": row.source_site,
-                    "source_key": row.source_key,
-                    "target_code": row.target_code,
-                }
-            )
-        mapping_refs = {
-            code: tuple(refs_by_code.get(code, ())) for code in target_codes
-        }
-        targets = [
-            {
-                "code": code,
-                "label": _display_label(assignable[code].labels),
-                "breadcrumb": " / ".join(
-                    str(breadcrumbs[code][level]["label"])
-                    for level in ("domain", "category", "subcategory")
-                ),
-            }
-            for code in target_codes
-        ]
-        return CurrentJobClassifierContext(
-            prompt_payload={
-                "authority": "current-job-taxonomy",
-                "source_classification_paths": [
-                    {
-                        "source_order": path.source_order,
-                        "nodes": [
-                            {
-                                "id": node.source_classification_id,
-                                "label": node.label,
-                            }
-                            for node in path.nodes
-                        ],
-                    }
-                    for path in evidence.source_classification_paths
-                ],
-                "canonical_targets": targets,
-            },
-            allowed_codes=frozenset(target_codes),
-            breadcrumbs=breadcrumbs,
-            mapping_refs_by_code=mapping_refs,
-        )
-
-    def assign_job_from_classification(
-        self,
-        *,
-        job_id: UUID,
-        evidence: SourceJobAttributesView,
-        classification: object,
-        context: CurrentJobClassifierContext,
-        model_provenance: dict[str, object] | None,
-    ) -> dict[str, object]:
-        payload = classification if isinstance(classification, dict) else {}
-        target = str(payload.get("target_code") or "").strip()
-        if payload.get("decision") != "select_existing" or target not in context.allowed_codes:
-            return {
-                "state": "unassigned",
-                "assignment": None,
-                "reason": "classifier_did_not_select_current_code",
-            }
-        captured_at = utc_now()
-        mapping_refs = context.mapping_refs_by_code.get(target, ())
-        source_refs = tuple(
-            {
-                "kind": "source-classification-path",
-                "source_site": evidence.source_site,
-                "source_order": path.source_order,
-                "source_classification_ids": [
-                    node.source_classification_id for node in path.nodes
-                ],
-            }
-            for path in evidence.source_classification_paths
-        )
-        self.store.assign_job(
-            AssignCurrentJobTaxonomyCommand(
-                job_id=job_id,
-                taxonomy_code=target,
-                method="constrained_ai",
-                evidence_hash=normalized_content_hash(
-                    {
-                        "source_evidence_hash": evidence.evidence_hash,
-                        "classification": payload,
-                    }
-                ),
-                source_evidence_refs=source_refs,
-                mapping_ids=tuple(mapping_refs),
-                model_provenance=model_provenance,
-                breadcrumb=context.breadcrumbs[target],
-                captured_at=captured_at,
-            )
-        )
-        return {
-            "state": "assigned",
-            "assignment": {
-                "taxonomy_code": target,
-                "method": "constrained_ai",
-                "breadcrumb": context.breadcrumbs[target],
-                "model_provenance": model_provenance,
-            },
-            "reason": None,
-        }
 
     def build_skill_prompt(self, *, role_mode: str) -> dict[str, object]:
         nodes = tuple(
@@ -515,31 +334,8 @@ class CurrentTaxonomyEnrichment:
             candidate.updated_at = now
         self.db.flush()
 
-    @staticmethod
-    def _job_breadcrumb(
-        leaf: CurrentTaxonomyNodeRecord,
-        by_code: dict[str, CurrentTaxonomyNodeRecord],
-    ) -> JobTaxonomyBreadcrumb:
-        chain: list[CurrentTaxonomyNodeRecord] = []
-        cursor: CurrentTaxonomyNodeRecord | None = leaf
-        visited: set[str] = set()
-        while cursor is not None and cursor.code not in visited:
-            visited.add(cursor.code)
-            chain.append(cursor)
-            cursor = by_code.get(cursor.parent_code) if cursor.parent_code else None
-        levels = {node.level: node for node in reversed(chain)}
-        return {
-            level: {
-                "code": levels[level].code,
-                "label": _display_label(levels[level].labels),
-            }
-            for level in ("domain", "category", "subcategory")
-        }
-
-
 __all__ = [
-    "CurrentJobClassifierContext",
-    "CurrentTaxonomyEnrichment",
+    "CurrentSkillEnrichment",
     "normalize_exact_skill_key",
     "normalize_skill_text",
 ]

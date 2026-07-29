@@ -97,7 +97,6 @@ JOB_SEARCH_EXPORT_FIELDNAMES = [
     "salary_currency",
     "source_classification_name",
     "source_subclassification_name",
-    "canonical_taxonomy_code",
     "ai_summary",
     "experience_level",
     "experience_min_years",
@@ -361,30 +360,6 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     skill_codes = _normalize_code_list(filters.skill_ids)
     technology_codes = _normalize_code_list(filters.technology_ids)
     skill_category_codes = _normalize_code_list(filters.skill_category_ids)
-    canonical_subcategory_ids = tuple(
-        dict.fromkeys(
-            _normalize_code_list(
-                list(filters.canonical_subcategory_ids or [])
-                + list(filters.subcategory_ids or [])
-            )
-        )
-    )
-    canonical_category_ids = tuple(
-        dict.fromkeys(
-            _normalize_code_list(
-                list(filters.canonical_category_ids or [])
-                + list(filters.job_category_ids or [])
-            )
-        )
-    )
-    canonical_domain_ids = tuple(
-        dict.fromkeys(
-            _normalize_code_list(
-                list(filters.canonical_domain_ids or [])
-                + list(filters.domain_ids or [])
-            )
-        )
-    )
     company_industry_node_ids = tuple(
         dict.fromkeys(_normalize_code_list(filters.company_industry_node_ids))
     )
@@ -409,22 +384,6 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     if selected_skill_codes:
         try:
             query = query.filter(current_reader.job_skill_filter(selected_skill_codes))
-        except CurrentTaxonomyReadError as exc:
-            raise HTTPException(status_code=422, detail=exc.context) from exc
-
-    if canonical_subcategory_ids or canonical_category_ids or canonical_domain_ids:
-        try:
-            query = query.filter(
-                current_reader.job_taxonomy_filter(
-                    tuple(
-                        dict.fromkeys(
-                            canonical_domain_ids
-                            + canonical_category_ids
-                            + canonical_subcategory_ids
-                        )
-                    )
-                )
-            )
         except CurrentTaxonomyReadError as exc:
             raise HTTPException(status_code=422, detail=exc.context) from exc
 
@@ -514,9 +473,6 @@ def _build_legacy_scope(
     skill_ids: Optional[List[str]],
     technology_ids: Optional[List[str]],
     skill_category_ids: Optional[List[str]],
-    subcategory_ids: Optional[List[str]],
-    job_category_ids: Optional[List[str]],
-    domain_ids: Optional[List[str]],
     salary_min: Optional[int],
     salary_max: Optional[int],
 ):
@@ -543,9 +499,6 @@ def _build_legacy_scope(
                     skill_ids=skill_ids,
                     technology_ids=technology_ids,
                     skill_category_ids=skill_category_ids,
-                    subcategory_ids=subcategory_ids,
-                    job_category_ids=job_category_ids,
-                    domain_ids=domain_ids,
                     salary_min=salary_min,
                     salary_max=salary_max,
                 ),
@@ -601,14 +554,6 @@ def _build_search_response_from_results(
     facets: Optional[JobSearchFacetsSchema] = None,
     db: Session | None = None,
 ):
-    product_payloads: dict[UUID, dict[str, object]] = {}
-    if results:
-        product_db = db or object_session(results[0][0])
-        if product_db is None:
-            raise RuntimeError("Job search results are detached from their Session")
-        product_payloads = JobIntelligenceProductReadModel(
-            product_db
-        ).get_canonical_job_states([job.id for job, _company in results])
     jobs = []
     for job, company in results:
         jobs.append(
@@ -626,7 +571,6 @@ def _build_search_response_from_results(
                 posted_date=job.posted_date.isoformat() if job.posted_date else None,
                 source_classification_paths=job.source_classification_paths,
                 employment_types=job.employment_types,
-                **product_payloads[job.id],
             )
         )
 
@@ -706,15 +650,8 @@ def _build_export_rows_from_results(results, *, db: Session | None = None):
         if product_reader is not None
         else {}
     )
-    taxonomy_states = (
-        product_reader.get_canonical_job_states(job_ids)
-        if product_reader is not None
-        else {}
-    )
     rows = []
     for job, company in results:
-        taxonomy = taxonomy_states[job.id]["canonical_taxonomy"]
-        assignment = taxonomy.get("assignment") if taxonomy else None
         rows.append(
             {
                 "job_id": job.job_id,
@@ -736,9 +673,6 @@ def _build_export_rows_from_results(results, *, db: Session | None = None):
                 "source_classification_name": job.source_classification_name or "",
                 "source_subclassification_name": job.source_subclassification_name
                 or "",
-                "canonical_taxonomy_code": (
-                    assignment.get("taxonomy_code") if assignment else ""
-                ),
                 "ai_summary": job.ai_summary or "",
                 "experience_level": job.experience_level or "",
                 "experience_min_years": ""
@@ -913,15 +847,6 @@ async def search_jobs(
     skill_category_ids: Optional[List[str]] = Query(
         None, description="Filter by skill category IDs (L1)"
     ),
-    subcategory_ids: Optional[List[str]] = Query(
-        None, description="Filter by job subcategory IDs (L3)"
-    ),
-    job_category_ids: Optional[List[str]] = Query(
-        None, description="Filter by job category IDs (L2)"
-    ),
-    domain_ids: Optional[List[str]] = Query(
-        None, description="Filter by job domain IDs (L1)"
-    ),
     salary_min: Optional[int] = Query(None, ge=0, description="Minimum salary (HKD)"),
     salary_max: Optional[int] = Query(None, ge=0, description="Maximum salary (HKD)"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -949,9 +874,6 @@ async def search_jobs(
             skill_ids=skill_ids,
             technology_ids=technology_ids,
             skill_category_ids=skill_category_ids,
-            subcategory_ids=subcategory_ids,
-            job_category_ids=job_category_ids,
-            domain_ids=domain_ids,
             salary_min=salary_min,
             salary_max=salary_max,
         )

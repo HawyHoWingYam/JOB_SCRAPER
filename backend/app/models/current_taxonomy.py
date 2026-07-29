@@ -33,7 +33,7 @@ class CurrentTaxonomyNodeRecord(Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint(
-            "taxonomy IN ('job', 'company_industry', 'skill')",
+            "taxonomy IN ('company_industry', 'skill')",
             name="ck_current_taxonomy_node_taxonomy",
         ),
         CheckConstraint("length(code) > 0", name="ck_current_taxonomy_node_code"),
@@ -66,7 +66,7 @@ class CurrentTaxonomyAliasRecord(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint(
-            "taxonomy IN ('job', 'company_industry', 'skill')",
+            "taxonomy IN ('company_industry', 'skill')",
             name="ck_current_taxonomy_alias_taxonomy",
         ),
         Index(
@@ -80,34 +80,6 @@ class CurrentTaxonomyAliasRecord(Base):
     node_code = Column(String(255), primary_key=True)
     alias = Column(String(255), primary_key=True)
     normalized_alias = Column(String(255), nullable=False)
-
-
-class CurrentJobTaxonomyAssignment(Base):
-    __tablename__ = "current_job_taxonomy_assignments"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["taxonomy", "taxonomy_code"],
-            ["current_taxonomy_nodes.taxonomy", "current_taxonomy_nodes.code"],
-            name="fk_current_job_taxonomy_assignment_node",
-            ondelete="RESTRICT",
-        ),
-        CheckConstraint("taxonomy = 'job'", name="ck_current_job_assignment_taxonomy"),
-    )
-
-    job_id = Column(
-        Uuid(as_uuid=True),
-        ForeignKey("jobs.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    taxonomy = Column(String(32), nullable=False, default="job")
-    taxonomy_code = Column(String(255), nullable=False, index=True)
-    method = Column(String(32), nullable=False)
-    evidence_hash = Column(String(64), nullable=False)
-    source_evidence_refs = Column(JSON, nullable=False, default=list)
-    mapping_ids = Column(JSON, nullable=False, default=list)
-    model_provenance = Column(JSON, nullable=True)
-    breadcrumb = Column(JSON, nullable=False)
-    captured_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class CurrentCompanyIndustryAssignment(Base):
@@ -340,7 +312,6 @@ class CurrentSourceTaxonomyMapping(Base):
 CURRENT_TAXONOMY_TABLES = (
     CurrentTaxonomyNodeRecord.__table__,
     CurrentTaxonomyAliasRecord.__table__,
-    CurrentJobTaxonomyAssignment.__table__,
     CurrentCompanyIndustryAssignment.__table__,
     CurrentJobSkillAssignment.__table__,
     CurrentSkillCandidate.__table__,

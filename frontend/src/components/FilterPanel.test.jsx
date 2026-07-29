@@ -11,9 +11,6 @@ const EMPTY_FILTERS = {
   employment_type: "",
   employment_type_codes: [],
   subcategory_ids: [],
-  canonical_subcategory_ids: [],
-  canonical_category_ids: [],
-  canonical_domain_ids: [],
   industry: "",
   company_industry_node_ids: [],
   source_classification_ids: [],
@@ -65,7 +62,6 @@ describe("FilterPanel", () => {
             { id: "permanent", code: "permanent", label: "Permanent", count: 2, order: 20 },
           ],
           source_classifications: [],
-          canonical_taxonomy: { domains: [] },
           company_industry_tree: { nodes: [] },
           job_subcategories: [],
           industries: [],
@@ -117,7 +113,6 @@ describe("FilterPanel", () => {
               count: 5,
             },
           ],
-          canonical_taxonomy: { domains: [] },
           company_industry_tree: { nodes: [] },
           job_subcategories: [],
           industries: [],
@@ -142,40 +137,6 @@ describe("FilterPanel", () => {
     });
   });
 
-  it("submits hierarchical Canonical Job Taxonomy IDs by governed level", async () => {
-    const user = userEvent.setup();
-    const onFilterChange = vi.fn();
-    const domain = taxonomyFixture.job_tree.domains[0];
-
-    render(
-      <FilterPanelHarness
-        onFilterChange={onFilterChange}
-        filterOptions={{
-          employment_types: [],
-          source_classifications: [],
-          canonical_taxonomy: taxonomyFixture.job_tree,
-          company_industry_tree: { nodes: [] },
-          job_subcategories: [],
-          industries: [],
-        }}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", {
-      name: "Canonical Job Taxonomy, 0 selected",
-    }));
-    await user.click(screen.getByRole("checkbox", {
-      name: "Job Domain · Accounting",
-    }));
-
-    expect(onFilterChange).toHaveBeenLastCalledWith({
-      ...EMPTY_FILTERS,
-      canonical_domain_ids: [domain.id],
-      canonical_category_ids: [],
-      canonical_subcategory_ids: [],
-    });
-  });
-
   it("lets a selected Company Industry parent cover its descendants", async () => {
     const user = userEvent.setup();
     const onFilterChange = vi.fn();
@@ -188,7 +149,6 @@ describe("FilterPanel", () => {
         filterOptions={{
           employment_types: [],
           source_classifications: [],
-          canonical_taxonomy: { domains: [] },
           company_industry_tree: taxonomyFixture.company_tree,
           company_industries: [
             {

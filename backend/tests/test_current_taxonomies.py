@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
@@ -14,23 +13,19 @@ from app.api.current_taxonomies import (
     read_company_industry_state,
     read_company_industry_tree,
     read_job_skills,
-    read_job_taxonomy_state,
-    read_job_taxonomy_tree,
     read_skill_tree,
     router as current_taxonomy_router,
 )
 from app.job_intelligence.current_taxonomies import (
-    AssignCurrentJobTaxonomyCommand,
     CurrentCompanyIndustryInput,
     CurrentJobSkillInput,
-    CurrentTaxonomyEnrichment,
+    CurrentSkillEnrichment,
     CurrentTaxonomyReader,
     CurrentTaxonomyStore,
     ReplaceCurrentCompanyIndustriesCommand,
     ReplaceCurrentJobSkillsCommand,
     project_current_company_industry,
     transform_company_industry_taxonomy,
-    transform_job_taxonomy,
     transform_skill_taxonomy,
 )
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
@@ -38,7 +33,6 @@ from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillMention,
     CurrentJobSkillAssignment,
-    CurrentJobTaxonomyAssignment,
     CurrentSkillCandidate,
     CurrentSourceTaxonomyMapping,
     CurrentTaxonomyAliasRecord,
@@ -58,19 +52,16 @@ def _load(name: str):
 
 
 def test_committed_taxonomies_flatten_to_stable_current_codes():
-    job = transform_job_taxonomy(_load("job_category_taxonomy.json"))
     industry = transform_company_industry_taxonomy(_load("hsic_v2.json"))
     skill = transform_skill_taxonomy(_load("skill_taxonomy.json"))
 
-    assert len(job.nodes) == 25 + 63 + 198
-    assert sum(node.level == "subcategory" and node.is_assignable for node in job.nodes) == 198
     assert len(industry.nodes) == 21 + 88 + 221 + 483 + 1001
     assert sum(node.level == "subclass" and node.is_assignable for node in industry.nodes) == 1001
     assert len(skill.nodes) == 8 + 33 + 91
     assert len(skill.aliases) == 142
     assert sum(node.level == "skill" and node.is_assignable for node in skill.nodes) == 91
 
-    for snapshot in (job, industry, skill):
+    for snapshot in (industry, skill):
         payload = snapshot.to_payload()
         assert "version" not in payload
         assert "revision" not in payload
@@ -110,7 +101,6 @@ def test_current_store_synchronizes_hierarchy_and_aliases_without_revisions():
 
 def test_current_assignment_and_mapping_tables_have_no_release_identity():
     tables = (
-        CurrentJobTaxonomyAssignment.__table__,
         CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
@@ -167,167 +157,6 @@ def test_current_skill_evidence_keeps_candidates_and_mentions_without_review_ver
         "provenance",
         "evidence_hash",
     }.issubset(mention.columns.keys())
-
-
-def test_source_mapping_is_optional_and_only_constrains_when_present():
-    engine = create_engine("sqlite:///:memory:")
-
-    @event.listens_for(engine, "connect")
-    def _enable_foreign_keys(connection, _record):
-        connection.execute("PRAGMA foreign_keys=ON")
-
-    for table in (
-        CurrentTaxonomyNodeRecord.__table__,
-        CurrentTaxonomyAliasRecord.__table__,
-        CurrentSourceTaxonomyMapping.__table__,
-    ):
-        table.create(engine)
-    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    try:
-        store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_job_taxonomy(_load("job_category_taxonomy.json")))
-
-        fallback = store.resolve_allowed_codes(
-            "job",
-            source_site="jobsdb",
-            source_key="jobsdb:new-category",
-        )
-        assert len(fallback) == 198
-
-        target = (
-            "information_communication_technology."
-            "software_development.backend_development"
-        )
-        db.add(
-            CurrentSourceTaxonomyMapping(
-                taxonomy="job",
-                source_site="jobsdb",
-                source_key="jobsdb:6281",
-                target_code=target,
-                source_label="Information Technology",
-                role="deterministic",
-                evidence={},
-            )
-        )
-        db.flush()
-        assert store.resolve_allowed_codes(
-            "job",
-            source_site="jobsdb",
-            source_key="jobsdb:6281",
-        ) == (target,)
-    finally:
-        db.close()
-        engine.dispose()
-
-
-def test_current_reader_expands_big_job_categories_to_assignable_children():
-    engine = create_engine("sqlite:///:memory:")
-    for table in (
-        CurrentTaxonomyNodeRecord.__table__,
-        CurrentTaxonomyAliasRecord.__table__,
-    ):
-        table.create(engine)
-    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    try:
-        CurrentTaxonomyStore(db).synchronize(
-            transform_job_taxonomy(_load("job_category_taxonomy.json"))
-        )
-        reader = CurrentTaxonomyReader(db)
-
-        tree = reader.get_tree("job")
-        codes = reader.resolve_assignable_codes(
-            "job",
-            ("information_communication_technology",),
-        )
-
-        assert len(tree.nodes) == 286
-        assert codes
-        assert all(code.startswith("information_communication_technology.") for code in codes)
-        assert (
-            "information_communication_technology."
-            "software_development.backend_development"
-        ) in codes
-    finally:
-        db.close()
-        engine.dispose()
-
-
-def test_current_reader_returns_job_state_and_unversioned_embedding_document():
-    engine = create_engine("sqlite:///:memory:")
-    for table in (
-        CurrentTaxonomyNodeRecord.__table__,
-        CurrentTaxonomyAliasRecord.__table__,
-        CurrentJobTaxonomyAssignment.__table__,
-    ):
-        table.create(engine)
-    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    job_id = uuid4()
-    try:
-        CurrentTaxonomyStore(db).synchronize(
-            transform_job_taxonomy(_load("job_category_taxonomy.json"))
-        )
-        target = (
-            "information_communication_technology."
-            "software_development.backend_development"
-        )
-        breadcrumb = {
-            "domain": {
-                "code": "information_communication_technology",
-                "label": "Information & Communication Technology",
-            },
-            "category": {
-                "code": "information_communication_technology.software_development",
-                "label": "Software Development",
-            },
-            "subcategory": {"code": target, "label": "Backend Development"},
-        }
-        db.add(
-            CurrentJobTaxonomyAssignment(
-                job_id=job_id,
-                taxonomy="job",
-                taxonomy_code=target,
-                method="ai",
-                evidence_hash="e" * 64,
-                source_evidence_refs=[],
-                mapping_ids=[],
-                model_provenance={"model": "test"},
-                breadcrumb=breadcrumb,
-            )
-        )
-        db.flush()
-
-        reader = CurrentTaxonomyReader(db)
-        state = reader.get_job_taxonomy_state(job_id)
-        document = reader.build_job_taxonomy_embedding_document(job_id)
-
-        assert state.state == "assigned"
-        assert state.assignment is not None
-        assert state.assignment.taxonomy_code == target
-        assert document is not None
-        assert document.taxonomy_code == target
-        assert "Assignment Method: ai" in document.document_text
-        assert "Revision" not in document.document_text
-        assert "version" not in document.document_text.lower()
-        assert not hasattr(document, "taxonomy_revision_id")
-
-        unassigned_id = uuid4()
-        assert reader.get_job_taxonomy_state(unassigned_id).state == "unassigned"
-        assert reader.build_job_taxonomy_embedding_document(unassigned_id) is None
-        states = reader.get_job_taxonomy_states((job_id, unassigned_id))
-        assert states[job_id].state == "assigned"
-        assert states[unassigned_id].state == "unassigned"
-        payloads = JobIntelligenceProductReadModel(db).get_canonical_job_states(
-            (job_id, unassigned_id)
-        )
-        serialized = json.dumps(list(payloads.values()), default=str, sort_keys=True)
-        assert payloads[job_id]["canonical_taxonomy"]["assignment"][
-            "taxonomy_code"
-        ] == target
-        assert "revision" not in serialized
-        assert "review_item" not in serialized
-    finally:
-        db.close()
-        engine.dispose()
 
 
 def test_current_reader_returns_company_assignments_and_active_job_skills():
@@ -463,84 +292,6 @@ def test_current_reader_returns_company_assignments_and_active_job_skills():
         engine.dispose()
 
 
-def test_current_enrichment_uses_full_fallback_then_optional_mapping():
-    engine = create_engine("sqlite:///:memory:")
-    for table in (
-        CurrentTaxonomyNodeRecord.__table__,
-        CurrentTaxonomyAliasRecord.__table__,
-        CurrentSourceTaxonomyMapping.__table__,
-        CurrentJobTaxonomyAssignment.__table__,
-    ):
-        table.create(engine)
-    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    job_id = uuid4()
-    evidence = SimpleNamespace(
-        source_site="jobsdb",
-        evidence_hash="e" * 64,
-        source_classification_paths=(
-            SimpleNamespace(
-                source_order=0,
-                nodes=(
-                    SimpleNamespace(
-                        source_classification_id="jobsdb:6281",
-                        label="Information Technology",
-                    ),
-                ),
-            ),
-        ),
-    )
-    target = (
-        "information_communication_technology."
-        "software_development.backend_development"
-    )
-    try:
-        store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_job_taxonomy(_load("job_category_taxonomy.json")))
-        enrichment = CurrentTaxonomyEnrichment(db)
-
-        fallback = enrichment.build_job_context(evidence)
-        assert len(fallback.allowed_codes) == 198
-        assert "revision" not in json.dumps(fallback.prompt_payload).lower()
-
-        db.add(
-            CurrentSourceTaxonomyMapping(
-                taxonomy="job",
-                source_site="jobsdb",
-                source_key="jobsdb:6281",
-                target_code=target,
-                source_label="Information Technology",
-                role="allowed",
-                evidence={},
-            )
-        )
-        db.flush()
-        mapped = enrichment.build_job_context(evidence)
-        assert mapped.allowed_codes == frozenset({target})
-
-        result = enrichment.assign_job_from_classification(
-            job_id=job_id,
-            evidence=evidence,
-            classification={"decision": "select_existing", "target_code": target},
-            context=mapped,
-            model_provenance={"provider": "test", "version": "model-v1"},
-        )
-        assignment = db.get(CurrentJobTaxonomyAssignment, job_id)
-        assert result["state"] == "assigned"
-        assert assignment.taxonomy_code == target
-        assert assignment.mapping_ids == [
-            {
-                "source_site": "jobsdb",
-                "source_key": "jobsdb:6281",
-                "target_code": target,
-            }
-        ]
-        assert not hasattr(assignment, "taxonomy_revision_id")
-    finally:
-        db.rollback()
-        db.close()
-        engine.dispose()
-
-
 def test_current_skill_enrichment_matches_existing_and_accumulates_candidates():
     engine = create_engine("sqlite:///:memory:")
     for table in (
@@ -557,7 +308,7 @@ def test_current_skill_enrichment_matches_existing_and_accumulates_candidates():
     try:
         store = CurrentTaxonomyStore(db)
         store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
-        enrichment = CurrentTaxonomyEnrichment(db)
+        enrichment = CurrentSkillEnrichment(db)
         extracted = (
             {"name": "React", "resolution": "match_existing"},
             {"name": "New Framework", "kind": "technical"},
@@ -623,7 +374,7 @@ def test_current_skill_enrichment_resolves_localized_generic_aliases_before_cand
         for raw_name in ("項目管理", "銷售", "客戶服務")
     )
     try:
-        enrichment = CurrentTaxonomyEnrichment(db)
+        enrichment = CurrentSkillEnrichment(db)
 
         for _ in range(2):
             enrichment.replace_job_skills(
@@ -718,12 +469,11 @@ def test_current_company_projection_assigns_mapped_evidence_without_review_queue
         engine.dispose()
 
 
-def test_current_store_runtime_writes_are_last_write_wins_without_versions():
+def test_current_store_runtime_writes_have_no_versions():
     engine = create_engine("sqlite:///:memory:")
     for table in (
         CurrentTaxonomyNodeRecord.__table__,
         CurrentTaxonomyAliasRecord.__table__,
-        CurrentJobTaxonomyAssignment.__table__,
         CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
@@ -734,11 +484,8 @@ def test_current_store_runtime_writes_are_last_write_wins_without_versions():
     now = datetime(2026, 7, 26, tzinfo=UTC)
     job_id = uuid4()
     company_id = uuid4()
-    first_code = "information_communication_technology.software_development.backend_development"
-    second_code = "information_communication_technology.software_development.frontend_development"
     try:
         store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_job_taxonomy(_load("job_category_taxonomy.json")))
         company_snapshot = transform_company_industry_taxonomy(_load("hsic_v2.json"))
         store.synchronize(company_snapshot)
         store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
@@ -746,20 +493,6 @@ def test_current_store_runtime_writes_are_last_write_wins_without_versions():
             node.code for node in company_snapshot.nodes if node.is_assignable
         )
 
-        for code, method in ((first_code, "ai"), (second_code, "operator")):
-            store.assign_job(
-                AssignCurrentJobTaxonomyCommand(
-                    job_id=job_id,
-                    taxonomy_code=code,
-                    method=method,
-                    evidence_hash="a" * 64,
-                    source_evidence_refs=(),
-                    mapping_ids=(),
-                    model_provenance=None,
-                    breadcrumb={"subcategory": {"code": code}},
-                    captured_at=now,
-                )
-            )
         store.replace_company_industries(
             ReplaceCurrentCompanyIndustriesCommand(
                 company_id=company_id,
@@ -793,28 +526,12 @@ def test_current_store_runtime_writes_are_last_write_wins_without_versions():
             )
         )
 
-        assert db.get(CurrentJobTaxonomyAssignment, job_id).taxonomy_code == second_code
-        assert db.scalar(select(func.count()).select_from(CurrentJobTaxonomyAssignment)) == 1
         assert db.scalar(select(func.count()).select_from(CurrentCompanyIndustryAssignment)) == 1
         assert db.get(
             CurrentJobSkillAssignment,
             (job_id, "frontend.javascript.react"),
         ).mention_count == 2
 
-        with pytest.raises(ValueError, match="non-assignable"):
-            store.assign_job(
-                AssignCurrentJobTaxonomyCommand(
-                    job_id=job_id,
-                    taxonomy_code="information_communication_technology",
-                    method="operator",
-                    evidence_hash="c" * 64,
-                    source_evidence_refs=(),
-                    mapping_ids=(),
-                    model_provenance=None,
-                    breadcrumb={},
-                    captured_at=now,
-                )
-            )
         assert db.in_transaction() is True
     finally:
         db.rollback()
@@ -826,8 +543,6 @@ def test_current_taxonomy_api_contract_has_no_revision_or_review_routes():
     paths = {route.path for route in current_taxonomy_router.routes}
 
     assert paths == {
-        "/job-intelligence/job-taxonomy/tree",
-        "/job-intelligence/jobs/{job_id}/job-taxonomy",
         "/job-intelligence/company-industries/tree",
         "/job-intelligence/companies/{company_id}/industries",
         "/job-intelligence/skills/tree",
@@ -843,7 +558,6 @@ def test_current_taxonomy_api_serializes_only_current_state():
     for table in (
         CurrentTaxonomyNodeRecord.__table__,
         CurrentTaxonomyAliasRecord.__table__,
-        CurrentJobTaxonomyAssignment.__table__,
         CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
@@ -854,38 +568,10 @@ def test_current_taxonomy_api_serializes_only_current_state():
     now = datetime(2026, 7, 26, tzinfo=UTC)
     job_id = uuid4()
     company_id = uuid4()
-    job_code = "information_communication_technology.software_development.backend_development"
     try:
         store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_job_taxonomy(_load("job_category_taxonomy.json")))
         store.synchronize(transform_company_industry_taxonomy(_load("hsic_v2.json")))
         store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
-        store.assign_job(
-            AssignCurrentJobTaxonomyCommand(
-                job_id=job_id,
-                taxonomy_code=job_code,
-                method="ai",
-                evidence_hash="a" * 64,
-                source_evidence_refs=(),
-                mapping_ids=(),
-                model_provenance=None,
-                breadcrumb={
-                    "domain": {
-                        "code": "information_communication_technology",
-                        "label": "Information & Communication Technology",
-                    },
-                    "category": {
-                        "code": "information_communication_technology.software_development",
-                        "label": "Software Development",
-                    },
-                    "subcategory": {
-                        "code": job_code,
-                        "label": "Backend Development",
-                    },
-                },
-                captured_at=now,
-            )
-        )
         store.replace_job_skills(
             ReplaceCurrentJobSkillsCommand(
                 job_id=job_id,
@@ -903,8 +589,6 @@ def test_current_taxonomy_api_serializes_only_current_state():
         )
 
         payloads = (
-            read_job_taxonomy_tree(db),
-            read_job_taxonomy_state(job_id, db),
             read_company_industry_tree(db),
             read_company_industry_state(company_id, db),
             read_skill_tree(db),
@@ -918,7 +602,6 @@ def test_current_taxonomy_api_serializes_only_current_state():
         assert '"release"' not in text
         assert '"version"' not in text
         assert '"review_item_refs"' not in text
-        assert serialized[1]["assignment"]["taxonomy_code"] == job_code
         assert serialized[-1]["skills"][0]["name"] == "React"
 
         embedding = CurrentEmbeddingDocumentBuilder().build_for_job(
@@ -933,8 +616,14 @@ def test_current_taxonomy_api_serializes_only_current_state():
                 description="Python and React",
             ),
         )
-        assert "Job Taxonomy:" in embedding.document_text
-        assert "Skills: React" in embedding.document_text
+        assert embedding.document_text.splitlines() == [
+            "Title: Backend Engineer",
+            "Company: Example Company",
+            "Source Taxonomy: Information Technology",
+            "AI Summary: Build reliable services",
+            "Skills: React",
+            "Description: Python and React",
+        ]
         assert "Revision" not in embedding.document_text
         assert "version" not in embedding.document_text.lower()
     finally:

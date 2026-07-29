@@ -13,7 +13,6 @@ from app.services.classification_batch_runtime import (
 )
 from app.services.classification_domain_adapters import (
     CompanyIndustryClassificationAdapter,
-    JobTaxonomyClassificationAdapter,
     SkillClassificationAdapter,
 )
 
@@ -33,7 +32,6 @@ class ClassificationBatchRequest(BaseModel):
 
 def _runtime(db: Session) -> ClassificationBatchRuntime:
     adapters: tuple[ClassificationDomainAdapter, ...] = (
-        JobTaxonomyClassificationAdapter(),
         CompanyIndustryClassificationAdapter(),
         SkillClassificationAdapter(),
     )

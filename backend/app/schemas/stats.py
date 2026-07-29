@@ -1,31 +1,6 @@
 from pydantic import BaseModel, Field
 
 
-class DashboardCategoryItemSchema(BaseModel):
-    code: str
-    path: str
-    label: str
-    count: int
-    share_of_assigned: int
-
-
-class DashboardOtherCategoriesSchema(BaseModel):
-    count: int = 0
-    bucket_count: int = 0
-    share_of_assigned: int = 0
-    items: list[DashboardCategoryItemSchema] = Field(default_factory=list)
-
-
-class DashboardCategoryStatsSchema(BaseModel):
-    population_total: int
-    assigned_total: int
-    unassigned_total: int
-    assignment_coverage: int
-    classification_ready_unassigned_total: int
-    top_categories: list[DashboardCategoryItemSchema] = Field(default_factory=list)
-    other_categories: DashboardOtherCategoriesSchema
-
-
 class DashboardSkillItemSchema(BaseModel):
     code: str
     name: str

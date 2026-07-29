@@ -39,31 +39,6 @@ function hasQueryValue(value) {
     return value !== '' && value != null;
 }
 
-function getCanonicalTaxonomyLabel(job) {
-    if (job?.canonical_taxonomy_availability?.available === false) {
-        return 'Canonical Job Taxonomy: Unavailable';
-    }
-
-    const canonicalState = job?.canonical_taxonomy;
-    if (canonicalState?.state === 'unassigned') {
-        return 'Canonical Job Taxonomy: Unassigned';
-    }
-
-    const breadcrumb = canonicalState?.assignment?.breadcrumb;
-    if (canonicalState?.state === 'assigned' && breadcrumb) {
-        const labels = [
-            breadcrumb.domain?.label,
-            breadcrumb.category?.label,
-            breadcrumb.subcategory?.label,
-        ].filter(Boolean);
-        if (labels.length === 3) {
-            return `Canonical Job Taxonomy: ${labels.join(' / ')}`;
-        }
-    }
-
-    return 'Canonical Job Taxonomy: Unknown';
-}
-
 function formatFilterDate(value) {
     if (!value) {
         return '';
@@ -130,17 +105,13 @@ function formatPendingChangesLabel(count) {
 
 function createScopeFromRouteHash(routeHash) {
     const route = parseJobsRoute(routeHash);
-    if (
-        route.canonicalSubcategoryIds.length === 0
-        && route.skillIds.length === 0
-    ) {
+    if (route.skillIds.length === 0) {
         return createEmptyJobBrowserScope();
     }
 
     const layer = createEmptyJobBrowserLayer('root');
     layer.structured_filters = {
         ...layer.structured_filters,
-        canonical_subcategory_ids: route.canonicalSubcategoryIds,
         skill_ids: route.skillIds,
     };
     return replaceScopeWithLayer(createEmptyJobBrowserScope(), layer);
@@ -148,22 +119,20 @@ function createScopeFromRouteHash(routeHash) {
 
 function routeFiltersFromScope(scope) {
     if (!scope?.layers?.length) {
-        return { canonicalSubcategoryIds: [], skillIds: [] };
+        return { skillIds: [] };
     }
     if (scope.layers.length !== 1) return null;
 
     const layer = normalizeLayerForSubmit(scope.layers[0]);
     if (layer.text_expression) return null;
 
-    const supportedKeys = new Set(['canonical_subcategory_ids', 'skill_ids']);
+    const supportedKeys = new Set(['skill_ids']);
     const hasUnsupportedFilter = Object.entries(layer.structured_filters).some(
         ([key, value]) => !supportedKeys.has(key) && hasQueryValue(value),
     );
     if (hasUnsupportedFilter) return null;
 
     return {
-        canonicalSubcategoryIds:
-            layer.structured_filters.canonical_subcategory_ids || [],
         skillIds: layer.structured_filters.skill_ids || [],
     };
 }
@@ -196,9 +165,7 @@ function JobBrowser({
         sources: [],
         employment_types: [],
         source_classifications: [],
-        canonical_job_taxonomy: [],
         company_industries: [],
-        canonical_taxonomy: { domains: [] },
     });
     const [pagination, setPagination] = useState({
         page: 1,
@@ -873,10 +840,6 @@ function JobBrowser({
                                         ) : (
                                             <span className="tag type-tag">Employment Type: Unknown</span>
                                         )}
-                                        <span className="tag ai-tag">
-                                            <BrainCircuit size={12} aria-hidden="true" />
-                                            {getCanonicalTaxonomyLabel(job)}
-                                        </span>
                                     </div>
                                 </article>
                             ))}

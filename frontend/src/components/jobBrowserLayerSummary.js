@@ -32,17 +32,6 @@ export function summarizeJobBrowserLayer(layer, facets = {}) {
   if (employmentIds.length > 0) {
     clauses.push(`Employment Type: ${optionLabels(facets.employment_types, employmentIds)}`);
   }
-  const taxonomyIds = [
-    ...filters.canonical_domain_ids,
-    ...filters.canonical_category_ids,
-    ...filters.canonical_subcategory_ids,
-  ];
-  if (taxonomyIds.length > 0) {
-    clauses.push(`Canonical Job Taxonomy: ${optionLabels(
-      facets.canonical_job_taxonomy,
-      taxonomyIds,
-    )}`);
-  }
   if (filters.company_industry_node_ids.length > 0) {
     clauses.push(`Company Industry: ${optionLabels(
       facets.company_industries,
@@ -61,9 +50,5 @@ export function summarizeJobBrowserLayer(layer, facets = {}) {
   if (filters.skill_ids.length > 0) {
     clauses.push(`Skills: ${filters.skill_ids.join(', ')}`);
   }
-  if (filters.subcategory_ids.length > 0) {
-    clauses.push(`Legacy subcategories: ${filters.subcategory_ids.join(', ')}`);
-  }
-
   return clauses.length > 0 ? clauses : ['All jobs'];
 }
