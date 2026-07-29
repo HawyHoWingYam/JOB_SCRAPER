@@ -151,6 +151,8 @@ function JobBrowser({
 }) {
     const searchRequestSequenceRef = useRef(0);
     const searchAbortControllerRef = useRef(null);
+    const facetRequestSequenceRef = useRef(0);
+    const facetAbortControllerRef = useRef(null);
     const lastWrittenRouteHashRef = useRef(null);
     const [jobs, setJobs] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -167,6 +169,8 @@ function JobBrowser({
         source_classifications: [],
         company_industries: [],
     });
+    const [isFacetsLoading, setIsFacetsLoading] = useState(false);
+    const [facetsError, setFacetsError] = useState('');
     const [pagination, setPagination] = useState({
         page: 1,
         pageSize: 24,
@@ -204,17 +208,76 @@ function JobBrowser({
         window.location.hash = nextHash;
     };
 
+    const fetchFacets = async ({ scope, retrievalMode: requestedRetrievalMode }) => {
+        const requestSequence = facetRequestSequenceRef.current + 1;
+        facetRequestSequenceRef.current = requestSequence;
+        facetAbortControllerRef.current?.abort();
+        const controller = new AbortController();
+        facetAbortControllerRef.current = controller;
+        const isLatestRequest = () => (
+            facetRequestSequenceRef.current === requestSequence
+            && !controller.signal.aborted
+        );
+
+        setIsFacetsLoading(true);
+        setFacetsError('');
+
+        try {
+            const response = await fetch(apiPath('/jobs/search/facets'), {
+                method: 'POST',
+                signal: controller.signal,
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    scope,
+                    retrieval_mode: requestedRetrievalMode,
+                }),
+            });
+            if (!isLatestRequest()) return false;
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                if (!isLatestRequest()) return false;
+                throw new Error(formatApiErrorDetail(
+                    payload?.detail,
+                    'Failed to refresh filter counts',
+                ));
+            }
+
+            const data = await response.json();
+            if (!isLatestRequest()) return false;
+            setFilterOptions(data);
+            return true;
+        } catch (err) {
+            if (!isLatestRequest() || err?.name === 'AbortError') return false;
+            setFacetsError(err.message);
+            return false;
+        } finally {
+            if (facetRequestSequenceRef.current === requestSequence) {
+                if (facetAbortControllerRef.current === controller) {
+                    facetAbortControllerRef.current = null;
+                }
+                setIsFacetsLoading(false);
+            }
+        }
+    };
+
     const fetchJobs = async ({
         scope,
         page,
         pageSize,
         commitScope = false,
         clearDraft = false,
-        includeFacets = true,
+        refreshFacets = commitScope,
     }) => {
         const requestSequence = searchRequestSequenceRef.current + 1;
         searchRequestSequenceRef.current = requestSequence;
         searchAbortControllerRef.current?.abort();
+        if (refreshFacets) {
+            facetRequestSequenceRef.current += 1;
+            facetAbortControllerRef.current?.abort();
+            facetAbortControllerRef.current = null;
+        }
         const controller = new AbortController();
         searchAbortControllerRef.current = controller;
         const isLatestRequest = () => (
@@ -223,6 +286,10 @@ function JobBrowser({
         );
 
         setIsLoading(true);
+        if (refreshFacets) {
+            setIsFacetsLoading(false);
+            setFacetsError('');
+        }
         setError(null);
         setExportError('');
 
@@ -238,7 +305,7 @@ function JobBrowser({
                     retrieval_mode: retrievalMode,
                     page,
                     page_size: pageSize,
-                    include_facets: includeFacets,
+                    include_facets: false,
                 }),
             });
 
@@ -271,12 +338,8 @@ function JobBrowser({
                 total: data.total,
                 totalPages: data.total_pages
             }));
-            if (data.facets) {
-                setFilterOptions(data.facets);
-            }
-
+            const committedScope = data.applied_scope || scope;
             if (commitScope) {
-                const committedScope = data.applied_scope || scope;
                 setActiveScope(committedScope);
                 writeJobBrowserSession(
                     getJobBrowserSessionStorage(),
@@ -288,6 +351,12 @@ function JobBrowser({
             }
 
             setSearchError('');
+            if (refreshFacets) {
+                void fetchFacets({
+                    scope: committedScope,
+                    retrievalMode,
+                });
+            }
             return true;
         } catch (err) {
             if (!isLatestRequest() || err?.name === 'AbortError') {
@@ -310,6 +379,9 @@ function JobBrowser({
             searchRequestSequenceRef.current += 1;
             searchAbortControllerRef.current?.abort();
             searchAbortControllerRef.current = null;
+            facetRequestSequenceRef.current += 1;
+            facetAbortControllerRef.current?.abort();
+            facetAbortControllerRef.current = null;
         };
     }, []);
 
@@ -471,7 +543,7 @@ function JobBrowser({
             scope: activeScope,
             page: newPage,
             pageSize: pagination.pageSize,
-            includeFacets: false,
+            refreshFacets: false,
         });
     };
 
@@ -718,6 +790,14 @@ function JobBrowser({
                     onDatePresetChange={handleDatePresetChange}
                     filterOptions={filterOptions}
                     isLoading={isLoading}
+                    isFacetsLoading={isFacetsLoading}
+                    facetsError={facetsError}
+                    onRetryFacets={() => {
+                        void fetchFacets({
+                            scope: activeScope,
+                            retrievalMode,
+                        });
+                    }}
                     datePreset={draftDatePreset}
                     validationError={dateValidationError}
                     pendingChangeCount={pendingChangeCount}
@@ -726,44 +806,65 @@ function JobBrowser({
 
             <div className="job-results-area">
                 {activeScope.layers.length > 0 && (
-                    <div className="scope-trail glass-panel" aria-label="Active scope trail">
-                        {activeScope.layers.map((layer, index) => (
-                            <div key={layer.client_id} className="scope-trail-item">
-                                <div>
-                                    <strong>Layer {index + 1}</strong>
-                                    <ul>
-                                        {summarizeJobBrowserLayer(layer, filterOptions).map(
-                                            (summary) => <li key={summary}>{summary}</li>,
-                                        )}
-                                    </ul>
-                                </div>
-                                <button
-                                    type="button"
-                                    className="scope-remove-btn"
-                                    onClick={() => handleEditLayer(layer.client_id)}
-                                    disabled={isLoading}
-                                >
-                                    Edit layer
-                                </button>
-                                <button
-                                    type="button"
-                                    className="scope-remove-btn"
-                                    onClick={() => handleRemoveLayer(layer.client_id)}
-                                    disabled={isLoading}
-                                >
-                                    Remove layer
-                                </button>
-                            </div>
-                        ))}
-                        <button
-                            type="button"
-                            className="scope-remove-btn"
-                            onClick={handleClearAllLayers}
-                            disabled={isLoading}
-                        >
-                            Clear all layers
-                        </button>
-                    </div>
+                    <section
+                        className="scope-trail glass-panel"
+                        aria-labelledby="applied-layers-heading"
+                    >
+                        <div className="scope-trail-header">
+                            <h3 id="applied-layers-heading">Applied layers</h3>
+                            <button
+                                type="button"
+                                className="scope-remove-btn scope-clear-btn"
+                                onClick={handleClearAllLayers}
+                                disabled={isLoading}
+                            >
+                                Clear all layers
+                            </button>
+                        </div>
+                        <div className="scope-trail-list">
+                            {activeScope.layers.map((layer, index) => {
+                                const layerTitleId = `applied-layer-${index + 1}-title`;
+                                return (
+                                    <article
+                                        key={layer.client_id}
+                                        className="scope-trail-item"
+                                        role="group"
+                                        aria-labelledby={layerTitleId}
+                                    >
+                                        <strong
+                                            id={layerTitleId}
+                                            className="scope-trail-item-title"
+                                        >
+                                            Layer {index + 1}
+                                        </strong>
+                                        <div className="scope-trail-actions">
+                                            <button
+                                                type="button"
+                                                className="scope-remove-btn"
+                                                onClick={() => handleEditLayer(layer.client_id)}
+                                                disabled={isLoading}
+                                            >
+                                                Edit layer
+                                            </button>
+                                            <button
+                                                type="button"
+                                                className="scope-remove-btn"
+                                                onClick={() => handleRemoveLayer(layer.client_id)}
+                                                disabled={isLoading}
+                                            >
+                                                Remove layer
+                                            </button>
+                                        </div>
+                                        <ul className="scope-trail-summary">
+                                            {summarizeJobBrowserLayer(layer, filterOptions).map(
+                                                (summary) => <li key={summary}>{summary}</li>,
+                                            )}
+                                        </ul>
+                                    </article>
+                                );
+                            })}
+                        </div>
+                    </section>
                 )}
 
                 {error ? (

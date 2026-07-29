@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
@@ -9,12 +9,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import jobs as jobs_api
+from app.api.job_search_query import exact_anchor_fragments
 from app.database import Base
 from app.database import get_db
 from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
 from app.models import Company, Job
 from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
+    CurrentJobSkillAssignment,
+    CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.source_job_attributes import EmploymentType, JobEmploymentType
@@ -52,7 +55,9 @@ def _facet_session():
             JobSourceClassificationPathNode.__table__,
             JobEmploymentType.__table__,
             CurrentTaxonomyNodeRecord.__table__,
+            CurrentTaxonomyAliasRecord.__table__,
             CurrentCompanyIndustryAssignment.__table__,
+            CurrentJobSkillAssignment.__table__,
         ],
     )
     session = sessionmaker(bind=engine, expire_on_commit=False)()
@@ -484,6 +489,243 @@ def test_post_job_search_can_omit_facets_for_pagination():
 
         assert response.status_code == 200
         assert response.json()["facets"] is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_post_job_search_facets_returns_contextual_catalog():
+    db, engine = _facet_session()
+    try:
+        app = FastAPI()
+        app.include_router(jobs_api.router, prefix="/api")
+        app.dependency_overrides[get_db] = lambda: db
+
+        response = TestClient(app).post(
+            "/api/jobs/search/facets",
+            json={
+                "scope": {"layers": []},
+                "retrieval_mode": "lexical",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["employment_types"][0] == {
+            "id": "full_time",
+            "label": "Full-time",
+            "count": 0,
+            "order": 1,
+            "parent_id": None,
+            "level": None,
+            "source": None,
+            "path": None,
+            "is_selectable": True,
+        }
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_post_job_search_facets_matches_search_expression_validation():
+    db, engine = _facet_session()
+    try:
+        app = FastAPI()
+        app.include_router(jobs_api.router, prefix="/api")
+        app.dependency_overrides[get_db] = lambda: db
+        client = TestClient(app)
+        scope = {
+            "layers": [
+                {
+                    "client_id": "root",
+                    "text_expression": '"unterminated',
+                }
+            ]
+        }
+
+        search_response = client.post(
+            "/api/jobs/search",
+            json={"scope": scope, "include_facets": False},
+        )
+        facets_response = client.post(
+            "/api/jobs/search/facets",
+            json={"scope": scope, "retrieval_mode": "lexical"},
+        )
+
+        assert facets_response.status_code == search_response.status_code == 422
+        assert facets_response.json()["detail"] == search_response.json()["detail"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_exact_anchor_fragments_are_necessary_under_search_normalization():
+    assert exact_anchor_fragments("ERP") == ("erp",)
+    assert exact_anchor_fragments("data_science") == ("data", "science")
+    assert exact_anchor_fragments("C++") == ("c",)
+    assert exact_anchor_fragments("++") == ()
+
+
+def test_execute_search_page_returns_window_total_and_preserves_empty_pages():
+    db, engine = _facet_session()
+    try:
+        company = Company(
+            company_id="window-count-company",
+            source_site="jobsdb",
+            source_company_id="window-count-company",
+            name="Window Count Company",
+        )
+        db.add_all(
+            [
+                Job(
+                    job_id="window-oldest",
+                    source_site="jobsdb",
+                    source_job_id="window-oldest",
+                    company=company,
+                    title="Oldest",
+                    posted_date=datetime(2026, 7, 1),
+                ),
+                Job(
+                    job_id="window-middle",
+                    source_site="jobsdb",
+                    source_job_id="window-middle",
+                    company=company,
+                    title="Middle",
+                    posted_date=datetime(2026, 7, 2),
+                ),
+                Job(
+                    job_id="window-newest",
+                    source_site="jobsdb",
+                    source_job_id="window-newest",
+                    company=company,
+                    title="Newest",
+                    posted_date=datetime(2026, 7, 3),
+                ),
+            ]
+        )
+        db.commit()
+        query = jobs_api._build_query_from_scope(
+            db,
+            JobSearchScopeSchema(layers=[]),
+        )
+        statements: list[str] = []
+
+        def capture_statement(_connection, _cursor, statement, *_args):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", capture_statement)
+        rows, total = jobs_api.execute_search_page(
+            query,
+            page=1,
+            page_size=2,
+        )
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
+        assert [job.job_id for job, _company in rows] == [
+            "window-newest",
+            "window-middle",
+        ]
+        assert total == 3
+        assert any("OVER" in statement.upper() for statement in statements)
+        assert not any(
+            "SELECT COUNT(*) AS COUNT_1" in statement.upper()
+            for statement in statements
+        )
+
+        rows, total = jobs_api.execute_search_page(
+            query,
+            page=3,
+            page_size=2,
+        )
+        assert rows == []
+        assert total == 3
+
+        rows, total = jobs_api.execute_search_page(
+            query.order_by(Job.title.asc()),
+            page=1,
+            page_size=3,
+            preserve_query_order=True,
+        )
+        assert [job.job_id for job, _company in rows] == [
+            "window-middle",
+            "window-newest",
+            "window-oldest",
+        ]
+        assert total == 3
+
+        rows, total = jobs_api.execute_search_page(
+            query.filter(Job.title == "Missing"),
+            page=1,
+            page_size=2,
+        )
+        assert rows == []
+        assert total == 0
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_semantic_and_hybrid_facets_use_the_candidate_scope_without_ranking():
+    db, engine = _facet_session()
+    try:
+        jobsdb = Company(
+            company_id="facet-candidate-jobsdb",
+            source_site="jobsdb",
+            source_company_id="facet-candidate-jobsdb",
+            name="Candidate JobsDB Company",
+        )
+        ctgoodjobs = Company(
+            company_id="facet-candidate-ctgoodjobs",
+            source_site="ctgoodjobs",
+            source_company_id="facet-candidate-ctgoodjobs",
+            name="Candidate CTGoodJobs Company",
+        )
+        db.add_all(
+            [
+                Job(
+                    job_id="facet-platform-role",
+                    source_site="jobsdb",
+                    source_job_id="facet-platform-role",
+                    company=jobsdb,
+                    title="Platform Engineer",
+                ),
+                Job(
+                    job_id="facet-operations-role",
+                    source_site="ctgoodjobs",
+                    source_job_id="facet-operations-role",
+                    company=ctgoodjobs,
+                    title="Operations Analyst",
+                ),
+            ]
+        )
+        db.commit()
+
+        app = FastAPI()
+        app.include_router(jobs_api.router, prefix="/api")
+        app.dependency_overrides[get_db] = lambda: db
+        client = TestClient(app)
+
+        for retrieval_mode in ("semantic", "hybrid"):
+            response = client.post(
+                "/api/jobs/search/facets",
+                json={
+                    "scope": {
+                        "layers": [
+                            {
+                                "client_id": "root",
+                                "text_expression": "platform",
+                            }
+                        ]
+                    },
+                    "retrieval_mode": retrieval_mode,
+                },
+            )
+
+            assert response.status_code == 200
+            counts = {
+                option["id"]: option["count"]
+                for option in response.json()["sources"]
+            }
+            assert counts == {"jobsdb": 1, "ctgoodjobs": 1, "offertoday": 0}
     finally:
         db.close()
         engine.dispose()

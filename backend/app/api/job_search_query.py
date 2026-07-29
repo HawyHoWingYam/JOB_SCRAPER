@@ -47,6 +47,15 @@ def normalize_search_text(value: str) -> str:
     return normalized.strip()
 
 
+def exact_anchor_fragments(value: str) -> tuple[str, ...]:
+    """Return raw substrings that every normalized exact match must contain."""
+    return tuple(normalize_search_text(value).split())
+
+
+def _escape_like_fragment(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _normalized_column(column):
     expression = func.lower(func.coalesce(column, ""))
     for char in _NORMALIZED_SPACE_CHARS:
@@ -54,6 +63,16 @@ def _normalized_column(column):
     for _ in range(8):
         expression = func.replace(expression, "  ", " ")
     return literal(" ").concat(expression).concat(literal(" "))
+
+
+def _build_exact_column_clause(column, value: str):
+    normalized_value = normalize_search_text(value)
+    exact_condition = _normalized_column(column).like(f"% {normalized_value} %")
+    anchors = [
+        column.ilike(f"%{_escape_like_fragment(fragment)}%", escape="\\")
+        for fragment in exact_anchor_fragments(value)
+    ]
+    return and_(*anchors, exact_condition) if anchors else exact_condition
 
 
 def _build_skill_name_exists_clause(clause: ParsedSearchClause):
@@ -65,11 +84,12 @@ def _build_skill_name_exists_clause(clause: ParsedSearchClause):
             CurrentTaxonomyAliasRecord.alias.ilike(pattern),
         )
     else:
-        normalized_value = normalize_search_text(clause.value)
-        pattern = f"% {normalized_value} %"
         condition = or_(
-            _normalized_column(skill_label).like(pattern),
-            _normalized_column(CurrentTaxonomyAliasRecord.alias).like(pattern),
+            _build_exact_column_clause(skill_label, clause.value),
+            _build_exact_column_clause(
+                CurrentTaxonomyAliasRecord.alias,
+                clause.value,
+            ),
         )
 
     return (
@@ -114,16 +134,17 @@ def build_search_clause(clause: ParsedSearchClause):
             _build_skill_name_exists_clause(clause),
         )
 
-    normalized_value = normalize_search_text(clause.value)
-    pattern = f"% {normalized_value} %"
     return or_(
-        _normalized_column(Job.title).like(pattern),
-        _normalized_column(Job.description).like(pattern),
-        _normalized_column(Job.ai_summary).like(pattern),
-        _normalized_column(Job.source_classification_name).like(pattern),
-        _normalized_column(Job.source_subclassification_name).like(pattern),
-        _normalized_column(Company.name).like(pattern),
-        _normalized_column(Company.ai_description).like(pattern),
+        _build_exact_column_clause(Job.title, clause.value),
+        _build_exact_column_clause(Job.description, clause.value),
+        _build_exact_column_clause(Job.ai_summary, clause.value),
+        _build_exact_column_clause(Job.source_classification_name, clause.value),
+        _build_exact_column_clause(
+            Job.source_subclassification_name,
+            clause.value,
+        ),
+        _build_exact_column_clause(Company.name, clause.value),
+        _build_exact_column_clause(Company.ai_description, clause.value),
         _build_skill_name_exists_clause(clause),
     )
 

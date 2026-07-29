@@ -36,6 +36,18 @@ class RetrievalService:
             self.query_embedding_model = _build_default_query_embedding_model()
         return self.query_embedding_model
 
+    def facets(self, request):
+        from app.services.job_search_facets import JobSearchFacets
+
+        facet_scope = request.scope
+        retrieval_mode = getattr(request, "retrieval_mode", "lexical")
+        if (
+            retrieval_mode in {"semantic", "hybrid"}
+            and extract_semantic_query_text(request.scope)
+        ):
+            facet_scope = build_semantic_candidate_scope(request.scope)
+        return JobSearchFacets(self.db).build(facet_scope)
+
     def search(self, request, *, layer_summaries=None):
         from app.api import jobs as jobs_api
 

@@ -60,10 +60,14 @@ function FilterPanel({
     onDatePresetChange,
     filterOptions,
     isLoading,
+    isFacetsLoading = false,
+    facetsError = '',
+    onRetryFacets,
     datePreset,
     validationError,
     pendingChangeCount,
 }) {
+    const facetControlsDisabled = isLoading || isFacetsLoading || Boolean(facetsError);
     const handleChange = (field, value) => {
         onFilterChange({
             ...filters,
@@ -175,6 +179,24 @@ function FilterPanel({
                     </div>
                 </div>
 
+                {isFacetsLoading && (
+                    <p
+                        className="filter-facet-state"
+                        role="status"
+                        aria-label="Refreshing filter counts"
+                    >
+                        Refreshing filter counts…
+                    </p>
+                )}
+                {facetsError && (
+                    <div className="filter-facet-state error" role="alert">
+                        <span>{facetsError}</span>
+                        <button type="button" onClick={onRetryFacets}>
+                            Retry filter counts
+                        </button>
+                    </div>
+                )}
+
                 <div className="filter-chip-row" aria-label="Active filters">
                     {activeFilters.length === 0 ? (
                         <span className="filter-chip filter-chip-empty">No structured filters applied</span>
@@ -199,7 +221,7 @@ function FilterPanel({
                             className="premium-select"
                             value={filters.source_site || ''}
                             onChange={(e) => handleChange('source_site', e.target.value)}
-                            disabled={isLoading}
+                            disabled={facetControlsDisabled}
                         >
                             {sourceOptions.map((option) => (
                                 <option
@@ -218,7 +240,7 @@ function FilterPanel({
                         options={sourceClassificationOptions}
                         selectedIds={filters.source_classification_ids || []}
                         onChange={(ids) => handleChange('source_classification_ids', ids)}
-                        disabled={isLoading}
+                        disabled={facetControlsDisabled}
                         groupBySource
                     />
 
@@ -232,7 +254,7 @@ function FilterPanel({
                                 : []),
                         ]}
                         onChange={handleEmploymentTypeChange}
-                        disabled={isLoading}
+                        disabled={facetControlsDisabled}
                     />
 
                     <HierarchyFacetSelector
@@ -246,7 +268,7 @@ function FilterPanel({
                                 industry: '',
                             })
                         }
-                        disabled={isLoading}
+                        disabled={facetControlsDisabled}
                     />
 
                     <label className="filter-field">

@@ -167,6 +167,11 @@ class JobSearchRequestSchema(BaseModel):
     include_facets: bool = True
 
 
+class JobSearchFacetsRequestSchema(BaseModel):
+    scope: JobSearchScopeSchema
+    retrieval_mode: Literal["lexical", "semantic", "hybrid"] = "lexical"
+
+
 class JobSearchLayerSummarySchema(BaseModel):
     client_id: str
     label: str

@@ -43,6 +43,7 @@ from app.services.manual_job_intake import (
     ManualJobIntakeError,
 )
 from app.schemas.job_search import (
+    JobSearchFacetsRequestSchema,
     JobSearchRequestSchema,
     JobSearchFiltersSchema,
     JobSearchLayerSchema,
@@ -518,14 +519,12 @@ def _build_search_response(
     include_facets: bool = False,
     facet_scope: Optional[JobSearchScopeSchema] = None,
 ):
-    offset = (page - 1) * page_size
-    total = query.order_by(None).count()
-    results_query = query
-    if not preserve_query_order:
-        results_query = results_query.order_by(
-            func.coalesce(Job.posted_date, Job.created_at).desc()
-        )
-    results = results_query.offset(offset).limit(page_size).all()
+    results, total = execute_search_page(
+        query,
+        page=page,
+        page_size=page_size,
+        preserve_query_order=preserve_query_order,
+    )
     facets = (
         JobSearchFacets(query.session).build(facet_scope or applied_scope)
         if include_facets and (facet_scope is not None or applied_scope is not None)
@@ -541,6 +540,36 @@ def _build_search_response(
         facets=facets,
         db=query.session,
     )
+
+
+def execute_search_page(
+    query,
+    *,
+    page: int,
+    page_size: int,
+    preserve_query_order: bool = False,
+):
+    offset = (page - 1) * page_size
+    results_query = query
+    if not preserve_query_order:
+        results_query = results_query.order_by(
+            func.coalesce(Job.posted_date, Job.created_at).desc()
+        )
+    windowed_rows = (
+        results_query
+        .add_columns(func.count().over().label("_search_total"))
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+    if windowed_rows:
+        return (
+            [(row[0], row[1]) for row in windowed_rows],
+            int(windowed_rows[0][2]),
+        )
+
+    total = query.order_by(None).count() if offset else 0
+    return [], total
 
 
 def _build_search_response_from_results(
@@ -901,6 +930,15 @@ async def search_jobs_post(
         request,
         layer_summaries=layer_summaries,
     )
+
+
+@router.post("/search/facets", response_model=JobSearchFacetsSchema)
+async def search_job_facets(
+    request: JobSearchFacetsRequestSchema,
+    db: Session = Depends(get_db),
+):
+    _validate_scope_expressions(request)
+    return RetrievalService(db).facets(request)
 
 
 @router.post("/search/export")

@@ -78,6 +78,20 @@ function searchFacets() {
   };
 }
 
+function fetchCallsFor(pathname) {
+  return globalThis.fetch.mock.calls.filter(([input]) => (
+    new URL(String(input), 'http://localhost').pathname === pathname
+  ));
+}
+
+function jobSearchCalls() {
+  return fetchCallsFor('/api/jobs/search');
+}
+
+function facetSearchCalls() {
+  return fetchCallsFor('/api/jobs/search/facets');
+}
+
 function jobSearchPayload(overrides = {}) {
   return {
     ...productFixture.job_search,
@@ -122,11 +136,18 @@ describe('JobBrowser governed filters', () => {
       }
       return Promise.reject(new Error(`Unexpected API read: ${path}`));
     });
-    globalThis.fetch = vi.fn((_url, options) => {
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
       if (!options?.body) {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve(productFixture.job_detail),
+        });
+      }
+      if (url.pathname === '/api/jobs/search/facets') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(searchFacets()),
         });
       }
       const request = JSON.parse(options.body);
@@ -134,6 +155,7 @@ describe('JobBrowser governed filters', () => {
         ok: true,
         json: () => Promise.resolve(jobSearchPayload({
           applied_scope: request.scope,
+          facets: null,
         })),
       });
     });
@@ -143,13 +165,15 @@ describe('JobBrowser governed filters', () => {
     vi.restoreAllMocks();
   });
 
-  it('uses the atomic search facets for every governed selector', async () => {
+  it('uses progressively loaded search facets for every governed selector', async () => {
     const user = userEvent.setup();
     render(<JobBrowser />);
 
-    await user.click(await screen.findByRole('button', {
+    const employmentTypes = await screen.findByRole('button', {
       name: 'Employment Type, 0 selected',
-    }));
+    });
+    await waitFor(() => expect(employmentTypes).toBeEnabled());
+    await user.click(employmentTypes);
     expect(screen.getByRole('checkbox', {
       name: 'Full-time (2 jobs)',
     })).toBeInTheDocument();
@@ -242,8 +266,8 @@ describe('JobBrowser governed filters', () => {
     }));
     await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
 
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
-    const submitted = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    const submitted = JSON.parse(jobSearchCalls()[1][1].body);
     expect(submitted.scope.layers).toHaveLength(1);
     expect(submitted.scope.layers[0].structured_filters).toEqual(
       expect.objectContaining({
@@ -267,7 +291,14 @@ describe('JobBrowser governed filters', () => {
         }],
       },
     }));
-    globalThis.fetch = vi.fn((_url, options) => {
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(searchFacets()),
+        });
+      }
       const request = JSON.parse(options.body);
       return Promise.resolve({
         ok: true,
@@ -286,8 +317,8 @@ describe('JobBrowser governed filters', () => {
       <JobBrowser routeHash="#jobs?skill_ids=python" />,
     );
 
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
-    let request = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
+    let request = JSON.parse(jobSearchCalls()[0][1].body);
     expect(request.scope.layers[0].structured_filters).toEqual(
       expect.objectContaining({
         skill_ids: ['python'],
@@ -299,8 +330,8 @@ describe('JobBrowser governed filters', () => {
       <JobBrowser routeHash="#jobs?skill_ids=docker" />,
     );
 
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
-    request = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    request = JSON.parse(jobSearchCalls()[1][1].body);
     expect(request.scope.layers[0].structured_filters).toEqual(
       expect.objectContaining({
         skill_ids: ['docker'],
@@ -329,10 +360,10 @@ describe('JobBrowser governed filters', () => {
 
     render(<JobBrowser routeHash="#jobs" />);
 
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
-    const request = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
+    const request = JSON.parse(jobSearchCalls()[0][1].body);
     expect(request.page).toBe(1);
-    expect(request.include_facets).toBe(true);
+    expect(request.include_facets).toBe(false);
     expect(request.scope.layers).toHaveLength(2);
     expect(request.scope.layers[0]).toEqual(expect.objectContaining({
       client_id: 'root',
@@ -344,19 +375,29 @@ describe('JobBrowser governed filters', () => {
   it('adds, edits, removes, and clears applied layers in place', async () => {
     const user = userEvent.setup();
     render(<JobBrowser />);
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
 
     const searchInput = screen.getByPlaceholderText(
       'Query titles, companies, or deep scan descriptions...',
     );
     await user.type(searchInput, 'platform');
     await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
     expect(await screen.findByText('Text: platform')).toBeInTheDocument();
+    const appliedLayers = screen.getByRole('region', { name: 'Applied layers' });
+    expect(within(appliedLayers).getByRole('heading', { name: 'Applied layers' }))
+      .toBeInTheDocument();
+    const firstLayer = within(appliedLayers).getByRole('group', { name: 'Layer 1' });
+    expect(within(firstLayer).getByRole('button', { name: 'Edit layer' }))
+      .toBeInTheDocument();
+    expect(within(firstLayer).getByRole('button', { name: 'Remove layer' }))
+      .toBeInTheDocument();
+    expect(within(appliedLayers).getByRole('button', { name: 'Clear all layers' }))
+      .toBeInTheDocument();
 
     await user.type(searchInput, 'remote');
     await user.click(screen.getByRole('button', { name: 'Refine current results' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(3));
     expect(screen.getByText('Layer 2')).toBeInTheDocument();
 
     await user.click(screen.getAllByRole('button', { name: 'Edit layer' })[0]);
@@ -364,8 +405,8 @@ describe('JobBrowser governed filters', () => {
     await user.clear(searchInput);
     await user.type(searchInput, 'senior platform');
     await user.click(screen.getByRole('button', { name: 'Save layer' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(4));
-    let request = JSON.parse(globalThis.fetch.mock.calls[3][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(4));
+    let request = JSON.parse(jobSearchCalls()[3][1].body);
     expect(request.scope.layers.map((layer) => layer.client_id)).toEqual([
       'root',
       'refine-1',
@@ -373,13 +414,13 @@ describe('JobBrowser governed filters', () => {
     expect(request.scope.layers[0].text_expression).toBe('senior platform');
 
     await user.click(screen.getAllByRole('button', { name: 'Remove layer' })[1]);
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(5));
-    request = JSON.parse(globalThis.fetch.mock.calls[4][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(5));
+    request = JSON.parse(jobSearchCalls()[4][1].body);
     expect(request.scope.layers.map((layer) => layer.client_id)).toEqual(['root']);
 
     await user.click(screen.getByRole('button', { name: 'Clear all layers' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(6));
-    request = JSON.parse(globalThis.fetch.mock.calls[5][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(6));
+    request = JSON.parse(jobSearchCalls()[5][1].body);
     expect(request.scope).toEqual({ layers: [] });
     expect(window.sessionStorage.getItem(JOB_BROWSER_SESSION_KEY)).toBeNull();
   });
@@ -387,7 +428,7 @@ describe('JobBrowser governed filters', () => {
   it('discards a pending refinement without requesting jobs', async () => {
     const user = userEvent.setup();
     render(<JobBrowser />);
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
 
     const searchInput = screen.getByPlaceholderText(
       'Query titles, companies, or deep scan descriptions...',
@@ -396,12 +437,19 @@ describe('JobBrowser governed filters', () => {
     await user.click(screen.getByRole('button', { name: 'Discard changes' }));
 
     expect(searchInput).toHaveValue('');
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(jobSearchCalls()).toHaveLength(1);
   });
 
   it('omits facets when only changing pages', async () => {
     const user = userEvent.setup();
-    globalThis.fetch = vi.fn((_url, options) => {
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(searchFacets()),
+        });
+      }
       const request = JSON.parse(options.body);
       return Promise.resolve({
         ok: true,
@@ -413,11 +461,210 @@ describe('JobBrowser governed filters', () => {
       });
     });
     render(<JobBrowser />);
+    await waitFor(() => expect(facetSearchCalls()).toHaveLength(1));
     await user.click(await screen.findByRole('button', { name: 'Next' }));
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
-    const request = JSON.parse(globalThis.fetch.mock.calls[1][1].body);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    const request = JSON.parse(jobSearchCalls()[1][1].body);
     expect(request.page).toBe(2);
     expect(request.include_facets).toBe(false);
+    expect(facetSearchCalls()).toHaveLength(1);
+  });
+
+  it('keeps an in-flight facet refresh active while changing pages', async () => {
+    const user = userEvent.setup();
+    const deferredFacets = createDeferredSearchResponse();
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return deferredFacets.promise;
+      }
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(jobSearchPayload({
+          applied_scope: request.scope,
+          total: 30,
+          total_pages: 2,
+          facets: null,
+        })),
+      });
+    });
+
+    render(<JobBrowser />);
+
+    await waitFor(() => expect(facetSearchCalls()).toHaveLength(1));
+    expect(screen.getByRole('status', { name: 'Refreshing filter counts' }))
+      .toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
+
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    expect(facetSearchCalls()).toHaveLength(1);
+    expect(screen.getByRole('status', { name: 'Refreshing filter counts' }))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    })).toBeDisabled();
+
+    deferredFacets.resolve(searchFacets());
+
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    })).toBeEnabled());
+  });
+
+  it('shows fresh Jobs before contextual facets finish refreshing', async () => {
+    const deferredFacets = createDeferredSearchResponse();
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return deferredFacets.promise;
+      }
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          ...searchPayloadWithTitle('Fresh Platform Result'),
+          applied_scope: request.scope,
+          facets: null,
+        }),
+      });
+    });
+
+    render(<JobBrowser />);
+
+    expect(await screen.findByRole('article', {
+      name: 'Fresh Platform Result at Fixture Company',
+    })).toBeInTheDocument();
+    const resultRequest = JSON.parse(jobSearchCalls()[0][1].body);
+    expect(resultRequest.include_facets).toBe(false);
+    expect(facetSearchCalls()).toHaveLength(1);
+    expect(screen.getByRole('status', { name: 'Refreshing filter counts' }))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    })).toBeDisabled();
+
+    deferredFacets.resolve(searchFacets());
+
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    })).toBeEnabled());
+    expect(screen.queryByRole('status', { name: 'Refreshing filter counts' }))
+      .not.toBeInTheDocument();
+  });
+
+  it('keeps successful Jobs visible when facets fail and retries only the counts', async () => {
+    const user = userEvent.setup();
+    let facetAttempt = 0;
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        facetAttempt += 1;
+        if (facetAttempt === 1) {
+          return Promise.resolve({
+            ok: false,
+            json: () => Promise.resolve({ detail: 'Facet service offline' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(searchFacets()),
+        });
+      }
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          ...searchPayloadWithTitle('Durable Platform Result'),
+          applied_scope: request.scope,
+          facets: null,
+        }),
+      });
+    });
+
+    render(<JobBrowser />);
+
+    expect(await screen.findByRole('article', {
+      name: 'Durable Platform Result at Fixture Company',
+    })).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Facet service offline');
+    expect(screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Retry filter counts' }));
+
+    await waitFor(() => expect(facetSearchCalls()).toHaveLength(2));
+    expect(screen.getByRole('article', {
+      name: 'Durable Platform Result at Fixture Company',
+    })).toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    })).toBeEnabled();
+    expect(screen.queryByText('Facet service offline')).not.toBeInTheDocument();
+  });
+
+  it('ignores an older facet response after a newer scope has fresh counts', async () => {
+    const user = userEvent.setup();
+    const olderFacets = createDeferredSearchResponse();
+    let facetAttempt = 0;
+    let resultAttempt = 0;
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        facetAttempt += 1;
+        if (facetAttempt === 1) return olderFacets.promise;
+        const freshFacets = searchFacets();
+        freshFacets.employment_types[0].count = 9;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(freshFacets),
+        });
+      }
+      resultAttempt += 1;
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          ...searchPayloadWithTitle(`Result Scope ${resultAttempt}`),
+          applied_scope: request.scope,
+          facets: null,
+        }),
+      });
+    });
+
+    render(<JobBrowser />);
+    await screen.findByRole('article', {
+      name: 'Result Scope 1 at Fixture Company',
+    });
+
+    const searchInput = screen.getByPlaceholderText(
+      'Query titles, companies, or deep scan descriptions...',
+    );
+    await user.type(searchInput, 'new scope');
+    await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
+
+    await screen.findByRole('article', {
+      name: 'Result Scope 2 at Fixture Company',
+    });
+    const employmentTypes = screen.getByRole('button', {
+      name: 'Employment Type, 0 selected',
+    });
+    await waitFor(() => expect(employmentTypes).toBeEnabled());
+    await user.click(employmentTypes);
+    expect(screen.getByRole('checkbox', { name: 'Full-time (9 jobs)' }))
+      .toBeInTheDocument();
+
+    const staleFacets = searchFacets();
+    staleFacets.employment_types[0].count = 99;
+    olderFacets.resolve(staleFacets);
+
+    await waitFor(() => {
+      expect(screen.queryByRole('checkbox', { name: 'Full-time (99 jobs)' }))
+        .not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('checkbox', { name: 'Full-time (9 jobs)' }))
+      .toBeInTheDocument();
   });
 
   it('keeps the newest search response when an older request finishes later', async () => {
@@ -434,7 +681,7 @@ describe('JobBrowser governed filters', () => {
       </StrictMode>,
     );
 
-    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
     latestRequest.resolve(searchPayloadWithTitle('Latest Platform Role'));
     expect(await screen.findByRole('article', {
       name: 'Latest Platform Role at Fixture Company',
