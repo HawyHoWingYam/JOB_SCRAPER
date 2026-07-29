@@ -27,6 +27,7 @@ from app.models.schedule import (
     ScheduleExecution,
     ScrapeSchedule,
 )
+from app.services import scheduler_service
 
 
 @compiles(UUID, "sqlite")
@@ -137,6 +138,19 @@ def test_automation_contract_requires_one_phase_and_valid_timezone():
             timezone="UTC",
             scope=_scope(),
         )
+
+
+def test_scheduler_runtime_is_rebuilt_without_a_private_database_table(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_scheduler(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(scheduler_service, "AsyncIOScheduler", fake_scheduler)
+
+    assert scheduler_service._build_runtime_scheduler() is not None
+    assert captured == {"timezone": "UTC"}
 
 
 def test_two_stale_forms_save_in_order_and_later_submission_wins(automation_db):

@@ -28,7 +28,6 @@ from app.models.current_taxonomy import (
     CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
-    CurrentJobTaxonomyAssignment,
     CurrentSkillCandidate,
     CurrentSourceTaxonomyMapping,
     CurrentTaxonomyAliasRecord,
@@ -100,11 +99,6 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
         db.add_all(
             (
                 CurrentTaxonomyNodeRecord(
-                    taxonomy="job", code="engineering", parent_code=None,
-                    level="domain", labels={"en": "Engineering"}, sort_order=1,
-                    is_assignable=True, is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
                     taxonomy="company_industry", code="technology", parent_code=None,
                     level="section", labels={"en": "Technology"}, sort_order=1,
                     is_assignable=True, is_active=True,
@@ -126,13 +120,6 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
                     taxonomy="skill", node_code="python", alias="Py",
                     normalized_alias="py",
                 ),
-                CurrentJobTaxonomyAssignment(
-                    job_id=job.id, taxonomy="job", taxonomy_code="engineering",
-                    method="ai", evidence_hash="a" * 64, source_evidence_refs=[],
-                    mapping_ids=[], model_provenance={"name": "model"},
-                    breadcrumb={"domain": {"code": "engineering", "label": "Engineering"}},
-                    captured_at=now,
-                ),
                 CurrentCompanyIndustryAssignment(
                     company_id=company.id, taxonomy="company_industry",
                     taxonomy_code="technology", method="source", provenance={},
@@ -152,9 +139,9 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
                     first_seen_at=now, last_seen_at=now, created_at=now, updated_at=now,
                 ),
                 CurrentSourceTaxonomyMapping(
-                    taxonomy="job", source_site="offertoday",
-                    source_key="offertoday:100", target_code="engineering",
-                    source_label="Technology", role="allowed", evidence={},
+                    taxonomy="company_industry", source_site="offertoday",
+                    source_key="offertoday:100", target_code="technology",
+                    source_label="Technology", role="deterministic", evidence={},
                 ),
                 GovernanceAuditEvent(
                     id=audit_id, domain="skill", subject_type="candidate",
@@ -275,7 +262,7 @@ def test_disposable_postgres_and_redis_cutover_passes_twice(tmp_path: Path) -> N
             before = cutover.export_retained(artifact)
             assert before.table_counts["companies"] == 1
             assert before.table_counts["jobs"] == 1
-            assert before.table_counts["job_embeddings"] == 1
+            assert "job_embeddings" not in before.table_counts
             RedisRuntimeStateCleaner(redis_client).clear()
             clear_database(db_engine=engine, confirmed=True)
             bootstrap_database(db_engine=engine, metadata=Base.metadata)

@@ -15,9 +15,11 @@ from app.config import settings  # noqa: E402
 from app.database import Base, engine  # noqa: E402
 import app.models  # noqa: E402,F401
 from app.job_intelligence.sandbox_cutover import (  # noqa: E402
+    POST_START_MUTABLE_RETAINED_TABLE_NAMES,
     RedisRuntimeStateCleaner,
     SandboxCutover,
     clear_database,
+    verify_post_cutover_state,
     verify_target_state,
 )
 from app.utils.redis_client import RedisClient  # noqa: E402
@@ -90,8 +92,20 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "import":
         result = cutover.import_retained(args.artifact, target_engine=engine)
     else:
-        retention = cutover.verify_retained(args.artifact, target_engine=engine)
-        target = verify_target_state(db_engine=engine, metadata=Base.metadata)
+        retention = cutover.verify_retained(
+            args.artifact,
+            target_engine=engine,
+            ignored_table_names=(
+                POST_START_MUTABLE_RETAINED_TABLE_NAMES
+                if args.command == "finalize"
+                else ()
+            ),
+        )
+        target = (
+            verify_post_cutover_state(db_engine=engine, metadata=Base.metadata)
+            if args.command == "finalize"
+            else verify_target_state(db_engine=engine, metadata=Base.metadata)
+        )
         if not retention.matched or not target.clean:
             raise RuntimeError(
                 "Sandbox verification failed: "

@@ -21,6 +21,9 @@ RETAINED_TABLE_NAMES = (
     "companies",
     "employment_types",
     "source_classifications",
+    "offertoday_taxonomy_snapshots",
+    "offertoday_keyword_entries",
+    "offertoday_keyword_mutation_logs",
     "current_taxonomy_nodes",
     "current_taxonomy_aliases",
     "jobs",
@@ -32,20 +35,29 @@ RETAINED_TABLE_NAMES = (
     "job_source_employment_labels",
     "job_employment_types",
     "current_source_taxonomy_mappings",
-    "current_job_taxonomy_assignments",
     "current_company_industry_assignments",
     "current_job_skill_assignments",
     "current_skill_candidates",
     "current_job_skill_mentions",
     "governance_audit_events",
     "governance_idempotency_records",
-    "job_embeddings",
 )
 
 ADDITIVE_RETAINED_TABLE_NAMES = {
     "manual_job_evidence",
     "manual_job_mutation_receipts",
+    "offertoday_taxonomy_snapshots",
+    "offertoday_keyword_entries",
+    "offertoday_keyword_mutation_logs",
 }
+
+POST_START_MUTABLE_RETAINED_TABLE_NAMES = frozenset(
+    {
+        "source_classifications",
+        "offertoday_taxonomy_snapshots",
+        "offertoday_keyword_entries",
+    }
+)
 
 DISCARDED_COLUMNS = {
     "companies": ("extra_data",),
@@ -150,6 +162,8 @@ class SandboxCutover:
                         )
                     raw_rows = []
                     for source_row in connection.execute(select(source_table)).mappings():
+                        if not _retain_source_row(name, source_row):
+                            continue
                         raw_rows.append(
                             {
                                 column.name: _coerce_source_value(
@@ -221,12 +235,16 @@ class SandboxCutover:
         path: Path,
         *,
         target_engine: Engine,
+        ignored_table_names: Iterable[str] = (),
     ) -> VerificationReport:
         tables = self._validated_table_payloads(path)
+        ignored = frozenset(ignored_table_names)
         mismatches: list[str] = []
         with target_engine.connect() as connection:
             for item in tables:
                 name = item["name"]
+                if name in ignored:
+                    continue
                 table = self._metadata.tables[name]
                 actual_rows = [
                     self._serialize_row(name, row)
@@ -416,6 +434,19 @@ def _coerce_source_value(column, value: Any) -> Any:
     if python_type is UUID and isinstance(value, str):
         return UUID(value)
     return value
+
+
+def _retain_source_row(table_name: str, row: Mapping[str, Any]) -> bool:
+    if table_name in {
+        "current_taxonomy_nodes",
+        "current_taxonomy_aliases",
+        "current_source_taxonomy_mappings",
+    }:
+        return row.get("taxonomy") != "job"
+    if table_name in _AUDIT_TABLE_NAMES:
+        domain = str(row.get("domain") or "").strip().lower().replace("-", "_")
+        return domain not in {"job_taxonomy", "canonical_job_taxonomy"}
+    return True
 
 
 def _row_sort_key(row: Mapping[str, Any]) -> bytes:

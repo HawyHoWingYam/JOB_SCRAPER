@@ -22,6 +22,8 @@ RUNTIME_TABLE_NAMES = (
     "enrichment_run_items",
     "enrichment_runs",
     "event_outbox",
+    "job_embeddings",
+    "offertoday_keyword_csv_reviews",
     "schedule_executions",
     "scheduler_runtime_heartbeats",
     "scrape_schedules",
@@ -50,6 +52,76 @@ class TargetStateReport:
 
 
 def verify_target_state(*, db_engine: Engine, metadata: MetaData) -> TargetStateReport:
+    actual, issues = _target_schema_issues(db_engine=db_engine, metadata=metadata)
+    with db_engine.connect() as connection:
+        for name in RUNTIME_TABLE_NAMES:
+            table = metadata.tables.get(name)
+            if table is None or name not in actual:
+                continue
+            count = connection.scalar(select(func.count()).select_from(table)) or 0
+            if count:
+                issues.append(f"runtime table is not empty: {name} ({count})")
+    return TargetStateReport(clean=not issues, issues=tuple(issues))
+
+
+def verify_post_cutover_state(
+    *, db_engine: Engine, metadata: MetaData
+) -> TargetStateReport:
+    """Verify the restarted stack before deleting the transient artifact."""
+
+    actual, issues = _target_schema_issues(db_engine=db_engine, metadata=metadata)
+    jobs = metadata.tables.get("jobs")
+    embeddings = metadata.tables.get("job_embeddings")
+    if jobs is None or embeddings is None:
+        issues.append("post-cutover embedding tables are not registered")
+        return TargetStateReport(clean=False, issues=tuple(issues))
+    if "jobs" not in actual or "job_embeddings" not in actual:
+        return TargetStateReport(clean=False, issues=tuple(issues))
+
+    with db_engine.connect() as connection:
+        job_count = connection.scalar(select(func.count()).select_from(jobs)) or 0
+        embedding_count = (
+            connection.scalar(select(func.count()).select_from(embeddings)) or 0
+        )
+        missing_count = (
+            connection.scalar(
+                select(func.count())
+                .select_from(
+                    jobs.outerjoin(
+                        embeddings,
+                        embeddings.c.job_id == jobs.c.id,
+                    )
+                )
+                .where(embeddings.c.job_id.is_(None))
+            )
+            or 0
+        )
+        invalid_dimension_count = (
+            connection.scalar(
+                select(func.count())
+                .select_from(embeddings)
+                .where(embeddings.c.embedding_dimensions != 384)
+            )
+            or 0
+        )
+    if embedding_count != job_count:
+        issues.append(
+            "post-cutover embedding count differs from jobs: "
+            f"jobs={job_count}, embeddings={embedding_count}"
+        )
+    if missing_count:
+        issues.append(f"jobs missing post-cutover embeddings: {missing_count}")
+    if invalid_dimension_count:
+        issues.append(
+            "post-cutover embeddings have invalid dimensions: "
+            f"{invalid_dimension_count}"
+        )
+    return TargetStateReport(clean=not issues, issues=tuple(issues))
+
+
+def _target_schema_issues(
+    *, db_engine: Engine, metadata: MetaData
+) -> tuple[set[str], list[str]]:
     expected = set(metadata.tables)
     actual = set(inspect(db_engine).get_table_names())
     issues: list[str] = []
@@ -63,15 +135,7 @@ def verify_target_state(*, db_engine: Engine, metadata: MetaData) -> TargetState
     forbidden = sorted(actual.intersection(FORBIDDEN_TABLE_NAMES))
     if forbidden:
         issues.append("forbidden version tables: " + ", ".join(forbidden))
-    with db_engine.connect() as connection:
-        for name in RUNTIME_TABLE_NAMES:
-            table = metadata.tables.get(name)
-            if table is None or name not in actual:
-                continue
-            count = connection.scalar(select(func.count()).select_from(table)) or 0
-            if count:
-                issues.append(f"runtime table is not empty: {name} ({count})")
-    return TargetStateReport(clean=not issues, issues=tuple(issues))
+    return actual, issues
 
 
 def clear_database(*, db_engine: Engine, confirmed: bool) -> None:
@@ -99,5 +163,6 @@ __all__ = [
     "RUNTIME_TABLE_NAMES",
     "TargetStateReport",
     "clear_database",
+    "verify_post_cutover_state",
     "verify_target_state",
 ]

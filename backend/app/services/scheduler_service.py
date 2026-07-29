@@ -1,7 +1,7 @@
 """
 Scheduler Service - Manages scheduled scraping tasks.
 
-Uses APScheduler for cron-based job scheduling with PostgreSQL persistence.
+APScheduler is a rebuildable in-memory timer over persisted `scrape_schedules`.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
@@ -27,6 +26,10 @@ from app.services.source_sites import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+
+
+def _build_runtime_scheduler() -> AsyncIOScheduler:
+    return AsyncIOScheduler(timezone="UTC")
 
 
 def _normalize_next_run_at(value: datetime | None) -> datetime | None:
@@ -97,13 +100,7 @@ class SchedulerService:
         )
 
         if self.scheduler is None:
-            jobstores = {
-                "default": SQLAlchemyJobStore(url=settings.database_url)
-            }
-            self.scheduler = AsyncIOScheduler(
-                jobstores=jobstores,
-                timezone="UTC",
-            )
+            self.scheduler = _build_runtime_scheduler()
 
         self.scheduler.start()
         self._initialized = True
