@@ -40,7 +40,7 @@ For the first production path:
 
 ### R4 — Preserve verified behavior
 
-The fixes must preserve Source/limit filtering, stable candidate snapshots, Job classification writes, same-domain mutual exclusion, cross-domain parallelism, cooperative Stop, per-item failure isolation, Retry lineage, reload history, atomic Skill creation, and transaction rollback.
+The fixes must preserve Source/limit filtering, stable candidate snapshots, same-domain mutual exclusion, cross-domain parallelism, cooperative Stop, per-item failure isolation, Retry lineage, reload history, atomic Skill creation, and transaction rollback.
 
 ## Acceptance Criteria
 

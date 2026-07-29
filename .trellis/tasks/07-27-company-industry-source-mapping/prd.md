@@ -16,7 +16,7 @@ Fix GitHub issue #38 by providing a production-supported path to establish Compa
 - Existing automatic startup synchronization applies only to Source Classification Registries and logs failures without preventing API startup.
 - Current inspection found 47 distinct non-empty structured OfferToday `industry.name` labels plus 7 retained compatibility-only `company_industry` labels used when structured evidence is absent: 54 runtime Source Industry Label identities in total. The loaded Company Industry Taxonomy has 1,814 active nodes, of which 1,001 are assignable.
 - Only two observed OfferToday labels exactly match taxonomy labels, and both targets are non-assignable ancestor nodes. An automatic display-name join therefore cannot produce the initial production mappings safely.
-- Production currently has zero Company Industry Source Mappings; existing mapping rows cover only Job Taxonomy.
+- Production currently has zero Company Industry Source Mappings; existing mapping rows do not provide Company Industry coverage.
 
 ## Requirements
 

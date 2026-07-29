@@ -33,12 +33,11 @@ Extend the classification Preview projection with Company readiness counts: sele
 
 ## Frontend
 
-Render mapped/selected/unmapped/excluded counts and actionable readiness text on the Company Industry tab. Disable Start when mapped is zero. Job Taxonomy and Skill retain their existing Preview presentation.
+Render mapped/selected/unmapped/excluded counts and actionable readiness text on the Company Industry tab. Disable Start when mapped is zero. Skill retains its existing Preview presentation.
 
 ## Compatibility and rollout
 
 - Do not add mapping versions, releases, startup synchronization, CRUD APIs, or taxonomy fallback nodes.
-- Do not change optional Source-to-Canonical Job Mapping behavior.
 - No database schema change is required; empty-schema bootstrap and retained-data cutover stay untouched.
 - Validate the 54-label manifest and tests before running the management command against the shared sandbox.
 - Rollback restores the previous manifest and reruns the same synchronization command.

@@ -28,5 +28,5 @@ Fix GitHub issue #37 so changing Source or limit after Preview invalidates confi
 - [ ] Restoring old form values does not silently resurrect a discarded Preview; a fresh Preview is required.
 - [ ] An out-of-order Preview response cannot overwrite the result for newer inputs.
 - [ ] Start submits the domain, filters, and limit associated with the visible Preview.
-- [ ] Job Taxonomy, Company Industry, and Skill Preview/Start component tests cover their applicable input contracts.
+- [ ] Company Industry and Skill Preview/Start component tests cover their applicable input contracts. The former Job Taxonomy case is superseded by task `07-29-remove-canonical-job-taxonomy`.
 - [ ] Backend run creation still freezes a stable candidate snapshot and existing lifecycle tests remain green.
