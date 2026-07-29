@@ -13,8 +13,8 @@ The current classification hierarchy owned by one Source. Its labels, identifier
 _Avoid_: Global taxonomy, shared sector list
 
 **Source Classification**:
-One identifiable node in a Source Taxonomy. Its identity is meaningful only together with its Source and must not be inferred from its display name. Registering a newly observed Source Classification does not create or change a Canonical Job Taxonomy node.
-_Avoid_: Sector, canonical category
+One identifiable node in a Source Taxonomy. Its identity is meaningful only together with its Source and must not be inferred from its display name. Source Classifications remain Source-owned and are never combined into a cross-Source Job hierarchy.
+_Avoid_: Sector, global category
 
 **Source Classification Registry**:
 The ordinary current collection of Source Classifications known for one Source. Newly observed classifications are registered directly, top-level classifications may be active or inactive for new crawl authoring, and records are not physically deleted when a Source stops returning them.
@@ -76,48 +76,8 @@ _Avoid_: Live backlog, entire database backlog
 The explicit population from which a detail run may freeze its Backlog Snapshot: the Source backlog, a source-classification Crawl Scope, or one named listing batch.
 _Avoid_: Detail category IDs, latest batch
 
-**Canonical Job Taxonomy**:
-The ordinary current project-owned hierarchy used to classify collected jobs consistently across Sources. It is structured as Job Domain → Job Category → Job Subcategory and does not determine Crawl Scope.
-_Avoid_: AI Category, Classification, Canonical Job Domain when referring to the whole hierarchy
-
-**Job Domain**:
-The broadest first-level concept in the Canonical Job Taxonomy.
-_Avoid_: Canonical Job Domain, domain taxonomy
-
-**Job Category**:
-A second-level concept in the Canonical Job Taxonomy, nested within one Job Domain.
-_Avoid_: AI Category, Source Classification
-
-**Job Subcategory**:
-The most specific third-level concept in the Canonical Job Taxonomy, nested within one Job Category.
-_Avoid_: Source Subclassification, job type
-
-**Canonical Taxonomy Assignment**:
-An accepted classification of one Job to an existing Job Subcategory, with recorded method and evidence.
-_Avoid_: AI Category, fallback path
-
-**Canonical Assignment Coverage**:
-The share of a stated Job population that has an accepted Canonical Taxonomy Assignment. It is a population-health measure, not Source-to-Canonical Job Mapping coverage.
-_Avoid_: Mapping coverage, taxonomy coverage
-
-**Source-to-Canonical Job Mapping**:
-An optional current mapping from one Source Classification identity to existing Canonical Job Taxonomy targets or one explicit non-mapping disposition. Missing mapping never blocks automated classification and the mapping never changes Crawl Scope.
-_Avoid_: Required coverage release, Source category alias, automatic name match
-
-**Source-Bound Canonical Slice**:
-The optional deterministic union of existing Job Subcategories permitted by available mappings across one Job's Source Classification Path evidence. When no mapping exists, automated classification may use the full Canonical Job Taxonomy.
-_Avoid_: Default category, fallback path
-
-**Unassigned Canonical Taxonomy**:
-The explicit state in which a Job has no acceptable Canonical Taxonomy Assignment.
-_Avoid_: General fallback, Unknown category
-
-**Classification-Ready Unassigned Job**:
-An unassigned Job that retains the source-attribute evidence required to attempt Canonical Job Taxonomy classification. Readiness means the prerequisites are present; it does not guarantee that classification will succeed.
-_Avoid_: Unassigned Job, guaranteed classification candidate
-
 **Classification Processing Batch**:
-A bounded automated run that assigns current Job Taxonomy, Company Industry, or Skill data, exposes progress and failures, and permits retry without requiring routine per-item human review.
+A bounded automated run that assigns current Company Industry or Skill data, exposes progress and failures, and permits retry without requiring routine per-item human review.
 _Avoid_: Governance queue, taxonomy release, manual review backlog
 
 ## Job attributes
@@ -144,7 +104,7 @@ _Avoid_: Employment Type, working days
 
 **Company Industry Taxonomy**:
 The ordinary current project-owned classification of business sectors used to describe Companies with stable identities, seeded from the five-level HSIC V2.0 hierarchy.
-_Avoid_: Job Taxonomy, Source Classification, free-text industry list
+_Avoid_: Role Classification, Source Classification, free-text industry list
 
 **Company Industry**:
 A governed business-sector concept from the Company Industry Taxonomy assigned to a Company from traceable company-level evidence.
@@ -211,7 +171,7 @@ _Avoid_: Routine queue reviewer, release publisher
 ## Operations
 
 **Operations Dashboard**:
-The internal operator surface for observing collection, enrichment, and canonical-assignment health. Its taxonomy and Skill distributions describe the Published Job Corpus and are not labor-market trend analytics.
+The internal operator surface for observing collection, enrichment, governed Skills, and unresolved Skill Candidate health. Its Skill distribution describes the Published Job Corpus and is not labor-market trend analytics.
 _Avoid_: Labor market dashboard, market intelligence dashboard
 
 **Dashboard Corpus Snapshot**:

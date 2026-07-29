@@ -194,7 +194,6 @@ docker compose up -d
 | `GET /api/jobs/{job_id}/similar` | Related job recommendations |
 | `POST /api/ai/enrich` | AI enrichment |
 | `GET /api/stats/skills` | Skill statistics |
-| `GET /api/stats/categories` | Category distribution |
 
 ## License
 

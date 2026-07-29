@@ -1,19 +1,15 @@
 # Automated Classification Batch Contracts
 
-## 1. Scope / Trigger
+## Scenario: Classify Company Industry and repeated Skill Candidates
 
-Use this contract when changing automated Job Taxonomy, Company Industry, or
-Skill classification selection, batch lifecycle, Skill Candidate promotion,
-the classification HTTP API, the Classification console, or the repeated-Skill
-threshold in Settings.
+### 1. Scope / Trigger
 
-Classification Processing Batches replace routine Governance queues. They use
-ordinary current taxonomy state and never create releases, revisions, review
-items, or fallback taxonomy nodes.
+Use this contract for the shared preview/run/stop/retry lifecycle, Company
+Industry mapping batches, repeated-Skill Candidate promotion, Classification UI,
+or the Skill threshold in Settings. Supported domains are exactly
+`company_industry` and `skill`.
 
-## 2. Signatures
-
-Shared runtime and adapters:
+### 2. Signatures
 
 ```python
 ClassificationBatchRuntime(db, adapters).preview(domain, filters, limit)
@@ -21,15 +17,7 @@ ClassificationBatchRuntime(db, adapters).start(domain, filters, limit)
 ClassificationBatchRuntime(db, adapters).execute(run_id)
 ClassificationBatchRuntime(db, adapters).request_stop(run_id)
 ClassificationBatchRuntime(db, adapters).retry_failed(run_id)
-
-ClassificationDomainAdapter.select_candidates(db, filters, limit)
-ClassificationDomainAdapter.process_candidate(db, candidate)
-ClassificationRetryFilter.filter_retry_candidates(db, candidates)
-accepted_job_taxonomy_assignment_job_ids() -> Select[tuple[UUID]]
-job_taxonomy_classification_ready_jobs() -> Select[tuple[Job]]
 ```
-
-HTTP:
 
 ```text
 POST /api/job-intelligence/classification-batches/{domain}/preview
@@ -38,242 +26,83 @@ GET  /api/job-intelligence/classification-batches/runs?domain=...
 GET  /api/job-intelligence/classification-batches/runs/{run_id}
 POST /api/job-intelligence/classification-batches/runs/{run_id}/stop
 POST /api/job-intelligence/classification-batches/runs/{run_id}/retry-failed
-#classification?target=<job_taxonomy|skill>
-```
-
-Frontend route ownership:
-
-```js
-parseClassificationRoute(hash) -> { target }
-hashForClassificationRoute(target) -> string
-```
-
-Request body:
-
-```json
-{"filters": {"source_sites": ["jobsdb"]}, "limit": 100}
+#classification?target=<skill|company_industry>
 ```
 
 Persistence uses `classification_batch_runs` and
 `classification_batch_run_items`. `app_runtime_settings` owns nullable
-`skill_auto_create_distinct_job_threshold`; its effective default is `5`.
+`skill_auto_create_distinct_job_threshold`; effective default is `5`.
 
-## 3. Contracts
+### 3. Contracts
 
-- The shared runtime owns `pending -> running -> completed |
-  completed_with_failures | failed | cancelled`, aggregate counts, cooperative
-  Stop, and retry snapshots. Domain adapters own only bounded selection and one
-  item transaction work.
-- At most one active run exists per domain. Job Taxonomy, Company Industry, and
-  Skill may run independently.
-- Preview and start use the same adapter selection. Limit is `1..5000` and the
-  stable item snapshot is persisted before background execution begins.
-- Job Taxonomy selects non-deleted Jobs that have the required
-  `source_attribute_projection` and no accepted current assignment. An
-  accepted assignment points to an active, assignable Job leaf under active
-  Category and Domain ancestors. A stale row pointing to an inactive or
-  unassignable hierarchy remains effectively unassigned. The Dashboard ready
-  count and adapter Preview must both consume
-  `job_taxonomy_classification_ready_jobs()` before Source filters, ordering,
-  or limit. A non-selection is an item failure; no fallback assignment is
-  written.
-- Company Industry selects non-deleted unassigned Companies and accepts only a
-  current Source Industry mapping supported by preserved Job evidence. JobsDB,
-  OfferToday, and CTgoodjobs follow the same Source-qualified rule. A label is
-  never guessed into a Company Industry code.
-- Company Industry applies limit to the initially selected Company population,
-  then resolves retained Source Industry Labels against the governed manifest
-  and exact positive database projection. Mapped and actionable unsupported
-  Companies become items; explicit non-mappings are terminal exclusions and do
-  not pull replacement candidates beyond the limit.
-- Company Preview adds `mapped_item_count`, `unmapped_item_count`, and
-  `excluded_item_count`; the counts sum to `selected_item_count`. Start requires
-  `mapped_item_count > 0` in both the UI and backend. Unsupported items remain
-  isolated failures in a partially ready batch.
-- Skill selects unresolved Candidates whose current `distinct_job_count`
-  reaches the effective Settings threshold. Changing Settings affects later
-  selection only.
-- Skill processing first reuses exact current code/name/alias matches. Known
-  generic or suppressed terms are converted to generic/rejected Mention
-  evidence and never become Skills.
-- Failed-only Retry preserves the historical source run but may use an optional
-  domain filter to exclude subjects that have since reached a governed terminal
-  disposition. Skill Retry includes only Candidates that still own active
-  unresolved Candidate Mentions; a generic/rejected/resolved Candidate never
-  enters another retry snapshot.
-- New Skills require an existing active Category/Technology pair. The created
-  Skill, aliases, Candidate resolution, active Mention targets, and all affected
-  Job Skill projections share the item's transaction. Uncertain placement is a
-  retryable item failure; `Other`, `Unknown`, or other fallback nodes are never
-  created.
-- The frontend exposes three tabs over the same lifecycle: preview, start,
-  progress, Stop, failure detail, and retry-failed. It does not expose a
-  Governance or per-item review queue.
-- Dashboard Classification actions navigate to validated durable targets:
-  `job_taxonomy` and `skill`. Bare `#classification` and invalid targets resolve
-  to `job_taxonomy`. Supported tab changes serialize through the same route
-  owner. Navigation may refresh run history, but it never previews, starts,
-  retries, stops, or otherwise mutates a batch.
-- Frontend Preview authority is the accepted `{result, inputs}` pair. `inputs`
-  is one immutable normalized domain/filter/limit snapshot. Any material input
-  change clears that authority, aborts the in-flight request, and advances a
-  request generation so a late success or failure cannot commit.
-- Start sends only the normalized inputs stored with the visible Preview. It
-  never rebuilds the request from mutable controls. Preview remains advisory:
-  the backend reselects and freezes candidate identities when Start creates the
-  run; no preview token or Dispatch Plan is implied.
+- The runtime owns `pending -> running -> completed |
+  completed_with_failures | failed | cancelled`, counts, Stop, and retry.
+- At most one active run exists per retained domain; domains run independently.
+- Preview and Start use the same bounded selector; limit is `1..5000`.
+- Company Industry applies Source filters, selects a bounded Company population,
+  then reports `mapped_item_count`, `unmapped_item_count`, and
+  `excluded_item_count`. Start requires at least one mapped item.
+- Skill selects unresolved Candidates whose `distinct_job_count` reaches the
+  effective threshold. Existing Skill names/codes/aliases are reused.
+- Promotion creates no `Other`/`Unknown` fallback. Skill node, aliases,
+  Candidate resolution, Mentions, and affected projections share one item
+  transaction.
+- Failed-only Retry rechecks current eligibility and excludes Candidates that
+  already reached a terminal disposition.
+- The frontend has two tabs, defaults invalid/bare routes to `skill`, and keeps
+  Company Industry and Skill route targets durable.
+- Preview authority is the immutable accepted `{result, inputs}` pair. Any
+  domain, Source-filter, or limit change clears it and aborts the request.
 
-## 4. Validation & Error Matrix
+### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
 | Unknown domain or limit outside `1..5000` | `400`/`422`; no run |
-| Job is deleted, already has an accepted assignment, or lacks Source projection | Exclude it from Job Taxonomy Preview and Dashboard ready count |
-| Assignment points to an inactive/unassignable Job hierarchy | Treat it as unassigned; include it when all other readiness conditions hold |
-| Classification target is absent or invalid | Select Job Taxonomy safely; issue no batch mutation request |
-| Dashboard ready backlog is zero | Render the count but expose no enabled Classification action |
-| Active run already exists for the domain | `409`, code `active_classification_batch_exists`, existing run ID |
-| Preview selects zero items | Start remains disabled in the UI; direct start creates a terminal empty run |
-| Domain, applicable Source filter, or limit changes after Preview | Clear Preview immediately and disable Start until a fresh matching Preview succeeds |
-| Superseded Preview response arrives late | Ignore both success and failure; never restore stale Start authority or stale error state |
-| Stop pending run | Cancel every pending item immediately |
-| Stop running run | Set `stopping`; finish the in-flight item and cancel untouched items |
-| Retry has no failed items | `400`; no run |
-| Every historical failed Skill Candidate is now terminal | `400` with no failed items remaining retryable; create no retry run |
-| Skill Candidate falls below current threshold before execution | Item failed; no taxonomy mutation |
-| Skill matches current name/code/alias | Reuse it and reproject affected Jobs |
-| Skill is generic/suppressed | Generic/rejected Mention evidence; no Skill node |
-| Category/Technology missing, inactive, mismatched, or uncertain | Item failed; no fallback or partial write |
-| Company lacks mapped Source Industry evidence | Item failed; never infer by display label |
-| Selected Company population has zero mapped/effective items | Keep Preview counts visible; UI disables Start and direct Start returns `400` without a run |
-| Company label has an explicit non-mapping disposition | Count as excluded; create no Batch item and omit it from failed-only Retry |
-| Company label is missing or its manifest/database projection drifts | Keep an actionable unsupported item; a partial run fails it without rolling back mapped items |
+| Active run exists for domain | `409 active_classification_batch_exists` |
+| Invalid/bare frontend target | Select `skill`; perform no mutation |
+| Company selected population has zero mapped items | Show counts; disable/reject Start |
+| Company mapping is missing | Isolated item failure; never infer |
+| Company label is explicit non-mapping | Count excluded; no item/retry |
+| Candidate is below threshold at execution | Item failure; no taxonomy mutation |
+| Candidate placement is uncertain | Retryable failure with visible reason |
+| Inputs change after Preview | Abort, clear Preview, disable Start |
+| Superseded response arrives | Ignore success and failure |
 
-## 5. Good / Base / Bad Cases
+### 5. Good / Base / Bad Cases
 
-- **Good:** `Py` reaches five distinct Jobs, matches the current `Py` alias for
-  Python, resolves every active Mention, and rebuilds those five Job projections.
-- **Good:** `DuckDB` reaches the threshold, the classifier chooses an exact
-  existing Data/Data Warehouse path, and one ordinary current Skill is created.
-- **Base:** a Candidate reaches the threshold but placement is uncertain. The
-  item remains failed and can be retried after taxonomy or model improvements.
-- **Base:** `Project Management` reaches the threshold and becomes generic
-  evidence without creating a Skill.
-- **Base:** the operator previews JobsDB limit 25, then changes the limit to 50.
-  The count disappears and changing back to 25 still requires a fresh Preview.
-- **Good:** Sources are clicked in any order; Preview and Start share one
-  deterministically ordered Source snapshot.
-- **Good:** a stale assignment points to an inactive Job leaf; the ready Job is
-  counted on Dashboard and selected by Preview through the same query.
-- **Base:** `#classification` or an invalid target opens Job Taxonomy and loads
-  run history without creating a Preview or run.
-- **Good:** an older run failed `項目管理`; after governed generic resolution,
-  Retry omits it while preserving any other still-unresolved failed Candidate.
-- **Bad:** create `Other / Unknown / MysteryDB`, create a Review row, or mutate a
-  taxonomy release so the batch can report success.
-- **Bad:** keep the old count visible while Start reads the latest form state,
-  or let a late Preview response re-enable Start after its inputs changed.
-- **Bad:** implement three separate run tables/services with divergent Stop and
-  retry states.
+- **Good:** repeated `DuckDB` evidence is placed under an existing active
+  Category/Technology pair and affected Jobs gain a governed Skill.
+- **Good:** a Company batch processes mapped rows while preserving unsupported
+  rows as isolated failures.
+- **Base:** `#classification` loads Skill history without Preview or Start.
+- **Bad:** accept a removed Job-classification domain or fallback route.
+- **Bad:** hide Candidate failure reasons or create fallback Skill nodes.
 
-## 6. Tests Required
+### 6. Tests Required
 
-- Runtime tests assert preview/start parity, bounded stable item snapshots,
-  active conflict, success/failure counts, pending/running Stop, and failed-only
-  retry.
-- Retry tests assert domain filters preserve unresolved failures and exclude
-  subjects that became terminal after the source run.
-- Skill tests assert threshold default/update, threshold selection, exact alias
-  reuse, generic rejection, confirmed-path creation, affected Job reprojection,
-  and uncertain failure with no fallback nodes.
-- Adapter tests assert Job readiness excludes deleted, accepted-assigned, and
-  missing-projection rows; stale invalid assignments remain ready; Dashboard
-  count equals unfiltered Preview; Source filters and limits apply afterward.
-  Company tests retain their non-deleted/unassigned contract.
-- Company adapter tests also assert limit-before-exclusion, readiness counts,
-  mapped provenance writes, drift failures, explicit exclusion, and Retry
-  omission.
-- API tests assert the shared route set and run/item serialization without
-  Governance/Review routes.
-- Frontend tests assert preview gates Start, domain filters normalize correctly,
-  progress is accessible, failed reasons render, retry targets the displayed
-  run, and Skill does not show Source filters.
-- Classification route tests assert bare/default, both supported targets,
-  invalid fallback, refresh/hash synchronization, and that navigation issues no
-  preview/start/retry mutation. Dashboard/chart tests assert the taxonomy action
-  uses `classification_ready_unassigned_total`, the Skill action uses
-  `ready_candidate_total`, and zero backlog has no enabled action.
-- Frontend Preview tests also assert domain/Source/limit invalidation, no
-  resurrection after restoring old values, request abort, late-response
-  rejection, deterministic Source ordering, Start payload equality, and the
-  Source-independent Skill payload.
-- Empty-schema bootstrap must include both classification tables and the Skill
-  threshold column. Frontend lint/tests/build and backend Ruff/Mypy/tests pass.
+- Runtime tests cover both domains, active-run conflict, Stop, partial failure,
+  retry, transaction isolation, and settings threshold.
+- Company tests cover mapping counts, Source filters, non-mapping exclusions,
+  drift, and zero-mapped rejection.
+- Skill tests cover aggregation, aliases, terminal dispositions, uncertain
+  placement, atomic promotion, and reprojected Jobs.
+- Frontend tests cover two tabs, Skill default, Company route durability,
+  immutable Preview authority, request abort, visible failure evidence, and
+  no Source filters for Skill.
 
-## 7. Wrong vs Correct
+### 7. Wrong vs Correct
 
-### Wrong
+#### Wrong
 
-```python
-if placement_is_uncertain:
-    create_skill(category="Other", technology="Unknown", name=candidate.name)
+```js
+startClassificationBatch(domain, buildPayloadFromCurrentControls())
 ```
 
-This hides classification uncertainty and pollutes the ordinary taxonomy.
+#### Correct
 
-### Correct
-
-```python
-if decision.status != "create":
-    raise ValueError("Skill candidate placement is uncertain")
+```js
+startClassificationBatch(preview.inputs.domain, preview.inputs.payload)
 ```
 
-The runtime records the item failure and `retry_failed` can try it again later.
-No taxonomy, Candidate, Mention, or Job projection mutation survives the failed
-item transaction.
-
-### Wrong: drift Dashboard readiness away from Preview
-
-```python
-dashboard_query = ready_jobs_with_projection()
-preview_query = jobs_without_any_assignment_row()
-```
-
-### Correct: share the complete readiness query
-
-```python
-query = job_taxonomy_classification_ready_jobs()
-# Dashboard counts this query; the adapter adds Source filters/order/limit.
-```
-
-The shared seam includes accepted-assignment semantics and required Source
-projection, so predictable item failures never enter Preview merely because
-the Dashboard used a different population.
-
-### Wrong: mutable Preview confirmation
-
-```jsx
-setPreview(await previewClassificationBatch(domain, payload));
-await startClassificationBatch(domain, payload);
-```
-
-The displayed result and `payload` can describe different operator inputs, and
-an older response can overwrite a newer form state.
-
-### Correct: generation-fenced input snapshot
-
-```jsx
-const requestInputs = buildPreviewInputs(domain, limit, sourceSites);
-const generation = ++previewRequestGeneration.current;
-const result = await previewClassificationBatch(
-  requestInputs.domain,
-  requestInputs.payload,
-  { signal: controller.signal },
-);
-if (generation === previewRequestGeneration.current) {
-  setPreview({ result, inputs: requestInputs });
-}
-```
-
-Start then consumes `preview.inputs`; any material change aborts the request,
-advances the generation, and clears `preview`.
+Only the visible accepted Preview snapshot authorizes Start.

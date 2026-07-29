@@ -36,11 +36,14 @@ Retain exactly:
 - Companies and Jobs, including collected details and AI enrichment fields;
 - Company `website` and `ai_description_updated_at`, plus Manual Job evidence,
   freshness hashes, operator field authority, and mutation receipts;
-- Job embeddings without persisted taxonomy/model version identity;
+- no Job embeddings; they are regenerated from retained Job, Source, Company,
+  and governed Skill data after cutover;
 - ordinary Source Classification rows and complete Job source-path evidence;
-- current Job Taxonomy, Company Industry, Skill nodes, aliases, mappings,
-  assignments, Candidates, Mentions, and projections;
-- required audit/idempotency evidence after recursively removing application
+- current Company Industry and Skill nodes, aliases, mappings, assignments,
+  Candidates, Mentions, and projections; legacy rows with `taxonomy=job` are
+  excluded from shared current-taxonomy tables;
+- required Company Industry and Skill audit/idempotency evidence after excluding
+  Job-taxonomy domains and recursively removing application
   revision/release/version keys.
 
 Delete exactly:
@@ -53,7 +56,7 @@ Delete exactly:
 - schema-history tables and every compatibility archive.
 
 Never delete or regenerate retained Job IDs, Company IDs, details, enrichment,
-embeddings, or source evidence.
+or source evidence. Job embeddings are the explicit rebuildable exception.
 
 `companies.extra_data` and `jobs.search_vector` are the only intentionally
 removed compatibility columns in this cutover. Export records their pre-cutover
@@ -74,11 +77,32 @@ does not treat them as restorable data.
   table set and order, entry shape, row count, per-table hash, and row shape.
 - Import refuses any non-empty retained target table and inserts self-referential
   hierarchies parent-first inside one database transaction.
-- Verification re-exports every retained table and compares exact count/hash.
-  A failed verification preserves the artifact; `finalize` deletes it only
-  after both retained-state and target-state checks pass.
+- Pre-start verification re-exports every retained table, compares exact
+  count/hash, and requires runtime tables (including Job embeddings) to be
+  empty. After service startup and embedding regeneration, `finalize` repeats
+  exact checks for immutable retained tables. It permits startup-authoritative
+  changes only in Source Classifications, OfferToday taxonomy snapshots, and
+  the bootstrapped OfferToday keyword catalog, then requires exact schema/no
+  forbidden tables and one valid 384-dimensional embedding for every retained
+  Job. Normal post-start runtime rows no longer block deletion. Any failure
+  preserves the artifact.
 
-### 5. Ordered Cutover
+### 5. Good / Base / Bad Cases
+
+- **Good:** pre-start exact verification passes, the restarted stack changes
+  only the three declared startup-authoritative tables, every retained Job gets
+  one 384-dimensional embedding, smoke checks pass, and `finalize` deletes the
+  artifact.
+- **Base:** Source Classification labels or the OfferToday startup catalog
+  refresh after restart; immutable retained tables still match exactly and
+  post-cutover verification succeeds.
+- **Bad:** compare every retained table after startup and block forever on
+  expected catalog refreshes, or ignore all retained hashes and accidentally
+  hide loss in Jobs, Companies, Source evidence, or Skill Candidate evidence.
+- **Bad:** let APScheduler recreate `apscheduler_jobs`; this bypasses current ORM
+  metadata and makes the supposedly exact bootstrapped schema drift immediately.
+
+### 6. Ordered Cutover
 
 1. Run the disposable PostgreSQL/Redis rehearsal twice.
 2. Stop every persistent application, worker, sidecar, frontend, and Scrapy
@@ -96,7 +120,7 @@ does not treat them as restorable data.
 There is no rollback after step 9. Any ambiguity before database destruction
 aborts the workflow while the existing sandbox remains intact.
 
-### 6. Validation Matrix
+### 7. Validation Matrix
 
 | Condition | Required result |
 |---|---|
@@ -108,15 +132,21 @@ aborts the workflow while the existing sandbox remains intact.
 | Runtime table contains any row | Verification fails |
 | Forbidden release/revision/review/schema-history table exists | Verification fails |
 | Redis stream remains | Redis cleanup fails |
+| Immutable retained table changes after restart | Finalization fails and preserves artifact |
+| Declared startup-authoritative catalog changes | Finalization continues to post-cutover checks |
+| Job/embedding counts differ or an embedding is not 384-dimensional | Finalization fails and preserves artifact |
+| APScheduler or another subsystem creates an unexpected table | Finalization fails; remove the private persistence path |
 | All checks pass | Delete artifact, start complete stack, smoke test |
 
-### 7. Tests Required
+### 8. Tests Required
 
 - `test_sandbox_cutover.py`: deterministic export, recursive identity stripping,
   strict artifact gate, exact import/verification, parent-first hierarchy,
   failed-verification retention, Redis cleanup, runtime emptiness, forbidden
   table absence, additive Manual-table handling for older source schemas,
-  removed-column discard counts, and no backup/restore/rollback CLI commands.
+  removed-column discard counts, pre-start exact verification, declared
+  post-start mutable-table handling, embedding completeness, and no
+  backup/restore/rollback CLI commands.
 - `integration/test_sandbox_cutover_rehearsal.py`: a disposable PostgreSQL
   database ending in `_test` plus non-zero Redis DB; real RESTRICT cycles,
   consumer group pending entries, dead letters, retained corpus, vectors, and
@@ -124,7 +154,31 @@ aborts the workflow while the existing sandbox remains intact.
 - Full backend tests, frontend lint/tests/build, and fixture parity pass before
   any shared sandbox action.
 
-### 8. Forbidden Patterns
+### 9. Wrong vs Correct
+
+#### Wrong
+
+```python
+AsyncIOScheduler(
+    jobstores={"default": SQLAlchemyJobStore(url=settings.database_url)}
+)
+```
+
+This recreates an `apscheduler_jobs` table outside `Base.metadata` even though
+`scrape_schedules` already owns durable schedule state.
+
+#### Correct
+
+```python
+AsyncIOScheduler(timezone="UTC")
+```
+
+The scheduler reconciles this in-memory timer from current `scrape_schedules`
+after every startup. Pre-start `verify` owns exact retention/runtime emptiness;
+post-start `finalize` owns immutable retention, exact schema, and complete
+embedding checks.
+
+#### Forbidden patterns
 
 - A backup, restore, rollback, migration, publish, activate, or version command.
 - Clearing shared state while a persistent service is running.
@@ -132,3 +186,5 @@ aborts the workflow while the existing sandbox remains intact.
   validating the retained table manifest.
 - Recreating historical tasks, run rows, outbox events, stream commands, or
   application version identity during import.
+- Persisting a second APScheduler table; `scrape_schedules` is authoritative and
+  the in-memory scheduler is rebuilt from it after startup.

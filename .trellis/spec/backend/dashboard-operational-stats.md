@@ -1,232 +1,85 @@
 # Dashboard Operational Statistics Contracts
 
-## Scenario: Render retained-corpus taxonomy and Skill health
+## Scenario: Monitor retained corpus and governed Skill health
 
 ### 1. Scope / Trigger
 
-Use this contract when changing `/api/stats/overview`,
-`/api/stats/categories/dashboard`, `/api/stats/skills`, or the Dashboard cards
-that consume them. The Dashboard is an internal operations surface over all
-non-deleted acquired Jobs. It is not an active-listing or labor-market view;
-expired source listings remain in the population.
-
-Classification navigation and Jobs drill-down routes are separate consumers of
-the stable codes and action-ready counts. This contract does not authorize a
-batch start or define those routes.
+Use this contract when changing Dashboard overview, AI telemetry, Skill stats,
+Candidate backlog, chart drill-down, refresh isolation, or accessibility. The
+Dashboard has no Job-category distribution or Job-classification readiness.
 
 ### 2. Signatures
 
 ```text
 GET /api/stats/overview
-GET /api/stats/categories/dashboard
-GET /api/stats/skills?limit=<1..100>&category=<optional exact label>
-#jobs?canonical_subcategory_ids=<stable-code>
-#jobs?skill_ids=<stable-code>
-#classification?target=<job_taxonomy|skill>
+GET /api/ai/overview
+GET /api/stats/skills?limit=<1..100>&category=<optional>
 ```
-
-```python
-_dashboard_job_population_predicate() -> ColumnElement[bool]
-accepted_job_taxonomy_assignment_job_ids() -> Select[tuple[UUID]]
-job_taxonomy_classification_ready_jobs() -> Select[tuple[Job]]
-get_dashboard_category_stats(db: Session) -> DashboardCategoryStatsSchema
-get_skill_stats(limit: int, category: str | None, db: Session) \
-    -> DashboardSkillStatsSchema
-```
-
-The page boundary owns one Refresh coordinator. Each section keeps
-`data`, `loading`, `error`, `lastUpdated`, and one abort controller.
 
 ```js
-parseJobsRoute(hash) -> { canonicalSubcategoryIds, skillIds }
-hashForJobsRoute({ canonicalSubcategoryIds, skillIds }) -> string
-parseClassificationRoute(hash) -> { target }
-hashForClassificationRoute(target) -> string
+onSelectSkill(skill) -> #jobs?skill_ids=<stable-code>
+onOpenClassification() -> #classification?target=skill
 ```
 
 ### 3. Contracts
 
-- Overview `total_jobs`, taxonomy `population_total`, and all acquired-Job
-  filters use `Job.is_deleted IS FALSE`. “Current” describes ordinary current
-  canonical state, not listing activity.
-- A Job contributes to taxonomy `assigned_total` only when its current Job
-  assignment points to an active, assignable leaf under active Category and
-  Domain ancestors. `unassigned_total = population_total - assigned_total`.
-- `classification_ready_unassigned_total` applies the same accepted-assignment
-  definition and additionally requires `Job.source_attribute_projection`.
-  Merely having an assignment row to an inactive or unassignable node must not
-  remove a Job from this readiness cohort. Dashboard counting and Job Taxonomy
-  Preview both consume `job_taxonomy_classification_ready_jobs()`; the adapter
-  adds optional Source filters, ordering, and limit afterward.
-- Taxonomy returns six concrete rows in `top_categories`. `other_categories`
-  contains the summed count and every remaining concrete row. Concrete rows
-  have stable `code`, visible `path`, `label`, `count`, and
-  `share_of_assigned`; `Other` has no taxonomy identity.
-- Skill `processed_total` is the count of non-deleted Jobs with
-  `ai_enriched_at`; pending enrichment is outside the denominator.
-  `matched_job_total` counts distinct Jobs in that cohort with at least one
-  current assignment to an active, assignable Skill whose ancestors are
-  active. Per-row `count` is distinct Jobs and `prevalence` uses
-  `processed_total`. Multi-Skill prevalence values are independent and do not
-  sum to 100%.
-- The Skill leaderboard contains current canonical assignments only. Active
-  Candidate Mentions are reported separately as distinct Candidate IDs,
-  distinct affected Job IDs, and distinct Candidates meeting the threshold
-  returned by `AIRuntimeSettingsService`.
-- Skill rows are globally ordered by count descending then stable code
-  ascending before applying `limit`. `dashboard_bucket` is backend-owned.
-  Frontend grouping preserves response membership and relative order, keeps
-  preferred known buckets first, and appends non-empty unknown buckets.
-- The UI distinguishes returned from currently visible Skill rows. Per-bucket
-  overflow and taxonomy `Other` use buttons with `aria-expanded`; full values
-  and paths have accessible names and remain readable on narrow screens.
-- Refresh is manual and page-owned; there is no polling. Sections commit
-  independently. A failed refresh retains previous data only with an alert,
-  stale label, unchanged last-successful timestamp, and retry action. An
-  in-flight section with retained data remains visibly labelled refreshing.
-- Every concrete taxonomy and Skill row is a semantic Jobs drill-down action.
-  Navigation serializes only stable `code` values through the shared Jobs hash
-  route. Labels, breadcrumbs, counts, and `dashboard_bucket` never select Jobs.
-- The durable Jobs route accepts repeated `canonical_subcategory_ids` and
-  `skill_ids` query keys. It trims, validates, de-duplicates, and bounds stable
-  codes before `JobBrowser` creates one ordinary root search layer. Bare
-  `#jobs` remains the unfiltered route; same-view hash changes rehydrate the
-  scope for refresh and browser back/forward navigation.
-- The taxonomy `Other` aggregate has no route identity and remains an expansion
-  control. Its expanded concrete rows use their own stable codes.
-- The taxonomy Classification action is present only when
-  `classification_ready_unassigned_total > 0` and targets `job_taxonomy`. The
-  Skill Classification action is present only when `ready_candidate_total > 0`
-  and targets `skill`. Navigation changes the durable route and selected tab
-  only; it never previews, starts, retries, stops, or mutates a batch.
-- Bare `#classification` and invalid Classification targets safely resolve to
-  Job Taxonomy. Refresh and browser navigation preserve supported explicit
-  targets. Route strings remain owned by `appRoute.js`, not chart components.
+- Overview counts the non-deleted retained corpus and separates AI-eligible,
+  enriched, pending, ineligible, active-run, and failure signals.
+- Skill denominators are successfully enriched Jobs, not all acquired Jobs.
+- Skill rows use governed assignments only and preserve backend response order.
+- Candidate backlog remains separate from governed Skill match coverage and is
+  visible on the Dashboard.
+- Dashboard loads overview, AI overview, and Skills independently. Refresh
+  aborts superseded requests, retains prior successful data on partial failure,
+  and marks only the failed section stale.
+- Skill drill-down serializes stable Skill codes through the shared Jobs route.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
-| Skill `limit` is below 1 or above 100 | HTTP 422; do not clamp silently |
-| Population or processed denominator is zero | Coverage and prevalence are `0`; return valid empty summaries |
-| Job is deleted | Exclude it from population, assignments, matches, and Candidate backlog |
-| Assignment leaf is inactive/unassignable, or an ancestor is inactive | Treat the Job as unassigned for both coverage and readiness |
-| Skill bucket is unknown to the frontend | Append the non-empty bucket after preferred buckets; do not crash or remap it |
-| Initial section request fails | Show unavailable alert and section retry; render no fabricated data |
-| Refresh fails after prior success | Keep data, mark it stale, show its prior timestamp, and keep other successful updates |
-| Component unmounts or a newer request supersedes a request | Abort the old request and do not update state from it |
-| Jobs route value is blank, malformed, or longer than the stable-code bound | Drop that value; never resolve it from a label |
-| Jobs route contains duplicate stable codes | Preserve the first occurrence only |
-| Hash is bare `#jobs` or all route values are invalid | Load the ordinary unfiltered Jobs scope |
-| JobBrowser route hash changes while Jobs view remains mounted | Abort/supersede the old search and fetch the reconstructed scope |
-| Dashboard taxonomy/Skill ready count is zero | Show the truthful zero; render no enabled Classification action |
-| Classification target is missing or invalid | Fall back to Job Taxonomy without a batch mutation request |
+| Skill limit outside API bound | `422` |
+| No enriched Jobs | Return truthful zero/N/A denominators |
+| Candidate backlog is zero | Show zero; no enabled Skill classification action |
+| Initial section request fails | Section unavailable alert and retry |
+| Refresh fails after prior success | Retain data, mark stale, show last timestamp |
+| Request is superseded/unmounted | Abort; ignore late result |
+| Unknown frontend bucket | Append without remapping or crashing |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** a non-deleted enriched Job with Python and SQL assignments counts
-  once in matched Jobs and once in each Skill row; its two prevalence values
-  are not presented as shares of one pie.
-- **Good:** a ready Job whose stale assignment points to an inactive node is
-  unassigned and classification-ready under the same accepted-assignment rule.
-- **Base:** no accepted taxonomy or Skill assignments returns coverage cards
-  with zero values and an accessible empty distribution.
-- **Base:** `Support & Operations` arrives as a new Skill bucket and renders
-  after the preferred buckets without frontend enum changes.
-- **Good:** selecting Python writes `#jobs?skill_ids=<python-code>` and the Job
-  search body contains the same code in `structured_filters.skill_ids`.
-- **Base:** sharing or refreshing a canonical Subcategory route reconstructs
-  the same root scope; direct `#jobs` still loads all Jobs.
-- **Good:** selecting 484 threshold-ready Skill Candidates writes
-  `#classification?target=skill`; refresh keeps Skills selected and does not
-  issue Preview or Start.
-- **Base:** `#classification?target=unknown` renders Job Taxonomy safely and
-  only reads run history.
-- **Bad:** filter expired Jobs, divide Skill matches by all acquired Jobs,
-  include Candidates in the canonical leaderboard, or treat any assignment row
-  as accepted.
-- **Bad:** blank all cards when only Skills fail, show retained data as fresh,
-  or label hidden rows as shown.
-- **Bad:** route by Skill name, taxonomy breadcrumb, Dashboard bucket, or one
-  synthetic `Other` value.
+- **Good:** Python counts distinct enriched Jobs and drills into
+  `#jobs?skill_ids=python`.
+- **Good:** unresolved Candidate count opens the Skill classification console.
+- **Base:** Skills fail to refresh while overview remains current and old Skill
+  data is visibly stale.
+- **Bad:** include Candidate Mentions in the governed Skill leaderboard.
+- **Bad:** restore a removed Job-category chart or classification target.
 
 ### 6. Tests Required
 
-- Backend stats tests assert deleted filtering, overview/taxonomy population
-  equivalence, active/assignable hierarchy eligibility, invalid-assignment
-  readiness, deterministic ties, limit validation, top-six/Other math, empty
-  data, enriched Skill denominators, distinct Job counts, and Candidate
-  threshold semantics.
-- Chart tests assert accessible loading/empty/error/value names, visible versus
-  returned counts, response-order preservation, dynamic buckets, keyboard
-  expansion/collapse, full taxonomy paths, and retained-data refresh status.
-- Dashboard tests assert four real response shapes, unified Refresh, request
-  abort cleanup, partial stale retention, section retry, and independent
-  successful updates.
-- Route tests assert bare Jobs compatibility, stable-code round-trip,
-  de-duplication, malformed-value fallback, deterministic serialization, and
-  top-level view resolution with a query string.
-- JobBrowser tests assert route hydration into `canonical_subcategory_ids` and
-  `skill_ids`, same-view route changes, and unchanged manual FilterPanel scope
-  submission. Chart tests assert pointer/keyboard activation and accessible
-  action names containing destination and Job count; `Other` itself is not a
-  Jobs drill-down.
-- Classification route tests assert bare/default, both explicit targets,
-  invalid fallback, tab serialization, refresh/hash synchronization, and no
-  preview/start/retry calls caused by navigation. Dashboard/chart tests assert
-  count-specific accessible names and no action at zero backlog.
-- Before completion run focused backend stats/current-taxonomy contracts, the
-  full frontend suite, ESLint, production build, backend lint/format checks,
-  and browser QA at desktop and narrow viewports.
+- Backend stats tests cover enriched denominators, distinct Job counts,
+  Candidate threshold semantics, deterministic ordering, and bounds.
+- Skill chart tests cover loading/empty/error/stale states, accessible action
+  names, dynamic buckets, governed rows, and Candidate backlog.
+- Dashboard tests assert exactly three independent endpoints, unified Refresh,
+  stale retention, request cleanup, Skill drill-down, and Skill classification.
+- Route tests cover stable Skill codes and invalid Classification fallback to
+  `skill`.
 
 ### 7. Wrong vs Correct
 
-#### Wrong: readiness rejects every Job with an assignment row
-
-```python
-query.outerjoin(CurrentJobTaxonomyAssignment).filter(
-    CurrentJobTaxonomyAssignment.job_id.is_(None),
-    Job.source_attribute_projection.has(),
-)
-```
-
-#### Correct: readiness rejects only Jobs with an accepted assignment
-
-```python
-query = job_taxonomy_classification_ready_jobs()
-```
-
-The shared query keeps assignment coverage, Dashboard readiness, and
-Classification Preview on the same canonical-acceptance and Source-evidence
-boundary.
-
-#### Wrong: re-rank a backend Top-N inside presentation buckets
+#### Wrong
 
 ```js
-grouped.get(bucket).push(skill);
-grouped.get(bucket).sort(localComparator);
+fetch('/stats/categories/dashboard')
 ```
 
-#### Correct: preserve each bucket's response-order subsequence
+#### Correct
 
 ```js
-if (!grouped.has(bucket)) grouped.set(bucket, []);
-grouped.get(bucket).push(skill);
+fetch('/stats/skills?limit=30')
 ```
 
-Grouping is for scanning; the backend remains ranking authority.
-
-#### Wrong: route from a presentation label
-
-```js
-window.location.hash = `#jobs?skill=${encodeURIComponent(skill.name)}`;
-```
-
-#### Correct: serialize the stable code through the shared route owner
-
-```js
-window.location.hash = hashForJobsRoute({ skillIds: [skill.code] });
-```
-
-The parser seeds the existing structured Job search filter; components do not
-privately interpret route strings or translate labels back into identities.
+Operational classification health is Company/Skill oriented; Job categories
+remain Source-owned evidence outside the Dashboard.

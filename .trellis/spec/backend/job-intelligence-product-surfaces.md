@@ -1,117 +1,88 @@
 # Job Intelligence Product Read Contracts
 
-## Scenario: Compose product responses from ordinary current taxonomies
+## Scenario: Compose Source evidence, Company Industry, and Skills
 
 ### 1. Scope / Trigger
 
-Use this contract when changing Job Detail, manual-Job snapshots, Job or Company
-search responses, Dashboard taxonomy statistics, Related Jobs, CSV export, or
-backend-owned fixtures consumed by the frontend.
+Use this contract when changing Job Detail, Job Browser cards, Company reads,
+CSV export, embeddings, Related Jobs, availability payloads, or mirrored product
+fixtures. Job classification is Source-owned; product responses do not expose a
+project Job taxonomy state.
 
 ### 2. Signatures
 
 ```python
-compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema
-JobIntelligenceProductReadModel(db).get_job_detail(
-    job_id: UUID,
-    company_id: UUID,
-) -> JobIntelligenceJobDetailView
-JobIntelligenceProductReadModel(db).get_company_details(company_ids) -> dict
-JobIntelligenceProductReadModel(db).get_canonical_job_states(job_ids) -> dict
-JobIntelligenceProductReadModel(db).get_governed_skill_name_states(job_ids) -> dict
+JobIntelligenceProductReadModel(db).get_company_details(company_ids)
+JobIntelligenceProductReadModel(db).get_governed_skill_name_states(job_ids)
+CurrentEmbeddingDocumentBuilder().build_for_job(db, job)
+JobRecommendationService(db).recommend_for_job(job_id, limit)
 ```
 
-The product composes current state from the ordinary taxonomy routes and tables
-documented in `ordinary-current-taxonomies.md`.
+Primary HTTP reads are `GET /api/jobs/{id}`, `POST /api/jobs/search`,
+`POST /api/jobs/search/export`, `GET /api/jobs/{id}/similar`, and Company APIs.
 
 ### 3. Contracts
 
-- `compose_current_job_detail` serializes ordinary Job fields through
-  `JobSchema`, adds safe detail scalars, overlays the current product payload,
-  and validates one complete `JobDetailSchema`.
-- Job Detail includes structured salary, `origin`, `manual_editable`,
-  `enrichment_eligibility`, `job_intelligence_freshness`, and
-  `company_website`. Manual Entry renders as `manual_entry`; only Manual Jobs
-  are editable. Freshness is derived from Manual evidence hashes, never in the UI.
-- Company reads expose normalized `website` and
-  `ai_description_updated_at`; ordinary Company create input does not accept
-  `ai_description`.
-- Manual structured salary accepts only `AUD`, `CAD`, `CNY`, `EUR`, `GBP`,
-  `HKD`, `JPY`, `SGD`, or `USD`; the command normalizes the code to uppercase.
-- Never validate a raw `Job` ORM instance as `JobDetailSchema`: a retired ORM
-  property can trigger a query against a table absent from the current schema
-  before the current payload is overlaid.
-- Job Taxonomy state is `assigned` or `unassigned`. There are no reasons,
-  revision IDs, Review references, or Governance deep links.
-- Skill authority is `current_job_skill_assignments`. Active unresolved
-  evidence appears as `skill_state.candidate_mentions` and the equal top-level
-  `skill_candidate_mentions` convenience field. `provisional_skills` and
-  `unreviewed_skill_mentions` are absent.
-- Company Industry returns current stable-code assignments; product reads never
-  fall back to `Company.industry` as taxonomy authority.
-- Search cards, Company lists, Related Jobs, stats, and CSV load current
-  projections in bulk for the result set. Per-item taxonomy reader calls are
-  forbidden.
-- Related Jobs score current Skill names and stable Job Taxonomy codes. Model
-  provenance metadata may contain a third-party model version; this is not a
-  taxonomy version and is never used to select taxonomy state.
-- Backend and frontend fixture copies are exact JSON equals.
+- Role evidence exposes Source-qualified Classification Paths and governed
+  Employment Types without promoting legacy scalar labels.
+- Company Industry state is independent and may be assigned, empty, or
+  unavailable with an explicit availability code.
+- `skill_state.skills` contains governed Skills. `candidate_mentions` and the
+  compatibility `skill_candidate_mentions` expose unresolved Candidate evidence.
+- Ordinary Skill search/filter/export/embedding uses governed Skills only.
+- Related Jobs requires the source embedding and ranks candidates as
+  `0.80 semantic + 0.15 governed Skill overlap + 0.05 freshness`.
+- Related Jobs initially fetches a wider vector candidate set, sorts by combined
+  score with deterministic tie breakers, deduplicates case-insensitive titles,
+  and then applies the requested limit.
+- `backend/tests/fixtures/job_intelligence_product_surfaces.json` and its
+  frontend mirror are exact copies and contain no removed Job taxonomy fields.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
-| Raw ORM Job is passed directly to `JobDetailSchema` | Forbidden implementation; regression suite fails without legacy tables |
-| Current Job assignment is absent | `state=unassigned`, `assignment=null` |
-| Candidate Mentions are absent | Both Candidate Mention arrays are empty |
-| Current taxonomy code is unknown to the reader | Fail the composed response; do not use legacy text |
-| Required composed state is missing or availability contradicts data | Pydantic validation failure |
-| Frontend/backend fixture copies differ | Product contract test failure |
-| Manual Job description is blank | `enrichment_eligibility=needs_job_description` |
-| Manual evidence hash differs from last enriched hash | Old intelligence remains visible with `job_intelligence_freshness=stale` |
-| Collected Job requests Manual edit route | Reject; collected facts remain read-only |
+| Source attributes were never projected | Empty source evidence plus explicit unavailable state |
+| Company/Skill projection exists but is empty | Available empty state, not missing |
+| Candidate is unresolved | Show Candidate evidence; do not include in governed Skill filters/embedding |
+| Source Job embedding is missing | Return no Related Jobs |
+| Recommendation score is absent | Serialize/display score unavailable, never invent `0%` |
+| Fixture copies differ | Contract test fails |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** one bulk read composes Job, Company Industry, Skills, and Candidate
-  Mentions while no legacy Governance tables exist.
-- **Base:** an unenriched Job is Unassigned with empty Skills and Candidate
-  Mentions.
-- **Good:** Manual Job Detail exposes operator fields as editable and keeps AI
-  summary/taxonomy/Skills outside the mutation command.
-- **Bad:** serialize the raw ORM object first and overwrite Skills afterward.
-- **Bad:** show a Governance link or use a legacy revision-bound projection when
-  the current assignment is empty.
+- **Good:** Job Detail shows JobsDB paths, governed Python, and unresolved Rust
+  Candidate evidence side by side.
+- **Base:** no governed Skills matched yet while Candidate evidence remains
+  visible and actionable through automatic processing.
+- **Good:** two semantically close Jobs with shared Python receive a higher
+  score; no Job-category score participates.
+- **Bad:** combine Source classifications into one project hierarchy.
+- **Bad:** feed Candidate terms into ordinary Skill filtering or embeddings.
 
 ### 6. Tests Required
 
-- `test_job_intelligence_response_contracts.py` creates only ordinary current
-  taxonomy tables in a disposable `_test` PostgreSQL database and covers Job
-  Detail, manual snapshot, Company, filters, recommendations, stats, and CSV.
-- `test_current_taxonomies.py` validates current response shapes and the absence
-  of revision/review routes.
-- `JobDetailModal.test.jsx`, `JobBrowser.test.jsx`,
-  `CompanyIndustryDisplay.test.jsx`, and `Dashboard.test.jsx` consume committed
-  current fixtures and assert no legacy fallback or Governance workspace.
-- The backend test container mounts `/frontend` read-only for exact fixture
-  equality.
-- Manual intake/product tests cover structured salary, origin/editability,
-  needs-description, stale/current intelligence, and Company website round-trip.
+- Backend schema/fixture tests validate Source evidence, Company Industry,
+  Skills, Candidate Mentions, availability, CSV, embeddings, and 80/15/5 scores.
+- Recommendation tests cover missing embeddings, governed Skill overlap,
+  freshness, deterministic sort, title deduplication, and limits.
+- Frontend Job Detail tests explicitly retain Skill Candidate Evidence and
+  verify no legacy classification fallback.
+- Fixture parity is checked on the host when the backend-only test container
+  does not mount `frontend/`.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```python
-payload = JobDetailSchema.model_validate(job).model_dump(mode="python")
-payload.update(current_product_payload)
+score = semantic * 0.65 + skills * 0.15 + job_category * 0.15 + freshness * 0.05
 ```
 
 #### Correct
 
 ```python
-return compose_current_job_detail(db, job)
+score = semantic * 0.80 + skills * 0.15 + freshness * 0.05
 ```
 
-The shared composer prevents API, snapshots, and exports from privately
-reintroducing retired ORM authority.
+Related Jobs uses semantic meaning, governed Skills, and recency only.

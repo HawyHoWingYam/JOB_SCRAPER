@@ -11,11 +11,6 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 - Service: `create_manual_pending_run(limit, filters)`, `preview_pending_jobs(filters, limit)`, `request_stop(run_id)`, `promote_next_ready_waiting_run()`.
 - API: `GET /ai/pending/filter-options`, `POST /ai/pending/preview`, `POST /ai/runs`, `POST /ai/runs/{id}/stop`, `POST /ai/runs/{id}/retry-failed`.
 - Evidence seam: `JobEnrichmentEvidence(db).inspect(job) -> JobEnrichmentInspection(status="supported" | "needs_job_description" | "excluded", reason, enrichment_input)`.
-- Taxonomy policy: `CanonicalTaxonomyPreflight(db).inspect(job)` returns
-  `CanonicalTaxonomyPreflightResult(status="supported" | "excluded",
-  reasons=tuple[str, ...], context=CanonicalClassifierContext | None)` from
-  preserved Source Classification Paths and the active reviewed mapping
-  release. `result.reason` is the stable comma-joined persisted reason.
 
 ## 3. Contracts
 
@@ -28,7 +23,7 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
   requires `manual_job_evidence` and a non-blank Job description. Manual Entry
   never receives a Source Attribute Projection or Source Classification Path.
   Legacy Source classification scalars remain display/filter compatibility
-  fields and never make a Job canonical-classifier eligible.
+  fields and never make a Job enrichment-evidence eligible.
 - Overview, filter options, preview, run creation, and worker preflight use the
   same origin-aware evidence semantics. Blank-description Manual Jobs are
   counted as `needs_job_description`, not pending.
@@ -43,25 +38,21 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 - Preview returns `selected_item_count`, `effective_item_count`, `excluded_item_count`, and grouped `excluded_items` details containing source classification ID/name, count, reason, and job IDs. The selection limit applies before exclusions; excluded jobs do not trigger implicit replacement candidates.
 - A created run persists excluded jobs as `enrichment_run_items.status = "excluded"` with the stable reason in `error_message`; `pending_items` counts only supported jobs. Run projections expose `excluded_items` and `excluded_details`.
 - Run execution publishes `enrichment.run.requested` only when `request_run_execution()` returns true. An all-excluded run is terminal `completed_with_exclusions`, has `execution_result = "no_supported_items"`, and never dispatches a worker event.
-- Preview and create run the same canonical preflight. A worker repeats preflight
-  immediately before changing a pending item to running, so mapping/catalog
-  changes after reservation fail closed without crossing the LLM boundary.
-- Preflight is read-only and may exclude an unevaluated Job without creating a
-  review. `AIEnrichmentService`, the outer enrichment transaction owner, calls
-  `CanonicalJobTaxonomy.evaluate(...)` for blocking evidence, persists the
-  active review/outbox with the rest of the enrichment transaction, then
-  commits once.
-- The item `error_message` stores `CanonicalTaxonomyPreflightResult.reason`.
-  `/api/ai` exclusion projections group and display that persisted reason;
-  they must not re-run canonical policy, consult static defaults, or derive a
-  new reason from legacy scalar labels.
-- Governance handoffs must keep Source evidence blockers distinct: a missing
-  Source Classification Path requires recollection, while
-  `source_mapping_missing` requires a compatible Source-to-Canonical mapping.
-  Neither blocker may expose the ordinary per-Job Canonical assignment action.
-- Crawl authoring and preflight use ordinary current top-level Source
+- Preview, create, and worker execution use the same `JobEnrichmentEvidence`
+  boundary. A missing external-Source projection or missing Manual evidence
+  fails closed before the LLM boundary without consulting Job taxonomy state.
+- `AIEnrichmentService`, the outer enrichment transaction owner, extracts Job
+  intelligence and Skill mentions, projects Governed Skills/Candidate evidence,
+  then commits the enrichment result once.
+- The item `error_message` stores the stable evidence reason. `/api/ai`
+  exclusion projections group and display that persisted reason; they must not
+  derive a replacement reason from legacy Source scalar labels.
+- A missing Source Classification Path/projection requires recollection. It is
+  not replaced by a Source-to-Canonical mapping check or a per-Job Canonical
+  assignment action.
+- Crawl authoring and enrichment filters use ordinary current top-level Source
   classifications. Child IDs preserved in Job evidence remain supplemental;
-  missing mappings fail closed only when evaluation actually requires them.
+  neither level requires a Source-to-Canonical Job mapping.
 - `/ai/runs` run projections include `execution_dispatched` and `execution_result`; `/ai/enrich` uses the same explicit `no_supported_items` result for an all-excluded selection.
 - Monitor returns active + latest terminal, or latest two terminal; never waiting.
 - Cooperative Stop permits running items to finish, blocks new conditional starts, cancels untouched pending items, and preserves completed/failed/cancelled counts.
@@ -73,11 +64,9 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 - Manual filtered create/retry while active -> `409`, `detail.code=active_run_exists`, `detail.run_id=<id>`.
 - Missing run -> `404`; retry with no failed items -> `400`.
 - Pending/waiting Stop -> immediate `cancelled`; running Stop -> `stopping`; terminal Stop -> idempotent projection.
-- Unmapped or explicitly excluded source taxonomy -> excluded before the LLM boundary, with no provider failure and no retry action.
-- Missing Source Attribute projection/path, unpublished or mismatched active
-  canonical revisions, missing mapping, conflicting mappings, and an empty
-  canonical target slice -> excluded before the LLM boundary with the stable
-  canonical reason persisted on the run item.
+- Missing Source Attribute projection/path -> excluded before the LLM boundary
+  with the stable evidence reason persisted on the run item. Source paths do
+  not require a Canonical Job mapping.
 - All selected candidates excluded -> persisted `completed_with_exclusions`, zero pending work, no worker event, and `no_supported_items` API result.
 - Manual Job has no description -> `needs_job_description`; exclude it from the
   runnable preview without fabricating a Source exclusion.
@@ -103,11 +92,9 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 - Assert pending eligibility is based on `job_source_attribute_projections`,
   not legacy Source classification scalars.
 - Assert every Job with projected Source Attributes remains eligible for AI
-  Enrichment. Present current mappings constrain Job targets; missing mappings
-  expose the complete active assignable current taxonomy and do not create an
-  exclusion or Review item.
-- Assert `JobTaxonomyRegistry`, `JobCategoryNormalizer`, and legacy default-path
-  resolution modules are absent from production and tests.
+  Enrichment regardless of Source-to-Canonical mapping availability.
+- Assert Job-taxonomy preflight, registry, normalizer, mapping, assignment, and
+  legacy default-path resolution modules are absent from production.
 - Assert mixed and all-excluded pending selections expose grouped exclusion details, preserve item status/reason, and do not enqueue `enrichment.run.requested` for an empty supported workload.
 - Assert Manual Entry origin has no Source paths; blank descriptions are counted
   separately; stale/current hashes drive pending state; omitted/matching/conflicting
@@ -131,36 +118,31 @@ item.status = "running"
 
 Flush item transitions before aggregate count queries when using the production `autoflush=False` session.
 
-### Cross-layer taxonomy exclusion contract
+### Cross-layer evidence exclusion contract
 
 #### Wrong
 
 ```python
-handling = taxonomy_registry.get_handling(
-    job.source_classification_id,
-    job.source_classification_name,
-)
-if handling.status == "mapped":
+if job.source_classification_id:
     dispatch_to_llm(job)
 ```
 
-This code grants legacy scalar/static-registry state canonical authority and
-does not notice mapping/catalog changes after a run reserves the Job.
+This code grants a legacy scalar authority that only the Source Attribute
+Projection or Manual evidence record owns.
 
 #### Correct
 
 ```python
-preflight = CanonicalTaxonomyPreflight(db).inspect(job)
-if preflight.status == "excluded":
+inspection = JobEnrichmentEvidence(db).inspect(job)
+if not inspection.supported:
     item.status = "excluded"
-    item.error_message = preflight.reason
+    item.error_message = inspection.reason
     # Do not enqueue the item or publish an empty worker request.
 ```
 
-The preflight reads persisted Source Job Attributes and governed canonical
-revisions only. It must not fetch a Source, require a live Source session, or
-fall back to `jobs.source_classification_*`, `default_path`, or
-`proposed_internal_domain` authority.
+The inspection reads persisted Source Job Attributes or Manual evidence. It
+must not fetch a Source, require a live Source session, require Canonical Job
+taxonomy state, or fall back to `jobs.source_classification_*` authority.
 
 For Manual Entry, the equivalent correct path is
 `JobEnrichmentEvidence(db).inspect(job)`. Adding `source_site="manual"` to a

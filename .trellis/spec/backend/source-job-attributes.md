@@ -9,9 +9,11 @@ collected-Job writers; Source Classification or Employment Type persistence;
 Job response/filter APIs; the Job Browser filter consumer; or historical rebuild
 inspection.
 
-Source Classification Paths belong to one external Source. They are not the
-Canonical Job Taxonomy. Employment Type is the governed seven-code attribute;
-Work Arrangement and working-day labels remain separate evidence.
+Source Classification Paths belong to one external Source and remain the only
+Job classification hierarchy exposed by the product. Paths from different
+Sources are never combined into a project-owned hierarchy. Employment Type is
+the governed seven-code attribute; Work Arrangement and working-day labels
+remain separate evidence.
 
 Manual Entry is an origin, not an external Source. Manual Jobs use
 `ManualJobEvidence` and `JobEnrichmentEvidence`; they must never be admitted to

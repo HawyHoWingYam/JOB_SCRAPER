@@ -35,9 +35,9 @@ readJobBrowserSession(sessionStorage) -> normalizedScope | null
   replace Jobs, applied scope, and facets. Pagination requests
   `include_facets=false` and retain the last successful facets.
 - Each facet removes its own dimension from every layer, preserves text and all
-  other dimensions, and counts distinct Jobs. Job Taxonomy and Company
-  Industry project distinct Jobs to active ancestors.
-- Source, Employment Type, Job Taxonomy, and Company Industry return complete
+  other dimensions, and counts distinct Jobs. Company Industry projects
+  distinct Jobs to active ancestors.
+- Source, Employment Type, and Company Industry return complete
   active governed catalogs. Source Classification returns only source-qualified
   paths represented by retained searchable Jobs.
 - Semantic and hybrid facets use `build_semantic_candidate_scope(scope)`, the
@@ -65,8 +65,9 @@ readJobBrowserSession(sessionStorage) -> normalizedScope | null
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** select a Job Domain, apply it, add an Employment Type refinement,
-  edit the Domain layer in place, then refresh and restore both layers at page 1.
+- **Good:** select a Source Classification, apply it, add an Employment Type
+  refinement, edit the first layer in place, then refresh and restore both
+  layers at page 1.
 - **Base:** an empty scope returns unfiltered Jobs plus complete zero-aware
   facets; pagination reuses those facets.
 - **Good:** semantic results and counts use the same candidate scope while the
@@ -108,4 +109,3 @@ candidate_scope = build_semantic_candidate_scope(request.scope)
 facets = JobSearchFacets(db).build(candidate_scope)
 # Response still exposes applied_scope=request.scope.
 ```
-
