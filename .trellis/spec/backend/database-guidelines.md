@@ -12,11 +12,13 @@ repair an existing database in place.
 
 ```python
 bootstrap_database(db_engine=engine, metadata=Base.metadata) -> None
+repair_employment_type_registry(db_engine=engine) -> EmploymentTypeRegistrySyncResult
 clear_database(db_engine=engine, confirmed=True) -> None
 ```
 
 ```text
 python backend/scripts/bootstrap_db.py
+python backend/scripts/repair_employment_type_registry.py
 python backend/scripts/sandbox_cutover.py clear-database \
   --artifact <transient-retained.json> \
   --confirm-services-stopped \
@@ -30,7 +32,16 @@ python backend/scripts/sandbox_cutover.py clear-database \
   table, a stray compatibility table, or a schema-history table makes it fail
   without mutation.
 - PostgreSQL bootstrap takes the advisory transaction lock, creates the
-  `vector` extension, creates `Base.metadata`, and verifies exact table parity.
+  `vector` extension, creates `Base.metadata`, verifies exact table parity, and
+  converges the seven canonical `employment_types` rows in the same transaction.
+- `EMPLOYMENT_TYPE_SEEDS` is the only registry authority. Fresh bootstrap
+  rejects unknown Employment Type codes. The explicit repair command is the
+  only non-empty-database path: it inserts missing canonical rows, corrects
+  canonical labels/order, reports and preserves non-conflicting unknown codes,
+  and creates or alters no schema object.
+- An unknown code occupying a canonical label or sort order makes repair fail
+  and roll back; preserving that row and restoring the canonical registry are
+  otherwise mutually impossible under the unique constraints.
 - `clear_database` is limited to PostgreSQL databases named `jobsdb` or ending
   in `_test`; the caller must explicitly confirm destruction.
 - The sandbox cutover validates the complete retained artifact before calling
@@ -52,7 +63,11 @@ python backend/scripts/sandbox_cutover.py clear-database \
 | Condition | Required result |
 |---|---|
 | Empty database | Create the complete current schema and verify exact parity |
+| Empty current bootstrap | Commit exactly the seven canonical Employment Type rows with the schema |
 | Any existing table | Fail without creating, dropping, or altering anything |
+| Repair sees missing or drifted canonical row | Insert/correct it and remain idempotent on rerun |
+| Repair sees non-conflicting unknown code | Preserve and report it |
+| Repair sees unknown row occupying canonical label/order | Fail and roll back without schema mutation |
 | Metadata/table parity differs after bootstrap | Fail; do not start services |
 | Destructive confirmation missing | Refuse the clear operation |
 | Retained artifact is incomplete, reordered, malformed, or hash-invalid | Refuse before clearing the database |
@@ -61,7 +76,11 @@ python backend/scripts/sandbox_cutover.py clear-database \
 
 ### 5. Tests Required
 
-- Bootstrap tests cover empty creation, exact parity, and non-empty refusal.
+- Bootstrap tests cover empty creation, exact parity, canonical registry
+  insertion, real-PostgreSQL persistence, and non-empty refusal.
+- Registry repair tests cover missing rows, label/order canonicalization,
+  idempotent rerun, unknown preservation/reporting, blocking unknown conflicts,
+  and refusal when the table is absent.
 - Disposable cutover tests prove Manual evidence/receipts and new Company fields
   survive exact export/import while removed-column values are intentionally discarded.
 - `test_job_intelligence_test_safety.py` inventories every PostgreSQL-bound
@@ -81,4 +100,12 @@ metadata.create_all(bind=connection)
 if inspect(connection).get_table_names():
     raise DatabaseBootstrapError("Refusing to bootstrap a non-empty database")
 metadata.create_all(bind=connection)
+```
+
+```python
+# Wrong: use bootstrap as an in-place data repair path.
+bootstrap_database(db_engine=nonempty_engine)
+
+# Correct: invoke the narrow registry-only command explicitly.
+repair_employment_type_registry(db_engine=nonempty_engine)
 ```

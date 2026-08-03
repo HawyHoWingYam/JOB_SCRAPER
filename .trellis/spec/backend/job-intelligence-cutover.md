@@ -39,6 +39,9 @@ Retain exactly:
 - no Job embeddings; they are regenerated from retained Job, Source, Company,
   and governed Skill data after cutover;
 - ordinary Source Classification rows and complete Job source-path evidence;
+- complete Job Employment Type assignments and raw label evidence; the
+  canonical `employment_types` parent registry itself is bootstrap-authoritative
+  and is not exported or imported;
 - current Company Industry and Skill nodes, aliases, mappings, assignments,
   Candidates, Mentions, and projections; legacy rows with `taxonomy=job` are
   excluded from shared current-taxonomy tables;
@@ -77,9 +80,14 @@ does not treat them as restorable data.
   table set and order, entry shape, row count, per-table hash, and row shape.
 - Import refuses any non-empty retained target table and inserts self-referential
   hierarchies parent-first inside one database transaction.
+- Bootstrap creates the seven-row Employment Type registry before import.
+  Because `employment_types` is not a retained artifact table, its canonical
+  rows do not violate the non-empty retained-target gate; imported Job
+  assignments reference those bootstrapped parents.
 - Pre-start verification re-exports every retained table, compares exact
   count/hash, and requires runtime tables (including Job embeddings) to be
-  empty. After service startup and embedding regeneration, `finalize` repeats
+  empty. It also requires the exact canonical Employment Type registry. After
+  service startup and embedding regeneration, `finalize` repeats
   exact checks for immutable retained tables. It permits startup-authoritative
   changes only in Source Classifications, OfferToday taxonomy snapshots, and
   the bootstrapped OfferToday keyword catalog, then requires exact schema/no
@@ -128,6 +136,7 @@ aborts the workflow while the existing sandbox remains intact.
 | Database name is not `jobsdb` or `*_test` | Refuse destruction |
 | Artifact set/order/shape/count/hash differs | Refuse before destruction or import |
 | Retained target table is non-empty | Roll back the import |
+| Employment Type registry differs from the canonical seven rows | Verification fails before service start |
 | Retained verification differs | Keep artifact and services stopped |
 | Runtime table contains any row | Verification fails |
 | Forbidden release/revision/review/schema-history table exists | Verification fails |
@@ -149,8 +158,8 @@ aborts the workflow while the existing sandbox remains intact.
   backup/restore/rollback CLI commands.
 - `integration/test_sandbox_cutover_rehearsal.py`: a disposable PostgreSQL
   database ending in `_test` plus non-zero Redis DB; real RESTRICT cycles,
-  consumer group pending entries, dead letters, retained corpus, vectors, and
-  two complete clean-start passes.
+  consumer group pending entries, dead letters, retained corpus, vectors,
+  canonical registry verification, and two complete clean-start passes.
 - Full backend tests, frontend lint/tests/build, and fixture parity pass before
   any shared sandbox action.
 
@@ -177,6 +186,14 @@ The scheduler reconciles this in-memory timer from current `scrape_schedules`
 after every startup. Pre-start `verify` owns exact retention/runtime emptiness;
 post-start `finalize` owns immutable retention, exact schema, and complete
 embedding checks.
+
+```python
+# Wrong: export/import the bootstrap-owned parent registry.
+RETAINED_TABLE_NAMES = ("employment_types", "job_employment_types")
+
+# Correct: bootstrap parents, retain only business assignments/evidence.
+RETAINED_TABLE_NAMES = ("job_employment_types",)
+```
 
 #### Forbidden patterns
 

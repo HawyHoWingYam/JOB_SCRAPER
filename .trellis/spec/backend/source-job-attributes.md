@@ -31,6 +31,12 @@ SourceJobAttributes.build_filters(
     source_classification_ids=[...],
     employment_type_codes=[...],
 ) -> tuple[SQL predicate, ...]
+
+reconcile_employment_type_registry(
+    connection,
+    *,
+    allow_unknown_codes=True,
+) -> EmploymentTypeRegistrySyncResult
 ```
 
 Collected writers use:
@@ -91,6 +97,13 @@ Persistence is owned by `job_source_attribute_projections`,
 
 #### Transactions and persistence
 
+- `EMPLOYMENT_TYPE_SEEDS` is the single authority for the seven governed codes,
+  labels, and sort order. Bootstrap and explicit repair call
+  `reconcile_employment_type_registry()` inside caller-owned transactions; the
+  registry boundary never commits independently.
+- Existing canonical codes are corrected to the authoritative label/order.
+  Unknown codes are preserved and reported unless they occupy a canonical
+  unique label/order, in which case the whole reconciliation fails.
 - Every collected writer calls `upsert_source_job(..., auto_commit=False)` and
   `SourceJobAttributes.project(...)` on the same `Session`, then the outer
   writer commits once. Projection flushes but never commits.
@@ -163,6 +176,9 @@ Persistence is owned by `job_source_attribute_projections`,
 | Manual Job is projected through `SourceJobAttributes.project` | Forbidden boundary violation; use Manual evidence instead |
 | Unknown Employment Type code or unrecognized legacy label filter | HTTP/Pydantic 422 validation failure |
 | Exact evidence replay | `changed=false`; no duplicate outbox row |
+| Canonical Employment Type row is missing or drifted | Shared reconciliation inserts/corrects it atomically |
+| Unknown Employment Type code is non-conflicting | Preserve and report it; never silently govern or delete it |
+| Unknown code occupies canonical label/order | Fail reconciliation; roll back the caller transaction |
 | Malformed bounded label marker | Retain evidence, map no type, count malformed but not unknown |
 | Historical lookup exceeds 100 distinct Source keys | Issue multiple bounded read-only staging SELECTs and merge to the same deterministic report/recovery result |
 
@@ -208,6 +224,10 @@ Persistence is owned by `job_source_attribute_projections`,
   verify tables, constraints, indexes, and the seven-code registry in a
   disposable PostgreSQL database ending in `_test`. There is no migration or
   downgrade rehearsal.
+- `test_crawl_control_bootstrap.py` covers registry reconciliation and the
+  explicit non-empty repair command. `test_source_job_attribute_ingest.py`
+  proves an OfferToday detail write can persist both `full_time` and
+  `part_time` against the bootstrapped registry.
 - `FilterPanel.test.jsx` and `JobDetailModal.test.jsx`: structured option
   compatibility and backend fixture consumption.
 - Source-attribute integration coverage preserves the documented 17,596-Job
@@ -241,6 +261,15 @@ job, _ = repository.upsert_source_job(
 )
 SourceJobAttributes(db).project(job.id, source_attribute_evidence)
 db.commit()
+```
+
+```python
+# Wrong: duplicate a local seed list in a fixture or operational script.
+db.add(EmploymentType(code="full_time", label="Full-time", sort_order=1))
+
+# Correct: consume the governed authority in the caller's transaction.
+with engine.begin() as connection:
+    reconcile_employment_type_registry(connection)
 ```
 
 The caller owns one atomic Job/projection/outbox transaction and exact replay

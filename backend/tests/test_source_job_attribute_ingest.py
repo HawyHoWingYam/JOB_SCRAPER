@@ -12,8 +12,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.job_intelligence.source_attributes import (
-    EMPLOYMENT_TYPE_SEEDS,
     SourceJobAttributes,
+    reconcile_employment_type_registry,
 )
 from app.messaging.topics import STREAM_JOB_INGEST
 from app.models.company import Company
@@ -22,11 +22,20 @@ from app.models.job import Job
 from app.models.source_classification import SourceClassification
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
-    EmploymentType,
+    JobEmploymentType,
 )
+from app.repositories.company_repository import CompanyRepository
 from app.repositories.job_repository import JobRepository
-from app.sources.contracts import build_jobsdb_listing_canonical_job
+from app.services.offertoday_detail_pipeline import (
+    OfferTodayDetailPipeline,
+    OfferTodayDetailTarget,
+)
+from app.sources.contracts import (
+    build_jobsdb_listing_canonical_job,
+    build_offertoday_canonical_job,
+)
 from app.sources.jobsdb.parsers import parse_search_response
+from app.sources.offertoday.parsers import parse_offertoday_detail_response
 from app.workers.run_ingest_worker import (
     IngestWorkerService,
     InvalidIngestPayloadError,
@@ -149,13 +158,8 @@ def source_attribute_engine():
         *SOURCE_JOB_ATTRIBUTE_TABLES,
     )
     Base.metadata.create_all(engine, tables=tables)
-    db = sessionmaker(bind=engine)()
-    db.add_all(
-        EmploymentType(code=code, label=label, sort_order=sort_order)
-        for code, label, sort_order in EMPLOYMENT_TYPE_SEEDS
-    )
-    db.commit()
-    db.close()
+    with engine.begin() as connection:
+        reconcile_employment_type_registry(connection, allow_unknown_codes=False)
     try:
         yield engine
     finally:
@@ -264,3 +268,72 @@ def test_ingest_event_persists_source_attributes_without_legacy_dual_write(
         }
     finally:
         db.close()
+
+
+def test_offertoday_detail_pipeline_persists_governed_employment_types(
+    source_attribute_engine,
+):
+    class Runtime:
+        def transition_detail_completed(self, *_args, **_kwargs):
+            return None
+
+        def record_detail_persisted(self, *_args, **_kwargs):
+            return None
+
+    parsed = parse_offertoday_detail_response(
+        {
+            "data": {
+                "jobId": "registry-detail-job",
+                "encryptJobId": "encrypted-registry-detail-job",
+                "jobName": "Registry Detail Engineer",
+                "companyName": "Registry Detail Limited",
+                "jobDesc": "<p>Canonical detail description</p>",
+                "addressVO": {},
+                "jobFunctions": [
+                    {"code": "118000", "name": "Information Technology"}
+                ],
+                "jobType": 1,
+                "jobTypeDesc": "全職",
+                "employType": {"name": "兼職"},
+            }
+        }
+    )
+    canonical = build_offertoday_canonical_job(parsed)
+    target = OfferTodayDetailTarget.from_runtime_target(
+        {
+            "listing_id": uuid4(),
+            "duplicate_listing_ids": [],
+            "source_job_id": "registry-detail-job",
+            "listing_payload": {
+                "job_id": "registry-detail-job",
+                "encrypted_job_id": "encrypted-registry-detail-job",
+                "encrypted_job_id_source": "encryptJobId",
+            },
+        }
+    )
+    SessionFactory = sessionmaker(bind=source_attribute_engine)
+    pipeline = OfferTodayDetailPipeline(
+        session_factory=SessionFactory,
+        crawl_runtime=Runtime(),
+        company_repository=CompanyRepository(),
+        job_repository=JobRepository(),
+    )
+
+    result = pipeline._persist_success(
+        target=target,
+        detail_crawl_job_id=uuid4(),
+        detail_payload={"code": 0},
+        failure_detail_payload=None,
+        canonical_job=canonical,
+    )
+
+    assert result.outcome.value == "success"
+    with SessionFactory() as db:
+        job = db.query(Job).filter(Job.source_job_id == "registry-detail-job").one()
+        codes = [
+            row.employment_type_code
+            for row in db.query(JobEmploymentType)
+            .filter(JobEmploymentType.job_id == job.id)
+            .order_by(JobEmploymentType.employment_type_code)
+        ]
+    assert codes == ["full_time", "part_time"]

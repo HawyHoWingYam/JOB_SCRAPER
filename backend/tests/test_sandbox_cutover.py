@@ -19,6 +19,8 @@ from app.job_intelligence.sandbox_cutover import (
     verify_post_cutover_state,
     verify_target_state,
 )
+from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
+from app.models.source_job_attributes import EmploymentType
 from app.job_intelligence.sandbox_cutover.artifacts import RetentionArtifactStore
 from app.messaging.topics import ALL_STREAM_TOPICS
 
@@ -473,6 +475,31 @@ def test_target_verification_requires_all_runtime_history_tables_empty() -> None
     report = verify_target_state(db_engine=engine, metadata=metadata)
     assert not report.clean
     assert report.issues == ("runtime table is not empty: crawl_jobs (1)",)
+
+
+def test_target_verification_requires_canonical_employment_type_registry() -> None:
+    metadata = MetaData()
+    EmploymentType.__table__.to_metadata(metadata)
+    engine = create_engine("sqlite:///:memory:")
+    metadata.create_all(engine)
+
+    missing = verify_target_state(db_engine=engine, metadata=metadata)
+    assert not missing.clean
+    assert missing.issues == (
+        "Employment Type registry differs from the canonical seven-row seed",
+    )
+
+    table = metadata.tables["employment_types"]
+    with engine.begin() as connection:
+        connection.execute(
+            table.insert(),
+            [
+                {"code": code, "label": label, "sort_order": sort_order}
+                for code, label, sort_order in EMPLOYMENT_TYPE_SEEDS
+            ],
+        )
+
+    assert verify_target_state(db_engine=engine, metadata=metadata).clean
 
 
 def test_post_cutover_verification_allows_runtime_but_requires_every_embedding() -> None:

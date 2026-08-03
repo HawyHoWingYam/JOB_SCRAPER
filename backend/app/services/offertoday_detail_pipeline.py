@@ -9,6 +9,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from sqlalchemy.exc import IntegrityError
+
 from app.job_intelligence.source_attributes import (
     SourceJobAttributeEvidence,
     SourceJobAttributes,
@@ -565,11 +567,12 @@ class OfferTodayDetailPipeline:
             db.commit()
         except Exception as exc:
             db.rollback()
+            error_message = self._persistence_failure_message(exc)
             self._transition_outcome(
                 target=target,
                 detail_crawl_job_id=detail_crawl_job_id,
                 detail_status="failed",
-                error_message=f"persist_failure:{type(exc).__name__}",
+                error_message=error_message,
                 detail_payload=failure_detail_payload,
             )
             return OfferTodayDetailProcessResult(
@@ -587,6 +590,29 @@ class OfferTodayDetailPipeline:
             company_action=company_action,
             stop_batch=False,
         )
+
+    @staticmethod
+    def _persistence_failure_message(exc: Exception) -> str:
+        fields = [f"persist_failure:{type(exc).__name__}"]
+        if not isinstance(exc, IntegrityError):
+            return fields[0]
+
+        original = exc.orig
+        sqlstate = getattr(original, "sqlstate", None) or getattr(
+            original,
+            "pgcode",
+            None,
+        )
+        diagnostic = getattr(original, "diag", None)
+        constraint = getattr(diagnostic, "constraint_name", None)
+        for key, value in (("sqlstate", sqlstate), ("constraint", constraint)):
+            rendered = str(value or "").strip()
+            if rendered and len(rendered) <= 96 and all(
+                character.isalnum() or character in "_.-"
+                for character in rendered
+            ):
+                fields.append(f"{key}={rendered}")
+        return ":".join(fields)
 
     @staticmethod
     def _response_identity_hash(identity: OfferTodayDetailIdentity) -> str:

@@ -13,6 +13,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.database import Base, engine  # noqa: E402
 import app.models  # noqa: E402,F401  # Register every ORM table on Base.metadata.
+from app.job_intelligence.source_attributes import (  # noqa: E402
+    reconcile_employment_type_registry,
+)
 
 
 class DatabaseBootstrapError(RuntimeError):
@@ -59,6 +62,11 @@ def bootstrap_database(
             raise DatabaseBootstrapError(
                 "Current schema bootstrap did not converge exactly "
                 f"(missing: {missing}; unexpected: {unexpected})"
+            )
+        if "employment_types" in expected_tables:
+            reconcile_employment_type_registry(
+                connection,
+                allow_unknown_codes=False,
             )
 
 

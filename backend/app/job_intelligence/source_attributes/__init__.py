@@ -18,7 +18,10 @@ from app.job_intelligence.source_attributes.contracts import (
 )
 from app.job_intelligence.source_attributes.module import (
     EMPLOYMENT_TYPE_SEEDS,
+    EmploymentTypeRegistryError,
+    EmploymentTypeRegistrySyncResult,
     SourceJobAttributes,
+    reconcile_employment_type_registry,
 )
 from app.job_intelligence.source_attributes.rebuild import (
     RecoveredSourceJobAttribute,
@@ -30,6 +33,8 @@ from app.job_intelligence.source_attributes.rebuild import (
 __all__ = [
     "CTGoodJobsSourceEvidenceAdapter",
     "EMPLOYMENT_TYPE_SEEDS",
+    "EmploymentTypeRegistryError",
+    "EmploymentTypeRegistrySyncResult",
     "EmploymentTypeView",
     "JobsDBSourceEvidenceAdapter",
     "OfferTodaySourceEvidenceAdapter",
@@ -46,4 +51,5 @@ __all__ = [
     "SourceJobAttributes",
     "SourceJobAttributesView",
     "SourceRebuildInspection",
+    "reconcile_employment_type_registry",
 ]

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
+from sqlalchemy import Connection, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.job_intelligence.foundation import normalized_content_hash
@@ -36,6 +38,132 @@ EMPLOYMENT_TYPE_SEEDS = (
     ("internship", "Internship", 6),
     ("freelance", "Freelance", 7),
 )
+
+
+class EmploymentTypeRegistryError(RuntimeError):
+    """Raised when the governed Employment Type registry cannot converge."""
+
+
+@dataclass(frozen=True, slots=True)
+class EmploymentTypeRegistrySyncResult:
+    inserted_codes: tuple[str, ...]
+    updated_codes: tuple[str, ...]
+    unchanged_codes: tuple[str, ...]
+    unknown_codes: tuple[str, ...]
+
+
+def reconcile_employment_type_registry(
+    connection: Connection,
+    *,
+    allow_unknown_codes: bool = True,
+) -> EmploymentTypeRegistrySyncResult:
+    """Converge governed rows without committing the caller's transaction."""
+
+    table = EmploymentType.__table__
+    canonical = {
+        code: {"code": code, "label": label, "sort_order": sort_order}
+        for code, label, sort_order in EMPLOYMENT_TYPE_SEEDS
+    }
+    rows = {
+        row["code"]: dict(row)
+        for row in connection.execute(
+            select(table.c.code, table.c.label, table.c.sort_order).with_for_update()
+        ).mappings()
+    }
+    unknown_codes = tuple(sorted(set(rows) - set(canonical)))
+    if unknown_codes and not allow_unknown_codes:
+        raise EmploymentTypeRegistryError(
+            "Employment Type registry contains unknown codes: "
+            + ", ".join(unknown_codes)
+        )
+
+    canonical_labels = {item["label"] for item in canonical.values()}
+    canonical_orders = {item["sort_order"] for item in canonical.values()}
+    blocking_unknown_codes = tuple(
+        code
+        for code in unknown_codes
+        if rows[code]["label"] in canonical_labels
+        or rows[code]["sort_order"] in canonical_orders
+    )
+    if blocking_unknown_codes:
+        raise EmploymentTypeRegistryError(
+            "Unknown Employment Type rows occupy canonical labels or ordering: "
+            + ", ".join(blocking_unknown_codes)
+        )
+
+    inserted_codes = tuple(code for code in canonical if code not in rows)
+    updated_codes = tuple(
+        code
+        for code, expected in canonical.items()
+        if code in rows
+        and (
+            rows[code]["label"] != expected["label"]
+            or rows[code]["sort_order"] != expected["sort_order"]
+        )
+    )
+    unchanged_codes = tuple(
+        code
+        for code, expected in canonical.items()
+        if code in rows
+        and rows[code]["label"] == expected["label"]
+        and rows[code]["sort_order"] == expected["sort_order"]
+    )
+
+    if updated_codes:
+        occupied_labels = {row["label"] for row in rows.values()}
+        occupied_orders = {row["sort_order"] for row in rows.values()}
+        next_temporary_order = max((*occupied_orders, *canonical_orders), default=0) + 1
+        token = uuid4().hex[:12]
+        for index, code in enumerate(updated_codes):
+            temporary_label = f"__registry_sync_{token}_{index}"
+            while temporary_label in occupied_labels:
+                token = uuid4().hex[:12]
+                temporary_label = f"__registry_sync_{token}_{index}"
+            while next_temporary_order in occupied_orders:
+                next_temporary_order += 1
+            connection.execute(
+                table.update()
+                .where(table.c.code == code)
+                .values(
+                    label=temporary_label,
+                    sort_order=next_temporary_order,
+                )
+            )
+            occupied_labels.add(temporary_label)
+            occupied_orders.add(next_temporary_order)
+            next_temporary_order += 1
+
+    if inserted_codes:
+        connection.execute(
+            table.insert(),
+            [canonical[code] for code in inserted_codes],
+        )
+    for code in updated_codes:
+        connection.execute(
+            table.update().where(table.c.code == code).values(**canonical[code])
+        )
+
+    verified_rows = {
+        row["code"]: dict(row)
+        for row in connection.execute(
+            select(table.c.code, table.c.label, table.c.sort_order)
+        ).mappings()
+    }
+    mismatched_codes = tuple(
+        code for code, expected in canonical.items() if verified_rows.get(code) != expected
+    )
+    if mismatched_codes:
+        raise EmploymentTypeRegistryError(
+            "Employment Type registry did not converge: "
+            + ", ".join(mismatched_codes)
+        )
+
+    return EmploymentTypeRegistrySyncResult(
+        inserted_codes=inserted_codes,
+        updated_codes=updated_codes,
+        unchanged_codes=unchanged_codes,
+        unknown_codes=unknown_codes,
+    )
 
 
 class SourceJobAttributes:

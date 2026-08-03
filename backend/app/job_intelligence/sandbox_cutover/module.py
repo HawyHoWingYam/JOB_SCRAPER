@@ -19,7 +19,6 @@ from app.job_intelligence.sandbox_cutover.artifacts import (
 
 RETAINED_TABLE_NAMES = (
     "companies",
-    "employment_types",
     "source_classifications",
     "offertoday_taxonomy_snapshots",
     "offertoday_keyword_entries",

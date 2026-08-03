@@ -5,6 +5,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.logging_config import redact_url
 from app.services.crawl_job_runtime import ListingBatchPersistResult
@@ -232,6 +233,26 @@ class _FakeDb:
 
 def _messages(caplog) -> str:
     return "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_offertoday_persist_failure_keeps_safe_database_constraint_evidence() -> None:
+    class Diagnostic:
+        constraint_name = "job_employment_types_employment_type_code_fkey"
+
+    class OriginalError(Exception):
+        sqlstate = "23503"
+        diag = Diagnostic()
+
+    error = IntegrityError("statement-hidden", {}, OriginalError("detail-hidden"))
+
+    message = OfferTodayDetailPipeline._persistence_failure_message(error)
+
+    assert message == (
+        "persist_failure:IntegrityError:sqlstate=23503:"
+        "constraint=job_employment_types_employment_type_code_fkey"
+    )
+    assert "statement-hidden" not in message
+    assert "detail-hidden" not in message
 
 
 @pytest.mark.asyncio

@@ -95,6 +95,15 @@ are logged immediately. `SCRAPE_DETAIL_DONE` is required for empty, completed,
 manual-action, and handled early-failure exits. Durable progress events may use
 a lower cadence than operational logs.
 
+Persist failures keep the stable `persist_failure:<ExceptionType>` prefix and
+may append only bounded driver metadata such as SQLSTATE and constraint name.
+Never append raw SQL statements, parameters, payloads, or unrestricted driver
+messages. Example:
+
+```text
+persist_failure:IntegrityError:sqlstate=23503:constraint=job_employment_types_employment_type_code_fkey
+```
+
 #### Executor boundary and levels
 
 - `INFO`: starts, persisted page results, successful item results, empty and
@@ -129,6 +138,7 @@ separate fields, for example `classification=ip_blocked code=-1000035`.
 | Confirmed IP/WAF block | Manual-action record plus final phase summary; no later request |
 | Generic DNS/timeout/parser failure | Failure/retry classification; never relabel as IP |
 | Detail target succeeds/fails | One start and exactly one OK/FAIL result |
+| Detail persistence raises a PostgreSQL constraint error | Store bounded exception type, SQLSTATE, and safe constraint name; omit raw statement/parameters |
 | No detail targets | `TARGETS_EMPTY` followed by `DETAIL_DONE` |
 | URL contains query token | Log keeps scheme/host/path but omits query/fragment values |
 | Raw payload contains secret/body | Secret/body is absent from every emitted log string |
@@ -154,6 +164,8 @@ separate fields, for example `classification=ip_blocked code=-1000035`.
   category/page start, persisted result, early/manual and final summaries for
   all three sources; detail start/result/retry/empty/manual/final cadence; common
   fields; elapsed/cumulative counters; bounded IDs; and secret/query exclusion.
+- The same suite asserts OfferToday persistence diagnostics keep safe
+  SQLSTATE/constraint metadata without statement or driver-detail text.
 - `backend/tests/test_cross_source_ip_recovery.py` asserts a confirmed block
   stops later requests, retains committed listing work, and resumes from the
   same task boundary without refetching completed details.
@@ -174,6 +186,14 @@ logger.error("crawl failed: %s", exc)
 ```
 
 This enumerates IDs, risks body/secret leakage, and loses crawl/page context.
+
+```python
+# Wrong: raw IntegrityError text can include SQL and parameters.
+error_message = f"persist_failure:{exc}"
+
+# Correct: keep only bounded structured driver metadata.
+error_message = persistence_failure_message(exc)
+```
 
 #### Correct
 

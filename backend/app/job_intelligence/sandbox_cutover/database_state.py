@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine, MetaData, func, inspect, select, text
 
+from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
+
 
 RUNTIME_TABLE_NAMES = (
     "automation_delete_reviews",
@@ -54,6 +56,13 @@ class TargetStateReport:
 def verify_target_state(*, db_engine: Engine, metadata: MetaData) -> TargetStateReport:
     actual, issues = _target_schema_issues(db_engine=db_engine, metadata=metadata)
     with db_engine.connect() as connection:
+        issues.extend(
+            _employment_type_registry_issues(
+                connection=connection,
+                metadata=metadata,
+                actual_table_names=actual,
+            )
+        )
         for name in RUNTIME_TABLE_NAMES:
             table = metadata.tables.get(name)
             if table is None or name not in actual:
@@ -79,6 +88,13 @@ def verify_post_cutover_state(
         return TargetStateReport(clean=False, issues=tuple(issues))
 
     with db_engine.connect() as connection:
+        issues.extend(
+            _employment_type_registry_issues(
+                connection=connection,
+                metadata=metadata,
+                actual_table_names=actual,
+            )
+        )
         job_count = connection.scalar(select(func.count()).select_from(jobs)) or 0
         embedding_count = (
             connection.scalar(select(func.count()).select_from(embeddings)) or 0
@@ -117,6 +133,31 @@ def verify_post_cutover_state(
             f"{invalid_dimension_count}"
         )
     return TargetStateReport(clean=not issues, issues=tuple(issues))
+
+
+def _employment_type_registry_issues(
+    *,
+    connection,
+    metadata: MetaData,
+    actual_table_names: set[str],
+) -> list[str]:
+    table = metadata.tables.get("employment_types")
+    if table is None or "employment_types" not in actual_table_names:
+        return []
+    expected = tuple(EMPLOYMENT_TYPE_SEEDS)
+    actual = tuple(
+        connection.execute(
+            select(table.c.code, table.c.label, table.c.sort_order).order_by(
+                table.c.sort_order,
+                table.c.code,
+            )
+        ).tuples()
+    )
+    if actual == expected:
+        return []
+    return [
+        "Employment Type registry differs from the canonical seven-row seed"
+    ]
 
 
 def _target_schema_issues(

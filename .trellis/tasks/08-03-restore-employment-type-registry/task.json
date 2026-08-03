@@ -1,0 +1,29 @@
+{
+  "id": "restore-employment-type-registry",
+  "name": "restore-employment-type-registry",
+  "title": "Restore Employment Type registry after database rebuild",
+  "description": "Seed the governed Employment Type registry during empty bootstrap and safely repair the current retained-data database.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-03",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-29-offertoday-verifiable-listing-coverage",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 48,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/48"
+  }
+}

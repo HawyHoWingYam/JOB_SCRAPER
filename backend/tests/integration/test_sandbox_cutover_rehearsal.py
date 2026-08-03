@@ -19,6 +19,7 @@ from app.job_intelligence.sandbox_cutover import (
     clear_database,
     verify_target_state,
 )
+from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
 from app.messaging.topics import (
     STREAM_JOB_INGEST,
     STREAM_JOB_INGEST_DEAD_LETTER,
@@ -38,7 +39,6 @@ from app.models.job import Job
 from app.models.job_embedding import JobEmbedding
 from app.models.source_classification import SourceClassification
 from app.models.source_job_attributes import (
-    EmploymentType,
     JobEmploymentType,
     JobSourceAttributeProjection,
     JobSourceClassificationPath,
@@ -151,7 +151,6 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
                     after_summary={"skill_code": "python", "revision_id": "remove"},
                     evidence_refs=[], correlation_id="cutover-test", created_at=now,
                 ),
-                EmploymentType(code="full_time", label="Full-time", sort_order=1),
                 JobEmbedding(
                     job_id=job.id, document_text="Retained Engineer",
                     document_hash="d" * 64, embedding=[0.0] * 384,
@@ -277,6 +276,13 @@ def test_disposable_postgres_and_redis_cutover_passes_twice(tmp_path: Path) -> N
             with engine.connect() as connection:
                 assert str(connection.scalar(text("SELECT id FROM companies"))) == identities["company_id"]
                 assert str(connection.scalar(text("SELECT id FROM jobs"))) == identities["job_id"]
+                registry_rows = connection.execute(
+                    text(
+                        "SELECT code, label, sort_order FROM employment_types "
+                        "ORDER BY sort_order"
+                    )
+                ).tuples().all()
+                assert registry_rows == list(EMPLOYMENT_TYPE_SEEDS)
             cutover.delete_artifact_after_verification(artifact, verification)
             assert not artifact.exists()
     finally:
