@@ -139,3 +139,36 @@ Made JobsDB, CTGoodJobs, and OfferToday listing crawls fail-closed when publishe
 ### Next Steps
 
 - None - task complete
+
+
+## Session 61: Prevent JobsDB zero-work listing completion
+
+**Date**: 2026-08-05
+**Task**: Prevent JobsDB zero-work listing completion
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Preserved the cached JobsDB first-page response when unstable totalCount values produce empty reverse-pagination tails, and made contradictory non-zero advertised scope with zero Job identities fail with bounded evidence instead of completing successfully.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4dd20f42` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
