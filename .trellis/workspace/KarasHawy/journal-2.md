@@ -1,0 +1,41 @@
+# Journal - karashawy (Part 2)
+
+> Continuation from `journal-1.md` (archived at ~2000 lines)
+> Started: 2026-08-04
+
+---
+
+
+
+## Session 57: Review OfferToday keyword coverage
+
+**Date**: 2026-08-04
+**Task**: Review OfferToday keyword coverage
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Built a PostgreSQL-read-only OfferToday Job Detail keyword analyzer, completed a bounded 214-request no-write live probe, and recorded an insufficient-coverage verdict with 15 additions, pentest retirement, and angular deferral. Verified 30 focused/listing tests, Ruff, compileall, deterministic rendering, sanitized artifacts, and exact catalog snapshot parity.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1e18f3bd` | (see git log) |
+| `0d9b8d6a` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
