@@ -107,6 +107,7 @@ backend/tests/*
 !backend/tests/test_jobsdb_standalone_crawl.py
 !backend/tests/test_ctgoodjobs_standalone_crawl.py
 !backend/tests/test_offertoday_quality.py
+!backend/tests/test_review_offertoday_job_detail_keywords.py
 !backend/tests/test_offertoday_standalone_crawl.py
 !backend/tests/test_source_catalog_*.py
 !backend/tests/test_job_intelligence_foundation.py

@@ -26,6 +26,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Company Enrichment Runs](./company-enrichment-runs.md) | Krill Chat/Responses routing, explicit Company-only Web Search, capability probes, persistence, and safe diagnostics | Active |
 | [CTGoodJobs Transport Research](./ctgoodjobs-transport-research.md) | Bounded HTTP/headless/headed comparison, sanitized evidence, viability replay, and WAF hard stops | Active |
 | [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, finite detail scope, normalized progress, and hard-stop contracts | Active |
+| [OfferToday Keyword Coverage Review](./offertoday-keyword-coverage-review.md) | Read-only Job Detail corpus analysis, bounded listing probes, and evidence-limited recommendations | Active |
 | [OfferToday Research Artifacts](./offertoday-research-artifacts.md) | Historical artifact parent, verification, replay, and exit-code contracts | Preserved |
 | [Ordinary Source Classifications](./ordinary-source-classifications.md) | Current top-level classifications, direct synchronization, and unversioned crawl scope | Active |
 | [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
