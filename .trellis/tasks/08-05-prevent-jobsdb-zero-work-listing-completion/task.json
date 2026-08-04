@@ -1,0 +1,29 @@
+{
+  "id": "prevent-jobsdb-zero-work-listing-completion",
+  "name": "prevent-jobsdb-zero-work-listing-completion",
+  "title": "Prevent JobsDB zero-work listing completion",
+  "description": "Prevent a JobsDB One-off listing Run from reporting successful completion when unstable source pagination yields no collected, staged, or skipped Job identities despite a non-zero advertised result count.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-05",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 52,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/52"
+  }
+}

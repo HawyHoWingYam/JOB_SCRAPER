@@ -623,3 +623,94 @@ if validated_owned_process_has_exited(execution_generation):
 
 The durable generation owns process validation, restart recovery, and the only
 transition that may publish `crawl.cancelled`.
+
+---
+
+## Scenario: JobsDB unstable listing-count pagination
+
+### 1. Scope / Trigger
+
+Use this contract when a JobsDB listing Run probes page 1, derives reverse
+pagination from `totalCount`, and later encounters empty computed tail pages.
+JobsDB may return different `totalCount` values for otherwise identical
+requests, so one response's calculated last page is not authoritative evidence
+that the classification is empty.
+
+### 2. Signatures
+
+```python
+CategoryListScraper.scrape_category(
+    classification_id,
+    max_pages,
+    on_progress,
+    page_sink,
+    on_page_start,
+) -> dict[str, Any]
+
+JobsDBListingPaginationInconsistentError(
+    *, total_count: int, total_pages: int, pages_scraped: int
+)
+```
+
+### 3. Contracts
+
+- The page-1 probe counts against the reviewed request budget.
+- When `reuse_first_page=true`, its response is staged exactly once and is
+  never fetched again. If an empty tail stops the reverse walk before page 1,
+  stage the cached response after the stop without another budget claim.
+- Stable multi-page runs retain tail-to-page-1 order and remain bounded by the
+  frozen page depth and aggregate run page cap.
+- `totalCount == 0` is authoritative empty scope and completes with no staged
+  pages.
+- `totalCount > 0` with zero observed Job identities after the cached page-1
+  boundary is processed raises `JobsDBListingPaginationInconsistentError`.
+  The executor records `crawl.failed`; it must not emit `listing_completed` or
+  enter `manual_action_required`.
+- The error contains only bounded counts. Never persist response bodies or an
+  unbounded identity collection.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Stable non-empty pages | Stage each page once in reverse order; complete normally |
+| Computed tail becomes empty, cached page 1 has Jobs | Stage empty evidence, then cached page 1 exactly once; continue normally |
+| `totalCount > 0`, every observed page has zero identities | Raise pagination inconsistency; Crawl Job becomes `failed` |
+| `totalCount == 0` | Successful no-work completion; zero staged pages |
+| Page contains only published Job identities | Successful completion with non-zero raw/skipped metrics and zero new rows |
+| Cached page 1 is reused | Consume no second page-1 request-budget claim |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** page 1 advertises 123 pages and contains Jobs; pages 123 and 122
+  are empty after the Source count drifts. The run records those empty pages,
+  stages cached page 1 once, and retains truthful identity metrics.
+- **Base:** page 1 returns `totalCount=0`; the run completes successfully with
+  no listing page or Job evidence.
+- **Bad:** the reverse walk breaks on an empty tail and reports completed with
+  collected, staged, and skipped counts all zero.
+
+### 6. Tests Required
+
+- `backend/tests/test_jobsdb_listing_pagination.py` reproduces request order
+  `[1, 123, 122]`, proves cached page 1 is staged exactly once, verifies bounded
+  inconsistency failure, preserves authoritative empty completion, and proves
+  the outer executor records failed rather than completed.
+- Existing request-budget and IP-recovery tests must continue to prove cached
+  page-1 reuse, frozen caps, committed-prefix preservation, and no duplicate
+  requests.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: an empty unstable tail discards the already-confirmed first page.
+if not jobs:
+    break
+return completed(job_ids=[])
+
+# Correct: preserve the cached boundary, then reject contradictory zero work.
+if reverse_walk_stopped_before_page_one:
+    stage(cached_first_page)
+if total_count > 0 and not job_ids:
+    raise JobsDBListingPaginationInconsistentError(...)
+```

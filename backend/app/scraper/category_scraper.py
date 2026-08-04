@@ -27,6 +27,24 @@ ListingPageSink = Callable[..., Awaitable[None]]
 ListingPageStartSink = Callable[..., Awaitable[None]]
 
 
+class JobsDBListingPaginationInconsistentError(RuntimeError):
+    """JobsDB advertised listing work but yielded no Job identities."""
+
+    def __init__(
+        self,
+        *,
+        total_count: int,
+        total_pages: int,
+        pages_scraped: int,
+    ) -> None:
+        super().__init__(
+            "JobsDB listing pagination inconsistent: "
+            f"total_count={total_count} "
+            f"total_pages={total_pages} "
+            f"pages_scraped={pages_scraped}"
+        )
+
+
 class CategoryListScraper:
     """Scrapes job listings from JobsDB by category."""
 
@@ -141,7 +159,7 @@ class CategoryListScraper:
         self,
         classification_id: int,
         max_pages: Optional[int] = None,
-        on_progress: Optional[callable] = None,
+        on_progress: Optional[Callable[[int, int, int], None]] = None,
         page_sink: ListingPageSink | None = None,
         on_page_start: ListingPageStartSink | None = None,
     ) -> Dict[str, Any]:
@@ -264,6 +282,40 @@ class CategoryListScraper:
 
                 if on_progress:
                     on_progress(page, total_pages, len(job_ids))
+
+            # JobsDB's totalCount can drift between requests. When an inflated
+            # tail becomes empty, the reverse walk exits before reaching the
+            # already-fetched first page. Preserve that confirmed first-page
+            # work without spending another request-budget claim.
+            if page > 1 and self.reuse_first_page:
+                page = 1
+                if on_page_start is not None:
+                    await on_page_start(
+                        category_id=classification_id,
+                        category_name=category_name,
+                        page=page,
+                        total_pages=total_pages,
+                    )
+                jobs = first_page_result.get("data", [])
+                if page_sink is not None:
+                    await page_sink(
+                        category_id=classification_id,
+                        category_name=category_name,
+                        page=page,
+                        total_pages=total_pages,
+                        jobs=list(jobs),
+                    )
+                pages_scraped += 1
+                job_ids.extend([job["id"] for job in jobs])
+                if on_progress:
+                    on_progress(page, total_pages, len(job_ids))
+
+        if total_count > 0 and not job_ids:
+            raise JobsDBListingPaginationInconsistentError(
+                total_count=total_count,
+                total_pages=total_pages,
+                pages_scraped=pages_scraped,
+            )
 
         return {
             "classification_id": classification_id,
