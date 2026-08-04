@@ -172,3 +172,36 @@ Preserved the cached JobsDB first-page response when unstable totalCount values 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 62: Skip historical manual listing identities
+
+**Date**: 2026-08-05
+**Task**: Skip historical manual listing identities
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Manual JobsDB, CTGoodJobs, and OfferToday listing staging now skips source identities owned by earlier crawl runs while preserving scheduled and OfferToday identity-conflict behavior. Added cross-source regression coverage and specs, then hard-deleted 993 CTGoodJobs and 1,112 JobsDB redundant pending rows under guarded zero-reference checks.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `993de45b` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
