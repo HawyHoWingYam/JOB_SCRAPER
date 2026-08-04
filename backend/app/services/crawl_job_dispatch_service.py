@@ -713,7 +713,7 @@ class CrawlJobDispatchService:
                 selected.classification_id
                 for selected in content.resolved_scope.selected_classifications
             ],
-            "skip_existing": False,
+            "skip_existing": True,
         }
         if content.listing_settings is not None:
             payload.update(

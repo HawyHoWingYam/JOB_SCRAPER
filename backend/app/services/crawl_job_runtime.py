@@ -418,9 +418,9 @@ class CrawlJobRuntime:
                     db,
                     source_site=normalized_source,
                     source_job_ids=ordered_job_ids,
-                    raise_on_error=is_offertoday,
+                    raise_on_error=True,
                 )
-                if (is_offertoday or skip_existing) and seen_job_ids
+                if seen_job_ids
                 else {}
             )
             published_source_job_ids = tuple(
@@ -573,8 +573,7 @@ class CrawlJobRuntime:
                     source_job_id
                     for source_job_id in ordered_job_ids
                     if source_job_id not in terminal_unavailable_source_job_id_set
-                    and source_job_id
-                    not in complete_existing_source_job_id_set
+                    and source_job_id not in published_source_job_id_set
                     and source_job_id in current_staged_source_job_id_set
                 )
                 duplicate_source_job_id_set = set(duplicate_source_job_ids)
@@ -582,23 +581,16 @@ class CrawlJobRuntime:
                     source_job_id
                     for source_job_id in ordered_job_ids
                     if source_job_id not in terminal_unavailable_source_job_id_set
-                    and source_job_id
-                    not in complete_existing_source_job_id_set
+                    and source_job_id not in published_source_job_id_set
                     and source_job_id not in duplicate_source_job_id_set
-                    and (
-                        source_job_id in published_source_job_id_set
-                        or bool(
-                            historical_rows_by_source_job_id[source_job_id]
-                        )
-                    )
+                    and bool(historical_rows_by_source_job_id[source_job_id])
                 )
                 repair_source_job_id_set = set(repair_source_job_ids)
                 new_source_job_ids = tuple(
                     source_job_id
                     for source_job_id in ordered_job_ids
                     if source_job_id not in terminal_unavailable_source_job_id_set
-                    and source_job_id
-                    not in complete_existing_source_job_id_set
+                    and source_job_id not in published_source_job_id_set
                     and source_job_id not in duplicate_source_job_id_set
                     and source_job_id not in repair_source_job_id_set
                 )
@@ -610,6 +602,8 @@ class CrawlJobRuntime:
                         else "complete_existing"
                         if source_job_id
                         in complete_existing_source_job_id_set
+                        else "published_existing"
+                        if source_job_id in published_source_job_id_set
                         else "duplicate"
                         if source_job_id in duplicate_source_job_id_set
                         else "repair"
@@ -652,10 +646,11 @@ class CrawlJobRuntime:
                 if is_offertoday:
                     classification = classification_by_source_job_id[source_job_id]
                     if classification not in {"new", "repair"}:
-                        skipped_existing += 1
+                        if source_job_id in published_source_job_id_set:
+                            skipped_existing += 1
                         continue
                     detail_target_kind = classification
-                elif source_job_id in published_source_job_id_set and skip_existing:
+                elif source_job_id in published_source_job_id_set:
                     skipped_existing += 1
                     continue
 
@@ -1004,12 +999,9 @@ class CrawlJobRuntime:
                     db,
                     source_site=normalized_source,
                     source_job_ids=list(eligible_groups),
-                    raise_on_error=normalized_source == "offertoday",
+                    raise_on_error=True,
                 )
-                if (
-                    (normalized_source == "offertoday" or payload.get("skip_existing"))
-                    and eligible_groups
-                )
+                if eligible_groups
                 else {}
             )
             targets: list[dict[str, Any]] = []
@@ -1019,10 +1011,7 @@ class CrawlJobRuntime:
 
             for source_job_id, rows in eligible_groups.items():
                 existing_job = existing_jobs_by_source_id.get(source_job_id)
-                should_reconcile = existing_job is not None and (
-                    normalized_source != "offertoday"
-                    or is_complete_offertoday_job(existing_job)
-                )
+                should_reconcile = existing_job is not None
                 if should_reconcile:
                     for row in rows:
                         before_status = str(

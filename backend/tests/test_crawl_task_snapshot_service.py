@@ -17,7 +17,10 @@ from app.crawl_control.contracts import (
 )
 from app.source_classifications.domain import payload_fingerprint
 from app.services.crawl_task_snapshot_service import build_crawl_task_snapshot
-from app.crawl_control.task_control_board_service import build_crawl_task_detail_projection
+from app.crawl_control.task_control_board_service import (
+    build_crawl_task_detail_projection,
+)
+from app.schemas.crawl_job import CrawlTaskListItemSchema
 
 
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
@@ -28,9 +31,7 @@ DISPATCH_PLAN_ID = UUID("00000000-0000-0000-0000-000000000002")
 def _dispatch_plan(*, source_site, request_payload, metrics):
     phase = request_payload.get("crawl_phase", "listing")
     raw_ids = request_payload.get("category_ids") or [1]
-    classification_ids = tuple(
-        f"{source_site}:{raw_id}" for raw_id in raw_ids
-    )
+    classification_ids = tuple(f"{source_site}:{raw_id}" for raw_id in raw_ids)
     authored_scope = AuthoredCrawlScopeV1(
         source_site=source_site,
         mode="selected" if request_payload.get("category_ids") else "all",
@@ -195,6 +196,60 @@ def _event(payload, event_type="listing_completed"):
     )
 
 
+def test_removed_dispatch_plan_tombstone_keeps_terminal_task_projectable() -> None:
+    removed_plan_id = UUID("0c4418c9-2327-4c75-8268-f71f62369cd2")
+    crawl_job = _crawl_job(
+        status="cancelled",
+        request_payload={
+            "source_site": "jobsdb",
+            "crawl_phase": "detail",
+            "crawl_mode": "headless",
+            "detail_scope": "crawl_scope",
+            "detail_limit": 3803,
+            "removed_dispatch_plan": {
+                "reason": "historical_listing_deduplication",
+                "plan_id": str(removed_plan_id),
+                "plan_fingerprint": "c" * 64,
+            },
+        },
+        metrics={
+            "detail_snapshot_target_count": 3803,
+            "detail_snapshot_fetched_count": 87,
+            "detail_snapshot_remaining_count": 3716,
+            "detail_run_cap": 5000,
+        },
+    )
+    crawl_job.dispatch_plan = None
+    crawl_job.dispatch_plan_id = None
+    crawl_job.dispatch_plan_fingerprint = None
+
+    snapshot = build_crawl_task_snapshot(
+        crawl_job,
+        latest_event=None,
+        now=NOW,
+        events=[],
+    )
+
+    assert snapshot["status"] == "cancelled"
+    assert snapshot["dispatch_plan_id"] == str(removed_plan_id)
+    assert snapshot["detail_snapshot_target_count"] == 3803
+    assert snapshot["detail_snapshot_remaining_count"] == 3716
+    detail = build_crawl_task_detail_projection(crawl_job, normalized=snapshot)
+    list_item = CrawlTaskListItemSchema.model_validate(snapshot)
+    assert list_item.authority.authority_kind == "removed_dispatch_plan"
+    assert detail.run.authority.model_dump(mode="json") == {
+        "authority_kind": "removed_dispatch_plan",
+        "dispatch_plan_id": str(removed_plan_id),
+        "dispatch_plan_fingerprint": "c" * 64,
+        "plan_state": "removed",
+        "automation_id": None,
+        "authored_scope": None,
+        "resolved_scope": None,
+        "readiness": None,
+        "removal_reason": "historical_listing_deduplication",
+    }
+
+
 def test_snapshot_preserves_raw_ids_as_optional_and_uses_larger_counter() -> None:
     event = _event(
         {
@@ -304,10 +359,13 @@ def test_snapshot_preserves_page_depth_partial_listing_targets_for_recovery() ->
         now=NOW,
         events=[event],
     )
-    assert build_crawl_task_detail_projection(
-        cancelled,
-        normalized=cancelled_snapshot,
-    ).listing_recovery is None
+    assert (
+        build_crawl_task_detail_projection(
+            cancelled,
+            normalized=cancelled_snapshot,
+        ).listing_recovery
+        is None
+    )
 
 
 def test_listing_recovery_contract_rejects_invalid_capped_shape() -> None:
@@ -613,7 +671,9 @@ def test_snapshot_projects_detail_segment_and_backlog_metrics() -> None:
     assert snapshot["detail_continuation_state"] == "continuing"
 
 
-def test_snapshot_preserves_resumable_manual_action_after_later_progress_event() -> None:
+def test_snapshot_preserves_resumable_manual_action_after_later_progress_event() -> (
+    None
+):
     manual_action_event = _event(
         {
             "request_payload": {
@@ -765,9 +825,7 @@ def test_snapshot_projects_recorded_detail_pacing_and_missing_value() -> None:
     assert malformed["detail_pacing"] is None
 
     listing = build_crawl_task_snapshot(
-        _crawl_job(
-            request_payload={"crawl_phase": "listing", "detail_pacing": pacing}
-        ),
+        _crawl_job(request_payload={"crawl_phase": "listing", "detail_pacing": pacing}),
         None,
         now=NOW,
         events=[],

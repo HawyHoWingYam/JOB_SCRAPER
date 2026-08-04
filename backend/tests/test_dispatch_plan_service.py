@@ -563,6 +563,22 @@ def test_prepare_rejects_listing_workload_above_reviewed_cap(dispatch_db):
     }
 
 
+def test_listing_dispatch_payload_always_skips_published_jobs(dispatch_db):
+    _engine, _factory, db, revision = dispatch_db
+    now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]
+    preparation = _service(db, now).prepare(
+        _listing_content(revision),
+        readiness=_ready(now[0]),
+        prepared_by="operator@example.com",
+    )
+
+    payload = CrawlJobDispatchService._build_plan_request_payload(
+        preparation.plan
+    )
+
+    assert payload["skip_existing"] is True
+
+
 def test_expiry_is_durable_and_cleanup_deletes_only_expired_plans(dispatch_db):
     _engine, _factory, db, revision = dispatch_db
     now = [datetime(2026, 7, 20, 10, 0, tzinfo=UTC)]

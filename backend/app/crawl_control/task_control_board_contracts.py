@@ -23,6 +23,11 @@ from app.crawl_control.dispatch_plan_contracts import (
 )
 
 
+REMOVED_DISPATCH_PLAN_REASON_HISTORICAL_LISTING_DEDUPLICATION = (
+    "historical_listing_deduplication"
+)
+
+
 class RunAuthorityProjectionV1(FrozenContract):
     authority_kind: Literal["dispatch_plan"] = "dispatch_plan"
     dispatch_plan_id: UUID
@@ -32,6 +37,20 @@ class RunAuthorityProjectionV1(FrozenContract):
     authored_scope: AuthoredCrawlScopeV1
     resolved_scope: ResolvedRunScopeV1
     readiness: DispatchPlanReadinessV1
+
+
+class RemovedDispatchPlanAuthorityProjectionV1(FrozenContract):
+    authority_kind: Literal["removed_dispatch_plan"] = "removed_dispatch_plan"
+    dispatch_plan_id: UUID
+    dispatch_plan_fingerprint: str = Field(pattern=SHA256_PATTERN)
+    plan_state: Literal["removed"] = "removed"
+    automation_id: None = None
+    authored_scope: None = None
+    resolved_scope: None = None
+    readiness: None = None
+    removal_reason: Literal[
+        "historical_listing_deduplication"
+    ] = REMOVED_DISPATCH_PLAN_REASON_HISTORICAL_LISTING_DEDUPLICATION
 
 
 class ListingWorkloadProjectionV1(FrozenContract):
@@ -136,7 +155,9 @@ class CrawlControlRunProjectionV1(FrozenContract):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     updated_at: datetime
-    authority: RunAuthorityProjectionV1
+    authority: RunAuthorityProjectionV1 | RemovedDispatchPlanAuthorityProjectionV1 = (
+        Field(discriminator="authority_kind")
+    )
     listing_workload: ListingWorkloadProjectionV1 | None = None
     detail_snapshot: DetailSnapshotProjectionV1 | None = None
     recovery_attempt: RecoveryAttemptProjectionV1 | None = None
@@ -190,9 +211,7 @@ class ManualActionGuidanceProjectionV1(FrozenContract):
     message: str = Field(min_length=1, max_length=1000)
     instructions: tuple[str, ...] = Field(default_factory=tuple, max_length=10)
     resume_supported: bool
-    resume_strategies: tuple[
-        Literal["fresh_profile", "reuse_open_browser"], ...
-    ] = ()
+    resume_strategies: tuple[Literal["fresh_profile", "reuse_open_browser"], ...] = ()
     worker_ready: bool | None = None
     reset_supported: bool = False
     reset_reason: str | None = Field(default=None, max_length=200)

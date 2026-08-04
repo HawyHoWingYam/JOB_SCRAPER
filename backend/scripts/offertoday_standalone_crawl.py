@@ -260,8 +260,8 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        default=False,
-        help="Do not queue detail work for jobs that already exist in the database.",
+        default=True,
+        help="Compatibility flag; published jobs are always excluded from listing detail work.",
     )
     parser.add_argument(
         "--check",
@@ -330,8 +330,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
         args.max_pages = int(request_payload["max_pages"])
     if request_payload.get("resume_strategy"):
         args.resume_strategy = str(request_payload["resume_strategy"])
-    if request_payload.get("skip_existing") is not None:
-        args.skip_existing = bool(request_payload["skip_existing"])
+    args.skip_existing = True
     crawl_mode = str(request_payload.get("crawl_mode") or "").strip().lower()
     args.headed = crawl_mode == "headed" or bool(args.headed)
     requested_phase = str(request_payload.get("crawl_phase") or "").strip().lower()
@@ -384,7 +383,7 @@ def _apply_listing_runtime_plan(
     args.max_pages = runtime_plan.page_depth
     args.headed = runtime_plan.crawl_mode == "headed"
     args.crawl_phase = "listing"
-    args.skip_existing = False
+    args.skip_existing = True
 
 
 def _apply_detail_runtime_plan(
@@ -405,7 +404,7 @@ def _apply_detail_runtime_plan(
     args.detail_scope = runtime_plan.backlog_scope_kind
     args.detail_limit = runtime_plan.complete_run_cap
     args.detail_statuses = ",".join(runtime_plan.resume_statuses)
-    args.skip_existing = False
+    args.skip_existing = True
     args.detail_pacing = None
     args.manual_action_browser_channel = ""
     args.manual_action_browser_profile_path = ""
@@ -1235,6 +1234,7 @@ def _listing_metrics(result, staging_sink, runtime_plan=None) -> dict[str, Any]:
         "complete_existing_skipped": len(
             reconciliation.complete_existing_source_job_ids
         ),
+        "jobs_skipped_existing": int(staging_sink.skipped_existing),
         "terminal_unavailable_skipped": len(
             reconciliation.terminal_unavailable_source_job_ids
         ),

@@ -11,15 +11,32 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 - `GET /api/task-control-board?source_site=<source>&run_limit=<1..100>` returns the current Board projection.
 - `GET /api/crawl-jobs/tasks/{crawl_job_id}` returns the current normalized Task Detail projection.
 - `TaskControlBoardProjectionService.get_current(selected_source, run_limit)` loads each supported Source independently, then batches events for the combined rows.
+- A one-off physical authority cleanup records this bounded request-payload tombstone:
+
+```json
+{
+  "removed_dispatch_plan": {
+    "reason": "historical_listing_deduplication",
+    "plan_id": "<uuid>",
+    "plan_fingerprint": "<sha256>"
+  }
+}
+```
 
 ### 3. Contracts
 
 - The Board always returns summaries for `jobsdb`, `ctgoodjobs`, and `offertoday`; only the selected Source contributes `needs_attention`, `active_runs`, `upcoming`, and `archived_automations`.
 - There is one current projection. Do not add a query selector, compatibility projection, or version field.
 - Task Detail reuses `build_crawl_task_snapshot` and `build_crawl_control_run_projection` so list, Board, and direct detail agree.
-- Every Crawl Job is created from one Dispatch Plan and therefore has complete
-  immutable plan authority. Missing authority is invalid state; do not project
-  a compatibility or historical fallback.
+- Every ordinary Crawl Job is created from one Dispatch Plan and therefore has
+  complete immutable plan authority. Missing authority remains invalid state.
+- The sole exception is a terminal Crawl Job deliberately preserved after the
+  approved historical listing-deduplication cleanup physically removes its
+  Dispatch Plan. Its explicit `removed_dispatch_plan` marker projects
+  `authority_kind="removed_dispatch_plan"`, `plan_state="removed"`, the original
+  ID/fingerprint, null reviewed scopes/readiness, and frozen detail outcomes from
+  metrics. This is a read-only tombstone, not execution authority or a general
+  compatibility fallback.
 - Manual guidance is bounded and may expose only normalized message/instructions/capabilities. A resumable normalized manual action always supports the baseline `fresh_profile` path; `reuse_open_browser` appears only when explicitly normalized as supported.
 - Browser-profile recovery fields are capability-gated: `reset_supported` is
   true only for a JobsDB or CTGoodJobs profile-lock action whose canonical path
@@ -42,12 +59,19 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 | unknown Task UUID | 404 `CRAWL_TASK_NOT_FOUND` with the requested ID |
 | action is invalid for current status/lifecycle | action remains present with `enabled=false` and a reason code |
 | profile lock points outside the configured browser-profile root | Reset is disabled with `profile_ownership_unverified`; do not probe or mutate it |
+| terminal job has the exact approved removed-plan marker and null column links | Project the bounded removed authority and preserved detail snapshot |
+| marker is absent/malformed, job is non-terminal, or a column plan link remains | Fail closed as invalid authority state |
 
 ### 5. Good/Base/Bad Cases
 
 - Good: query each Source with its own `run_limit`, batch event reads, and preserve backend order.
 - Base: the sandbox cutover removes every pre-cutover run, so current Task
   Details always render Dispatch Plan authority.
+- Good: an approved cleanup removes one frozen plan but preserves its cancelled
+  Crawl Job; Board and Crawl Tasks render a removed-authority tombstone without
+  treating it as runnable authority.
+- Bad: every missing plan silently falls back to mutable request payload. A broken
+  active run now appears valid and bypasses the fingerprint boundary.
 - Bad: load one global page and partition it by Source; busy Sources can displace the selected Source.
 
 ### 6. Tests Required
@@ -59,6 +83,8 @@ Use these contracts whenever a UI needs Crawl Control operations, Automation row
 - Assert server-declared action truth for active, cancelling, terminal, and manual-action states.
 - Assert both JobsDB and CTGoodJobs expose Reset only for owned/configured,
   proven-dead profiles; live, unknown, and unowned paths stay disabled.
+- Snapshot/API regressions cover the exact removed-plan marker and prove malformed,
+  unmarked, linked, or non-terminal jobs still fail closed.
 
 ### 7. Wrong vs Correct
 
@@ -78,6 +104,18 @@ for source in SUPPORTED_BOARD_SOURCES:
         updated_since=None,
     )
     rows.extend(source_rows)
+```
+
+```python
+# Wrong: any missing relationship becomes a legacy run.
+if crawl_job.dispatch_plan is None:
+    return project_from_request_payload(crawl_job.request_payload)
+
+# Correct: only the explicit one-off removal receipt enables a tombstone.
+marker = crawl_job.request_payload.get("removed_dispatch_plan")
+if marker["reason"] == "historical_listing_deduplication":
+    return project_removed_authority(marker, crawl_job.metrics)
+raise ValueError("Crawl Job has no Dispatch Plan authority")
 ```
 
 ## Scenario: Dismiss one terminal failed event occurrence

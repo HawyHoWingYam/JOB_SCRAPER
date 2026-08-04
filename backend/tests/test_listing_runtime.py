@@ -58,6 +58,21 @@ from job_scraper_spiders.spiders import jobsdb as jobsdb_spider_module  # noqa: 
 from job_scraper_spiders.spiders import offertoday as offertoday_spider_module  # noqa: E402
 
 
+@pytest.mark.parametrize(
+    "crawl_module",
+    [jobsdb_crawl, ctgoodjobs_crawl, offertoday_crawl],
+)
+def test_standalone_listing_paths_always_enforce_skip_existing(crawl_module) -> None:
+    args = crawl_module._build_argument_parser().parse_args([])
+    assert args.skip_existing is True
+
+    crawl_module._apply_request_payload_defaults(
+        args,
+        {"crawl_phase": "listing", "skip_existing": False},
+    )
+    assert args.skip_existing is True
+
+
 def _runtime_plan(
     source_site: str,
     classification_ids: tuple[str, ...],

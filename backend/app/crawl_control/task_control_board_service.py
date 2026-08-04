@@ -37,6 +37,8 @@ from app.crawl_control.task_control_board_contracts import (
     ListingWorkloadProjectionV1,
     ManualActionGuidanceProjectionV1,
     RecoveryAttemptProjectionV1,
+    REMOVED_DISPATCH_PLAN_REASON_HISTORICAL_LISTING_DEDUPLICATION,
+    RemovedDispatchPlanAuthorityProjectionV1,
     ResolvedScopeSummaryV1,
     RunAuthorityProjectionV1,
     TaskControlBoardProjectionV2,
@@ -62,9 +64,7 @@ SUPPORTED_BOARD_SOURCES: tuple[SourceSite, ...] = (
     "ctgoodjobs",
     "offertoday",
 )
-ACTIVE_BOARD_RUN_STATUSES = frozenset(
-    {*CANCELLABLE_CRAWL_JOB_STATUSES, "cancelling"}
-)
+ACTIVE_BOARD_RUN_STATUSES = frozenset({*CANCELLABLE_CRAWL_JOB_STATUSES, "cancelling"})
 _PRESET_SCHEDULES = {
     "0 * * * *": "Every hour",
     "0 2 * * *": "Daily at 02:00",
@@ -154,17 +154,103 @@ def _detail_snapshot(
         fetched_count=_to_int(normalized.get("detail_fetched_count")),
         saved_count=_to_int(normalized.get("detail_saved_count")),
         failed_count=_to_int(normalized.get("detail_failed_count")),
-        unavailable_count=_to_int(
-            normalized.get("detail_unavailable_count")
-        ),
-        manual_action_count=_to_int(
-            normalized.get("detail_manual_action_count")
-        ),
+        unavailable_count=_to_int(normalized.get("detail_unavailable_count")),
+        manual_action_count=_to_int(normalized.get("detail_manual_action_count")),
         remaining_count=_to_int(normalized.get("detail_remaining_count")),
         future_eligible_count=_to_int(
             normalized.get("detail_live_future_eligible_count")
         ),
         detail_run_cap=detail_run_cap,
+    )
+
+
+def _removed_dispatch_plan_projection(
+    crawl_job,
+    *,
+    normalized: Mapping[str, Any],
+) -> CrawlControlRunProjectionV1:
+    request_payload = (
+        crawl_job.request_payload
+        if isinstance(crawl_job.request_payload, Mapping)
+        else {}
+    )
+    marker = request_payload.get("removed_dispatch_plan")
+    if not isinstance(marker, Mapping):
+        raise ValueError(f"Crawl Job {crawl_job.id} has no Dispatch Plan authority")
+    if (
+        marker.get("reason")
+        != REMOVED_DISPATCH_PLAN_REASON_HISTORICAL_LISTING_DEDUPLICATION
+        or str(request_payload.get("crawl_phase") or "").strip().lower() != "detail"
+        or str(request_payload.get("crawl_mode") or "").strip().lower()
+        not in {"headless", "headed"}
+        or str(crawl_job.status or "").strip().lower()
+        not in TERMINAL_CRAWL_JOB_STATUSES
+        or crawl_job.dispatch_plan_id is not None
+        or crawl_job.dispatch_plan_fingerprint is not None
+    ):
+        raise ValueError(
+            f"Crawl Job {crawl_job.id} removed Dispatch Plan marker is invalid"
+        )
+
+    authority = RemovedDispatchPlanAuthorityProjectionV1(
+        authority_kind="removed_dispatch_plan",
+        dispatch_plan_id=marker.get("plan_id"),
+        dispatch_plan_fingerprint=marker.get("plan_fingerprint"),
+        plan_state="removed",
+        removal_reason=marker.get("reason"),
+    )
+    target_count = _to_int(
+        normalized.get("detail_snapshot_target_count")
+        or normalized.get("detail_target_count")
+    )
+    detail_snapshot = DetailSnapshotProjectionV1(
+        backlog_scope={
+            "kind": str(request_payload.get("detail_scope") or "source_backlog")
+        },
+        limit_kind="stop_after",
+        cutoff_at=normalized.get("detail_snapshot_cutoff_at"),
+        target_count=target_count,
+        fetched_count=_to_int(normalized.get("detail_fetched_count")),
+        saved_count=_to_int(normalized.get("detail_saved_count")),
+        failed_count=_to_int(normalized.get("detail_failed_count")),
+        unavailable_count=_to_int(normalized.get("detail_unavailable_count")),
+        manual_action_count=_to_int(normalized.get("detail_manual_action_count")),
+        remaining_count=_to_int(normalized.get("detail_remaining_count")),
+        future_eligible_count=_to_int(
+            normalized.get("detail_live_future_eligible_count")
+        ),
+        detail_run_cap=_to_int(
+            normalized.get("detail_run_cap")
+            or request_payload.get("detail_limit")
+            or target_count
+        ),
+    )
+    return CrawlControlRunProjectionV1(
+        crawl_job_id=crawl_job.id,
+        source_site=crawl_job.source_site,
+        crawl_phase="detail",
+        crawl_mode=str(request_payload["crawl_mode"]).strip().lower(),
+        trigger_kind=str(crawl_job.trigger_type or "one_off"),
+        status=str(normalized.get("status") or crawl_job.status),
+        queued_at=_aware_utc(crawl_job.queued_at),
+        started_at=(
+            _aware_utc(crawl_job.started_at)
+            if crawl_job.started_at is not None
+            else None
+        ),
+        completed_at=(
+            _aware_utc(crawl_job.completed_at)
+            if crawl_job.completed_at is not None
+            else None
+        ),
+        updated_at=_aware_utc(crawl_job.updated_at),
+        authority=authority,
+        detail_snapshot=detail_snapshot,
+        recovery_attempt=(
+            RecoveryAttemptProjectionV1.model_validate(normalized["recovery_attempt"])
+            if isinstance(normalized.get("recovery_attempt"), Mapping)
+            else None
+        ),
     )
 
 
@@ -194,8 +280,9 @@ def build_crawl_control_run_projection(
         content = None
 
     if content is None:
-        raise ValueError(
-            f"Crawl Job {crawl_job.id} has no Dispatch Plan authority"
+        return _removed_dispatch_plan_projection(
+            crawl_job,
+            normalized=values,
         )
     if (
         crawl_job.dispatch_plan_id != plan_id
@@ -262,9 +349,7 @@ def build_crawl_control_run_projection(
         listing_workload=listing_workload,
         detail_snapshot=detail_snapshot,
         recovery_attempt=(
-            RecoveryAttemptProjectionV1.model_validate(
-                values["recovery_attempt"]
-            )
+            RecoveryAttemptProjectionV1.model_validate(values["recovery_attempt"])
             if isinstance(values.get("recovery_attempt"), Mapping)
             else None
         ),
@@ -287,8 +372,16 @@ def _issue_projection(
         issue_class = "failed_run" if status == "failed" else "manual_action_required"
     return CrawlTaskIssueProjectionV1(
         issue_class=issue_class[:100],
-        code=(str(normalized.get("issue_code"))[:100] if normalized.get("issue_code") else None),
-        stage=(str(normalized.get("issue_stage"))[:100] if normalized.get("issue_stage") else None),
+        code=(
+            str(normalized.get("issue_code"))[:100]
+            if normalized.get("issue_code")
+            else None
+        ),
+        stage=(
+            str(normalized.get("issue_stage"))[:100]
+            if normalized.get("issue_stage")
+            else None
+        ),
         summary=_bounded_text(
             normalized.get("latest_issue_text") or normalized.get("error"),
             fallback="This run needs operator attention.",
@@ -302,7 +395,11 @@ def _manual_action_guidance(
     raw = normalized.get("manual_action")
     if not isinstance(raw, Mapping):
         return None
-    source_site = str(raw.get("source_site") or normalized.get("source_site") or "").strip().lower()
+    source_site = (
+        str(raw.get("source_site") or normalized.get("source_site") or "")
+        .strip()
+        .lower()
+    )
     if source_site not in SUPPORTED_BOARD_SOURCES:
         return None
     instructions_value = raw.get("instructions")
@@ -310,7 +407,9 @@ def _manual_action_guidance(
         instructions = (instructions_value[:500],)
     elif isinstance(instructions_value, (list, tuple)):
         instructions = tuple(
-            _bounded_text(item, fallback="Continue in the supported operator flow.", limit=500)
+            _bounded_text(
+                item, fallback="Continue in the supported operator flow.", limit=500
+            )
             for item in instructions_value[:10]
             if str(item or "").strip()
         )
@@ -326,7 +425,10 @@ def _manual_action_guidance(
         strategies.append("reuse_open_browser")
     profile_scope = str(raw.get("profile_scope") or "").strip() or None
     profile_stage = str(raw.get("stage") or "").strip().lower()
-    is_resettable_profile_lock = source_site in {"jobsdb", "ctgoodjobs"} and profile_stage in {
+    is_resettable_profile_lock = source_site in {
+        "jobsdb",
+        "ctgoodjobs",
+    } and profile_stage in {
         "browser_profile_in_use",
         "profile_lock",
     }
@@ -337,9 +439,7 @@ def _manual_action_guidance(
     if is_resettable_profile_lock:
         profile_path = str(raw.get("browser_profile_path") or "").strip()
         if profile_path:
-            browser_channel = (
-                str(raw.get("browser_channel") or "").strip() or None
-            )
+            browser_channel = str(raw.get("browser_channel") or "").strip() or None
             task_owned = is_task_owned_profile(
                 profile_path,
                 configured_path=settings.jobsdb_headed_browser_user_data_dir,
@@ -365,18 +465,28 @@ def _manual_action_guidance(
                 reset_reason = None if reset_supported else liveness.reason
     return ManualActionGuidanceProjectionV1(
         source_site=source_site,
-        action_type=(str(raw.get("action_type"))[:100] if raw.get("action_type") else None),
-        classification=(str(raw.get("classification"))[:100] if raw.get("classification") else None),
+        action_type=(
+            str(raw.get("action_type"))[:100] if raw.get("action_type") else None
+        ),
+        classification=(
+            str(raw.get("classification"))[:100] if raw.get("classification") else None
+        ),
         stage=(str(raw.get("stage"))[:100] if raw.get("stage") else None),
         code=(str(raw.get("code"))[:100] if raw.get("code") else None),
         message=_bounded_text(
-            raw.get("message") or raw.get("reason") or normalized.get("latest_issue_text"),
+            raw.get("message")
+            or raw.get("reason")
+            or normalized.get("latest_issue_text"),
             fallback="Complete the supported manual action before resuming.",
         ),
         instructions=instructions,
         resume_supported=resume_supported,
         resume_strategies=tuple(strategies) if resume_supported else (),
-        worker_ready=(bool(raw.get("worker_ready")) if raw.get("worker_ready") is not None else None),
+        worker_ready=(
+            bool(raw.get("worker_ready"))
+            if raw.get("worker_ready") is not None
+            else None
+        ),
         reset_supported=reset_supported,
         reset_reason=reset_reason,
         profile_scope=profile_scope,
@@ -412,9 +522,7 @@ def _run_actions(crawl_job, normalized: Mapping[str, Any]) -> tuple[BoardActionV
         BoardActionV1(
             action="reset_browser_profile",
             enabled=bool(
-                status == "manual_action_required"
-                and manual
-                and manual.reset_supported
+                status == "manual_action_required" and manual and manual.reset_supported
             ),
             reason_code=(
                 None
@@ -491,12 +599,22 @@ def build_crawl_task_detail_projection(
     return CrawlTaskDetailProjectionV1(
         run=run,
         persisted_status=str(normalized.get("persisted_status") or crawl_job.status),
-        operator_state=(str(normalized.get("operator_state"))[:100] if normalized.get("operator_state") else None),
+        operator_state=(
+            str(normalized.get("operator_state"))[:100]
+            if normalized.get("operator_state")
+            else None
+        ),
         queued_at=_aware_utc(crawl_job.queued_at),
         started_at=(_aware_utc(crawl_job.started_at) if crawl_job.started_at else None),
-        completed_at=(_aware_utc(crawl_job.completed_at) if crawl_job.completed_at else None),
+        completed_at=(
+            _aware_utc(crawl_job.completed_at) if crawl_job.completed_at else None
+        ),
         updated_at=_aware_utc(crawl_job.updated_at),
-        detail_pacing=(dict(normalized["detail_pacing"]) if isinstance(normalized.get("detail_pacing"), Mapping) else None),
+        detail_pacing=(
+            dict(normalized["detail_pacing"])
+            if isinstance(normalized.get("detail_pacing"), Mapping)
+            else None
+        ),
         listing_recovery=_listing_recovery(
             crawl_job=crawl_job,
             normalized=normalized,
@@ -512,13 +630,43 @@ def build_crawl_task_detail_projection(
 def _automation_actions(projection) -> tuple[BoardActionV1, ...]:
     state = projection.snapshot.lifecycle_state
     return (
-        BoardActionV1(action="edit", enabled=state != "archived", reason_code="AUTOMATION_ARCHIVED" if state == "archived" else None),
-        BoardActionV1(action="run_now", enabled=state in {"active", "paused"}, reason_code=None if state in {"active", "paused"} else "AUTOMATION_NOT_RUNNABLE"),
-        BoardActionV1(action="pause", enabled=state == "active", reason_code=None if state == "active" else "AUTOMATION_NOT_ACTIVE"),
-        BoardActionV1(action="resume", enabled=state == "paused", reason_code=None if state == "paused" else "AUTOMATION_NOT_PAUSED"),
-        BoardActionV1(action="archive", enabled=state != "archived", reason_code=None if state != "archived" else "AUTOMATION_ARCHIVED"),
-        BoardActionV1(action="restore", enabled=state == "archived", reason_code=None if state == "archived" else "AUTOMATION_NOT_ARCHIVED"),
-        BoardActionV1(action="delete_review", enabled=state == "archived", reason_code=None if state == "archived" else "AUTOMATION_NOT_ARCHIVED"),
+        BoardActionV1(
+            action="edit",
+            enabled=state != "archived",
+            reason_code="AUTOMATION_ARCHIVED" if state == "archived" else None,
+        ),
+        BoardActionV1(
+            action="run_now",
+            enabled=state in {"active", "paused"},
+            reason_code=None
+            if state in {"active", "paused"}
+            else "AUTOMATION_NOT_RUNNABLE",
+        ),
+        BoardActionV1(
+            action="pause",
+            enabled=state == "active",
+            reason_code=None if state == "active" else "AUTOMATION_NOT_ACTIVE",
+        ),
+        BoardActionV1(
+            action="resume",
+            enabled=state == "paused",
+            reason_code=None if state == "paused" else "AUTOMATION_NOT_PAUSED",
+        ),
+        BoardActionV1(
+            action="archive",
+            enabled=state != "archived",
+            reason_code=None if state != "archived" else "AUTOMATION_ARCHIVED",
+        ),
+        BoardActionV1(
+            action="restore",
+            enabled=state == "archived",
+            reason_code=None if state == "archived" else "AUTOMATION_NOT_ARCHIVED",
+        ),
+        BoardActionV1(
+            action="delete_review",
+            enabled=state == "archived",
+            reason_code=None if state == "archived" else "AUTOMATION_NOT_ARCHIVED",
+        ),
         BoardActionV1(action="view_logs", enabled=True),
     )
 
@@ -533,9 +681,7 @@ class TaskControlBoardProjectionService:
         crawl_job_repository: CrawlJobRepository | None = None,
     ) -> None:
         self.db = db
-        self.crawl_job_repository = (
-            crawl_job_repository or CrawlJobRepository()
-        )
+        self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
 
     def get_current(
         self,
@@ -607,10 +753,19 @@ class TaskControlBoardProjectionService:
             automation_id = run.authority.automation_id
             if automation_id is None:
                 continue
-            if run.status in ACTIVE_BOARD_RUN_STATUSES and automation_id not in active_by_automation:
+            if (
+                run.status in ACTIVE_BOARD_RUN_STATUSES
+                and automation_id not in active_by_automation
+            ):
                 active_by_automation[automation_id] = run
-            if run.status in TERMINAL_CRAWL_JOB_STATUSES and automation_id not in latest_by_automation:
-                latest_by_automation[automation_id] = (run, _issue_projection(normalized))
+            if (
+                run.status in TERMINAL_CRAWL_JOB_STATUSES
+                and automation_id not in latest_by_automation
+            ):
+                latest_by_automation[automation_id] = (
+                    run,
+                    _issue_projection(normalized),
+                )
 
         automation_rows: list[AutomationRowProjectionV2] = []
         for projection in automation_projections:
@@ -618,10 +773,15 @@ class TaskControlBoardProjectionService:
             configuration = snapshot.configuration
             current_run = active_by_automation.get(snapshot.automation_id)
             resolved_summary = None
-            if current_run is not None and current_run.authority.resolved_scope is not None:
+            if (
+                current_run is not None
+                and current_run.authority.resolved_scope is not None
+            ):
                 resolved = current_run.authority.resolved_scope
                 resolved_summary = ResolvedScopeSummaryV1(
-                    selected_classification_count=len(resolved.selected_classifications),
+                    selected_classification_count=len(
+                        resolved.selected_classifications
+                    ),
                     query_target_count=resolved.query_target_count,
                 )
             latest = latest_by_automation.get(snapshot.automation_id)
@@ -705,9 +865,17 @@ class TaskControlBoardProjectionService:
                         kind="scope_review_required",
                         priority=20,
                         source_site=automation.source_site,
-                        code=(automation.scope_review_reason.code if automation.scope_review_reason else "SCOPE_REVIEW_REQUIRED"),
+                        code=(
+                            automation.scope_review_reason.code
+                            if automation.scope_review_reason
+                            else "SCOPE_REVIEW_REQUIRED"
+                        ),
                         title=f"{automation.name} needs scope review",
-                        summary=(automation.scope_review_reason.message if automation.scope_review_reason else "Review this Automation scope."),
+                        summary=(
+                            automation.scope_review_reason.message
+                            if automation.scope_review_reason
+                            else "Review this Automation scope."
+                        ),
                         entity_kind="automation",
                         entity_id=str(automation.automation_id),
                         primary_action=BoardActionV1(action="edit", enabled=True),
@@ -778,7 +946,11 @@ class TaskControlBoardProjectionService:
             priority = 10
             code = issue.code if issue and issue.code else "MANUAL_ACTION_REQUIRED"
             title = "Manual action required"
-            summary = issue.summary if issue else "Complete the supported manual action before resuming."
+            summary = (
+                issue.summary
+                if issue
+                else "Complete the supported manual action before resuming."
+            )
             primary = action_by_kind["resume_manual_action"]
         elif run.status == "cancelling":
             kind = "cancelling"
@@ -794,7 +966,11 @@ class TaskControlBoardProjectionService:
             priority = 40
             code = issue.code if issue and issue.code else "RUN_FAILED"
             title = "Run failed"
-            summary = issue.summary if issue else "Open Task Details for the normalized failure state."
+            summary = (
+                issue.summary
+                if issue
+                else "Open Task Details for the normalized failure state."
+            )
             primary = action_by_kind["view_task"]
         else:
             return None

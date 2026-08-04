@@ -74,7 +74,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--crawl-phase", choices=["full", "listing", "detail"], default="full")
     parser.add_argument("--source-listing-crawl-job-id", type=str, default="")
     parser.add_argument("--detail-statuses", type=str, default="pending,manual_action_required")
-    parser.add_argument("--skip-existing", action="store_true", default=False)
+    parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--is-resume", action="store_true", default=False)
     parser.add_argument("--resume-strategy", type=str, default="fresh_profile")
     return parser
@@ -127,7 +127,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
         request_payload.get("source_listing_crawl_job_id") or args.source_listing_crawl_job_id
     )
     args.detail_statuses = _parse_detail_statuses(request_payload.get("detail_statuses") or args.detail_statuses)
-    args.skip_existing = bool(request_payload.get("skip_existing"))
+    args.skip_existing = True
     args.is_resume = bool(request_payload.get("is_resume"))
     args.resume_strategy = str(request_payload.get("resume_strategy") or args.resume_strategy)
     args.detail_pacing = request_payload.get("detail_pacing")
@@ -144,7 +144,7 @@ def _apply_listing_runtime_plan(
     args.max_pages = runtime_plan.page_depth
     args.crawl_mode = runtime_plan.crawl_mode
     args.crawl_phase = "listing"
-    args.skip_existing = False
+    args.skip_existing = True
     args.is_resume = False
 
 
@@ -163,7 +163,7 @@ def _apply_detail_runtime_plan(
         runtime_plan.source_listing_crawl_job_id or ""
     )
     args.detail_statuses = list(runtime_plan.resume_statuses)
-    args.skip_existing = False
+    args.skip_existing = True
     args.is_resume = runtime_plan.resume_context is not None
     args.detail_pacing = None
     if runtime_plan.resume_context is not None:

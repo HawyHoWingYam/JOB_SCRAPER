@@ -123,13 +123,17 @@ Apply classification precedence:
 
 1. identity conflict -> hard stop;
 2. historical OfferToday code `2520` terminal -> skip;
-3. published Job passing `is_complete_offertoday_job()` -> skip;
-4. published incomplete/failed Job -> one current-crawl pending `repair` row;
-5. absent Job -> one current-crawl pending `new` row.
+3. any published Job -> skip, regardless of completeness, prior failure,
+   expiry, or age;
+4. unpublished Job with historical staging evidence -> one current-crawl
+   pending `repair` row; and
+5. absent Job without historical staging evidence -> one current-crawl pending
+   `new` row.
 
 Persist `detail_target_kind` (`new` or `repair`) in staging JSON. The current
-schema is sufficient unless an amended spec proves otherwise. Do not skip all
-historical staged or published IDs indiscriminately.
+schema is sufficient unless an amended spec proves otherwise. Listing discovery
+has no force-refresh mode. Existing published Jobs are refreshed only through a
+dedicated detail or repair workflow.
 
 Commit one validated page batch atomically. Duplicates across pages/conditions
 do not create another current-crawl row or target.
@@ -137,8 +141,10 @@ do not create another current-crawl row or target.
 #### Detail boundary and metrics
 
 Load detail targets only after every listing condition is natural or allowed
-partial. New and repair IDs produce one target each; complete, terminal,
-supplemental-only, duplicate, and conflict IDs produce none.
+partial. New and unpublished-historical repair IDs produce one target each;
+published, terminal, supplemental-only, duplicate, and conflict IDs produce
+none. The detail boundary repeats the source-aware published-Job lookup and
+reconciles legacy staged rows rather than fetching them.
 
 Production metrics include at least:
 
@@ -155,6 +161,7 @@ distinct_supplemental_ids
 supplemental_result_overlap_count
 supplemental_identity_issue_count
 complete_existing_skipped
+jobs_skipped_existing
 terminal_unavailable_skipped
 new_detail_targets
 repair_detail_targets
@@ -196,9 +203,10 @@ is not evidence that the production cursor contract should be relaxed.
 | Result or historical identity conflict | Identity audit/manual action; no detail |
 | Supplemental identity conflict | Count and exclude from supplemental sets; continue |
 | Retry exhaustion/unresolved gap | Failed; no detail |
-| Complete existing Job | Count and skip; zero detail request |
+| Any existing published Job | Count and skip; zero detail request |
 | Historical code-2520 terminal | Count and skip; zero detail request |
-| Incomplete existing Job | One repair staging row and one detail target |
+| Incomplete existing published Job | Count and skip; dedicated repair only |
+| Unpublished ID with historical staging evidence | One repair staging row and one detail target |
 | New canonical ID | One new staging row and one detail target |
 | Bulk lookup or staging write fails | Roll back the page batch and fail the run |
 | Any per-ID existence query appears | Test failure; implementation is invalid |
@@ -212,15 +220,14 @@ is not evidence that the production cursor contract should be relaxed.
   validated result prefixes are retained, the next condition starts with no
   cursor, listing completes partial, and one deduplicated new/repair cohort is
   fetched.
-- **Base:** Every condition naturally exhausts and all IDs are already complete
+- **Base:** Every condition naturally exhausts and all IDs are already published
   or terminal. The crawl completes with zero detail requests and exact skipped
   metrics.
 - **Bad:** Production enables the response cursor but keeps buffered
   condition-only staging. A page cap then rolls back the entire validated
   prefix, defeating retain-and-continue.
-- **Bad:** Staging skips every published Job before calling
-  `is_complete_offertoday_job()`. An incomplete old Job disappears from the
-  repair queue.
+- **Bad:** Listing staging turns an incomplete published Job into a repair
+  target. This silently makes ordinary discovery a force-refresh path.
 
 ### 6. Tests Required
 
@@ -231,9 +238,9 @@ is not evidence that the production cursor contract should be relaxed.
 - `test_offertoday_listing_runner.py`: two result-empty confirmations,
   supplemental exclusion/non-blocking identity issues, page-cap
   retain/continue, immediate validated staging, and every hard stop.
-- `test_crawl_job_runtime.py`: one bulk Job lookup per page, no N+1, exact
-  complete/terminal/new/repair/conflict partition, atomic rollback, and one
-  current-crawl row/target per ID.
+- `test_crawl_job_runtime.py`: one fail-closed bulk Job lookup per page, no N+1,
+  exact published/terminal/new/unpublished-repair/conflict partition, atomic
+  rollback, and one current-crawl row/target per ID.
 - `test_offertoday_standalone_crawl.py`: detail begins after all natural/partial
   conditions, page-cap run completes partial, hard stops have no detail, and
   exact metrics/event order.
@@ -260,8 +267,8 @@ for job_id in result.accepted_job_ids:
     stage(job_id)
 ```
 
-This omits the production cursor policy, creates N+1 reads, skips incomplete
-published Jobs, and cannot distinguish terminal or repair targets.
+This omits the production cursor policy, creates N+1 reads, and cannot
+distinguish terminal, historical unpublished repair, or new targets.
 
 #### Correct
 
@@ -280,8 +287,9 @@ result = await runner.run(
     session_mode=session_mode,
 )
 
-# The sink classifies each already-validated page with bulk reads and stages
-# only current-crawl new/repair rows in one transaction.
+# The sink classifies each already-validated page with bulk reads, skips every
+# published Job, and stages only current-crawl new/unpublished-repair rows in
+# one transaction.
 if result.hard_stopped:
     stop_without_detail(result)
 else:

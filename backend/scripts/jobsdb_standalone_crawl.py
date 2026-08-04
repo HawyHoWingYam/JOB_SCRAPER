@@ -73,7 +73,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         choices=list(SUPPORTED_RESUME_STRATEGIES),
         default=RESUME_STRATEGY_FRESH_PROFILE,
     )
-    parser.add_argument("--skip-existing", action="store_true", default=False)
+    parser.add_argument("--skip-existing", action="store_true", default=True)
     parser.add_argument("--is-resume", action="store_true", default=False)
     return parser
 
@@ -146,7 +146,7 @@ def _apply_request_payload_defaults(args, request_payload: dict[str, Any]) -> No
     args.manual_action_browser_profile_path = str(
         request_payload.get("manual_action_browser_profile_path") or ""
     ).strip()
-    args.skip_existing = bool(request_payload.get("skip_existing"))
+    args.skip_existing = True
     args.is_resume = bool(request_payload.get("is_resume"))
     args.detail_pacing = request_payload.get("detail_pacing")
 
@@ -162,7 +162,7 @@ def _apply_listing_runtime_plan(
     args.max_pages = runtime_plan.page_depth
     args.crawl_mode = runtime_plan.crawl_mode
     args.crawl_phase = "listing"
-    args.skip_existing = False
+    args.skip_existing = True
     args.is_resume = False
 
 
@@ -181,7 +181,7 @@ def _apply_detail_runtime_plan(
         runtime_plan.source_listing_crawl_job_id or ""
     )
     args.detail_statuses = list(runtime_plan.resume_statuses)
-    args.skip_existing = False
+    args.skip_existing = True
     args.is_resume = runtime_plan.resume_context is not None
     args.detail_pacing = None
     args.manual_action_browser_channel = ""

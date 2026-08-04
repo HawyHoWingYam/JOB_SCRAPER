@@ -13,6 +13,7 @@ from app.crawl_control.task_control_board_contracts import (
     ListingWorkloadProjectionV1,
     ListingRecoveryProjectionV1,
     RecoveryAttemptProjectionV1,
+    RemovedDispatchPlanAuthorityProjectionV1,
     RunAuthorityProjectionV1,
 )
 
@@ -41,7 +42,9 @@ class CrawlJobSchema(BaseModel):
     def resolve_output_crawl_mode(self) -> "CrawlJobSchema":
         payload = self.request_payload if isinstance(self.request_payload, dict) else {}
         self.crawl_phase = resolve_crawl_phase(payload.get("crawl_phase"))
-        self.crawl_mode = resolve_crawl_mode(self.source_site, payload.get("crawl_mode"))
+        self.crawl_mode = resolve_crawl_mode(
+            self.source_site, payload.get("crawl_mode")
+        )
         return self
 
 
@@ -77,7 +80,9 @@ class CrawlTaskListItemSchema(BaseModel):
     authored_scope: dict | None = None
     resolved_scope: dict | None = None
     readiness: dict | None = None
-    authority: RunAuthorityProjectionV1
+    authority: RunAuthorityProjectionV1 | RemovedDispatchPlanAuthorityProjectionV1 = (
+        Field(discriminator="authority_kind")
+    )
     listing_workload: ListingWorkloadProjectionV1 | None = None
     detail_snapshot: DetailSnapshotProjectionV1 | None = None
     recovery_attempt: RecoveryAttemptProjectionV1 | None = None
