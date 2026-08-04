@@ -1,0 +1,38 @@
+classification_id,keyword,family,candidate_kind,discovery_sources,rationale,candidate_scope,analyst_disposition,risk
+offertoday:118000,AIGC,generative_ai,acronym,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Acronym context can vary
+offertoday:118000,CRM,enterprise_applications,acronym,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Broad enterprise context
+offertoday:118000,Helpdesk,it_support,role_phrase,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with support
+offertoday:118000,Microsoft,microsoft_ecosystem,product,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Vendor mention may not define the role
+offertoday:118000,Oracle,oracle_ecosystem,product,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Vendor mention may not define the role
+offertoday:118000,UAT,software_delivery,acronym,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,May overlap testing and business analyst terms
+offertoday:118000,前端开发工程师,frontend,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with English frontend terms
+offertoday:118000,技术支持,it_support,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with support variants
+offertoday:118000,技術支援,it_support,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with support variants
+offertoday:118000,桌面運維,it_support,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with desktop support
+offertoday:118000,網絡工程師,network,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with network engineer
+offertoday:118000,軟件工程師,software_engineering,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with software engineer variants
+offertoday:118000,软件工程师,software_engineering,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with software engineer variants
+offertoday:118000,运维工程师,operations,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,Overlap with operations terms
+offertoday:118000,駐場工程師,field_engineering,language_variant,prior_offertoday,Prior OfferToday addition requiring cross-source revalidation,prior_addition,evaluate,May cross into non-IT field engineering
+offertoday:118000,pentest,security,acronym,prior_offertoday,Prior retirement candidate requiring cross-source revalidation,prior_retirement,evaluate,Source terminology may prefer the full phrase
+offertoday:118000,angular,frontend,framework,prior_offertoday,Prior deferred retirement candidate requiring cross-source revalidation,prior_deferred,evaluate,Framework demand can vary by source and time
+offertoday:118000,Tableau,business_intelligence,product,jobsdb+ctgoodjobs,Recurring business intelligence product in both external corpora,new,evaluate,Often appears only as a tool dependency
+offertoday:118000,Snowflake,data_platform,product,jobsdb+ctgoodjobs,Recurring cloud data platform in both external corpora,new,evaluate,Description-only support may not improve title recall
+offertoday:118000,Databricks,data_platform,product,jobsdb+ctgoodjobs,Recurring data engineering platform with title evidence,new,evaluate,May overlap Spark and data engineer queries
+offertoday:118000,Jira,software_delivery,product,jobsdb+ctgoodjobs,Recurring delivery tooling in both external corpora,new,evaluate,Broad tool dependency across many roles
+offertoday:118000,Confluence,software_delivery,product,jobsdb+ctgoodjobs,Recurring collaboration tooling in both external corpora,new,evaluate,Broad tool dependency across many roles
+offertoday:118000,VMware,infrastructure,product,jobsdb+ctgoodjobs,Recurring virtualization platform with title evidence,new,evaluate,Vendor mention may be a secondary skill
+offertoday:118000,Fortinet,network_security,product,jobsdb+ctgoodjobs,Recurring network security vendor in both external corpora,new,evaluate,Description-only support and vendor overlap
+offertoday:118000,Splunk,observability_security,product,jobsdb+ctgoodjobs,Recurring observability and security platform with title evidence,new,evaluate,Crosses operations and security roles
+offertoday:118000,Microsoft 365,microsoft_ecosystem,product_variant,jobsdb+ctgoodjobs,Specific Microsoft workplace platform phrase,new,evaluate,Semantic overlap with prior Microsoft candidate
+offertoday:118000,Dynamics 365,enterprise_applications,product_variant,jobsdb+ctgoodjobs,Specific Dynamics product phrase with title evidence,new,evaluate,Semantic overlap with current Dynamics term
+offertoday:118000,Power Automate,automation,product,jobsdb+ctgoodjobs,Recurring Microsoft automation product,new,evaluate,Description-only support and Microsoft overlap
+offertoday:118000,RPA,automation,acronym,jobsdb+ctgoodjobs,Recurring robotic process automation acronym with title evidence,new,evaluate,Acronym may appear outside hands-on engineering roles
+offertoday:118000,ITIL,it_service_management,acronym,jobsdb+ctgoodjobs,Recurring IT service management framework,new,evaluate,Certification requirement may not define the role
+offertoday:118000,ISO 27001,security_compliance,standard,jobsdb+ctgoodjobs,Recurring information security standard,new,evaluate,Description-only compliance evidence
+offertoday:118000,TOGAF,enterprise_architecture,standard,jobsdb+ctgoodjobs,Recurring enterprise architecture framework,new,evaluate,Description-only certification evidence
+offertoday:118000,Spring Boot,backend,framework,jobsdb+ctgoodjobs,Recurring Java backend framework in both external corpora,new,evaluate,May overlap Java and Spring queries
+offertoday:118000,penetration testing,security,term_replacement,jobsdb+ctgoodjobs,Full security phrase may replace the unproductive pentest abbreviation,new,evaluate,Overlap with cybersecurity and security testing
+offertoday:118000,information security,security,generic_phrase,jobsdb+ctgoodjobs,Recurring phrase already represented by narrower current security terms,new,rejected_noise,Too broad and highly redundant
+offertoday:118000,data warehouse,data_platform,generic_phrase,jobsdb+ctgoodjobs,Recurring phrase already represented by data and database terms,new,rejected_noise,Broad and duplicate-heavy
+offertoday:118000,AI,generative_ai,generic_phrase,jobsdb+ctgoodjobs,High frequency term already present in the current pack,new,rejected_noise,Already present and too broad for a new change

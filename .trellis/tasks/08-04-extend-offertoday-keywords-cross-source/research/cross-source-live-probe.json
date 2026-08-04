@@ -1,0 +1,1031 @@
+{
+  "analysis": {
+    "candidate_results": {
+      "cross-source:databricks": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "Databricks",
+        "new_vs_archived_current_pack": 9,
+        "new_vs_archived_native": 18
+      },
+      "cross-source:dynamics 365": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "Dynamics 365",
+        "new_vs_archived_current_pack": 8,
+        "new_vs_archived_native": 19
+      },
+      "cross-source:penetration testing": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "penetration testing",
+        "new_vs_archived_current_pack": 8,
+        "new_vs_archived_native": 18
+      },
+      "cross-source:rpa": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "RPA",
+        "new_vs_archived_current_pack": 12,
+        "new_vs_archived_native": 20
+      },
+      "cross-source:splunk": {
+        "decision": "needs_offertoday_evidence",
+        "distinct_job_ids": 0,
+        "keyword": "Splunk",
+        "new_vs_archived_current_pack": 0,
+        "new_vs_archived_native": 0
+      },
+      "cross-source:spring boot": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "Spring Boot",
+        "new_vs_archived_current_pack": 8,
+        "new_vs_archived_native": 20
+      },
+      "cross-source:tableau": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "Tableau",
+        "new_vs_archived_current_pack": 18,
+        "new_vs_archived_native": 18
+      },
+      "cross-source:vmware": {
+        "decision": "supported_addition",
+        "distinct_job_ids": 20,
+        "keyword": "VMware",
+        "new_vs_archived_current_pack": 13,
+        "new_vs_archived_native": 19
+      }
+    }
+  },
+  "archived_baseline": {
+    "current_pack_distinct_job_ids": 1027,
+    "finished_at": "2026-08-04T12:10:30.692849+00:00",
+    "native_distinct_job_ids": 221,
+    "started_at": "2026-08-04T12:02:04.932364+00:00"
+  },
+  "error": null,
+  "finished_at": "2026-08-04T14:09:26.182226+00:00",
+  "kind": "offertoday_keyword_cross_source_probe",
+  "limitations": [
+    "Fresh candidate IDs are compared with an earlier archived bounded sample.",
+    "Ranking and inventory may have changed between probe timestamps.",
+    "A bounded new-ID count is not full-source recall or precision."
+  ],
+  "page_delay_seconds": 1.5,
+  "passes": [
+    {
+      "pass_id": "cross-source-candidates",
+      "status": "complete",
+      "stop": null,
+      "targets": [
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 4,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "3--FrhKnqHjsxPByrCN1oQ==",
+            "4MNdhIYKYNzNFsruuZkuvQ==",
+            "5NF3-yale-_mEmr0-O3rAQ==",
+            "L5UhPakgzfoUFJgeLl9fnQ==",
+            "M8WKDayypq-vmyFOxVVstw==",
+            "Mw1Yl3tWc8QuGcxIJQitxA==",
+            "NBwH8GklChF5gJ3A3uoXug==",
+            "PuR6OZgb9jQGjIDWbaM-kQ==",
+            "SDFRQqtK7GDViYJzUzlHRw==",
+            "SrL5EjcFJpz7nqika8W_sg==",
+            "TJmJT0eYzarVnUMXP831Tg==",
+            "XM4WbMZN5V3llQwpjU1Gyg==",
+            "_CM1LBuropxDmc4EapOzSw==",
+            "dkYCRlDIC8OoPDH_k5QrIw==",
+            "l9G2-y8dJga4PKaqs-_Tmg==",
+            "nSMUy_fSxjzfJLDpfDKwAA==",
+            "priVLL71FUhNX6HVTwB04w==",
+            "tIrmgvj-px3k7XxfbUUCgw==",
+            "v_hjZUQR-b7Bd7ibO7PKjg==",
+            "zUYotvpUeWuahOg-XDxoog=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:rpa",
+          "keyword": "RPA",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "3--FrhKnqHjsxPByrCN1oQ==",
+              "title": "26-27電腦程式員",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "4MNdhIYKYNzNFsruuZkuvQ==",
+              "title": "資深Python工程師",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "5NF3-yale-_mEmr0-O3rAQ==",
+              "title": "Oracle Cloud Release QA Analyst -Contractor",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "L5UhPakgzfoUFJgeLl9fnQ==",
+              "title": "Programmer / Analyst Programmer ( EOA/ EOP Support)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "M8WKDayypq-vmyFOxVVstw==",
+              "title": "後端python開發工程師",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118014"
+              ],
+              "job_id": "Mw1Yl3tWc8QuGcxIJQitxA==",
+              "title": "IT Assistant Manager",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "NBwH8GklChF5gJ3A3uoXug==",
+              "title": "RPA Engineer (Python) - FinTech / AI / Enterprise Automation",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "PuR6OZgb9jQGjIDWbaM-kQ==",
+              "title": "Application Developer-RPA",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "SDFRQqtK7GDViYJzUzlHRw==",
+              "title": "Programmer / Analyst Programmer / Systems Analyst (HK$20K - $60K+) (Ref. 26525)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118013"
+              ],
+              "job_id": "SrL5EjcFJpz7nqika8W_sg==",
+              "title": "互联网产品经理岗",
+              "title_language": "zh"
+            }
+          ],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 11,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "-McfMR8yt4kmgi4vdv8ouA==",
+            "0gHRF3B8J2Zywf0Koizugg==",
+            "57Sr3ITIfXqRFSBTCRgffg==",
+            "59YswKhF9d71sFPsqrx4Tw==",
+            "8H-UsA50angN4r3iZd9nGw==",
+            "HaIMtDJ9e1ajO7Kps0QHAA==",
+            "Jhwp2HWlAql5d4QX-RADmg==",
+            "QXn6uWTHcsArOS3h7a3Nhw==",
+            "U6of1eSOBHuzwCEE0ALObw==",
+            "VUYm7qkMKKWaHZS_UR-5sA==",
+            "XAhwvsWycNF3Mah42iIF9w==",
+            "Xc0sqVgsNeuP3S93nt4_WQ==",
+            "ePeI3pt768adL-0vku_Lcw==",
+            "fMau0CLXnQm2YsILPNFFnw==",
+            "mS1J5lUXzotthifddcjaBA==",
+            "ooln2pUAhqn9yq5eMlQICg==",
+            "p6MGQ1EDWf7blQo1HOtHVw==",
+            "sQgo3YUlVjMIHC8r0TQDHw==",
+            "tX_0GIp9Yc9aOb2AyYCjpA==",
+            "xxZ0wprgQ2gVVk2TK071mg=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:databricks",
+          "keyword": "Databricks",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "-McfMR8yt4kmgi4vdv8ouA==",
+              "title": "powerbi",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "0gHRF3B8J2Zywf0Koizugg==",
+              "title": "Senior Data Engineer - Global Team",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118001"
+              ],
+              "job_id": "57Sr3ITIfXqRFSBTCRgffg==",
+              "title": "Senior Data Engineer",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "59YswKhF9d71sFPsqrx4Tw==",
+              "title": "Java System Analyst",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118005"
+              ],
+              "job_id": "8H-UsA50angN4r3iZd9nGw==",
+              "title": "Data / Database Architect (HK$50K - $70K+) (Ref. No.: 27696)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "HaIMtDJ9e1ajO7Kps0QHAA==",
+              "title": "Junior Analyst Programmer (MNC, Full Stack, DevOps, Azure Cloud)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "Jhwp2HWlAql5d4QX-RADmg==",
+              "title": "System Analyst/ Analyst Programmer (Java, Spring Boot, Microservices, Docker)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118005"
+              ],
+              "job_id": "QXn6uWTHcsArOS3h7a3Nhw==",
+              "title": "Logistic Industry - Data Architect (Azure)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118999"
+              ],
+              "job_id": "U6of1eSOBHuzwCEE0ALObw==",
+              "title": "IT Data Engineer (Azure Data)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118005"
+              ],
+              "job_id": "VUYm7qkMKKWaHZS_UR-5sA==",
+              "title": "數據庫開發管理",
+              "title_language": "zh"
+            }
+          ],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 4,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "14cODbFbIwPCQwffB3WwLQ==",
+            "1Bd-jgV95z0r7Ho7Tt5CVQ==",
+            "26BJzxVbmM8_-ly7CVPL6g==",
+            "AbJmra3450h7UHaqwIWYDw==",
+            "HxdzDsjJ5WsAArKpu1cyCQ==",
+            "L5UhPakgzfoUFJgeLl9fnQ==",
+            "LQajRFKvvL8Pr1MhQ0Bhhw==",
+            "MVqkcsY8nc8xk1k-PESrlA==",
+            "PBhCETMITRbw4RJVtp67EQ==",
+            "PgvOcVkSc_7VspjTmbNXUA==",
+            "SXRItUUkw5aOzB7kaq7Ysg==",
+            "SrDVqbO5sEfyPNNUEs66kA==",
+            "XtLvIsj6mS9Mr7oEyR2U1Q==",
+            "ZbZ6MMNQXcMqX4hH9IdwsA==",
+            "_CM1LBuropxDmc4EapOzSw==",
+            "ePeI3pt768adL-0vku_Lcw==",
+            "fDqEq2UKpJs_kUXqvgDijQ==",
+            "gHyb90wRWwOYN12ldgRSEg==",
+            "p_v4ImkeHn4UwylzPnXIXQ==",
+            "xRVF9J2Nl3TkJejwgXhfPA=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:dynamics 365",
+          "keyword": "Dynamics 365",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118004"
+              ],
+              "job_id": "14cODbFbIwPCQwffB3WwLQ==",
+              "title": "Dynamics 365 Business Central Engineer",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "1Bd-jgV95z0r7Ho7Tt5CVQ==",
+              "title": "Systems Analyst / Senior Systems Analyst (Java/Openshift)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118004"
+              ],
+              "job_id": "26BJzxVbmM8_-ly7CVPL6g==",
+              "title": "ERP Consultant - Microsoft Dynamics",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "AbJmra3450h7UHaqwIWYDw==",
+              "title": "Analyst Programmer (Java, SQL) (Government HRMS)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "HxdzDsjJ5WsAArKpu1cyCQ==",
+              "title": "Systems Analyst / Senior Systems Analyst – Java & Openshift (HK$55K - $65K+)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "L5UhPakgzfoUFJgeLl9fnQ==",
+              "title": "Programmer / Analyst Programmer ( EOA/ EOP Support)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118004"
+              ],
+              "job_id": "LQajRFKvvL8Pr1MhQ0Bhhw==",
+              "title": "ERP Functional Consultant – Microsoft Dynamics",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "MVqkcsY8nc8xk1k-PESrlA==",
+              "title": "Senior Analyst Programmer / System Analyst | Golang ( IT Vendor, 37K - 60K )",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "PBhCETMITRbw4RJVtp67EQ==",
+              "title": "IBM Team - Analyst Programmer / Senior Developer - Java x 2",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118004"
+              ],
+              "job_id": "PgvOcVkSc_7VspjTmbNXUA==",
+              "title": "ERP Functional Consultant – Microsoft Dynamics",
+              "title_language": "en"
+            }
+          ],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 54,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "-v5o5laZMftd0lFzPFIOdA==",
+            "68MxhV9fV4kpKLfk-JcPsw==",
+            "77YqVruLNl-ezOmDIvx0Rw==",
+            "CGrSbIBild9ZvWnrCz9fbQ==",
+            "F3TrwPJOaGTzEPDv-nqhxA==",
+            "W21jbShKNhKLoIffFwAE7g==",
+            "WnRQUYNy7uaUKb7ssZSYyA==",
+            "_U3uI34HMn31gLYWGhyzFQ==",
+            "aG_usq-_-E4F_kYkUjoVcA==",
+            "bDDYo77_UxA3sO78R_BgVQ==",
+            "bJprZOg7FTnITzjWkjJgTg==",
+            "coMDiiHqj6DMGL8Xw_d28w==",
+            "fh6it6SH2aCWvqyxgDE4wg==",
+            "hawEdGH3uXrYQzn4bOB5jQ==",
+            "i3xa1OPEGz03zcwVCHFWrw==",
+            "mrZIPzuRQJckfxlTblP7Hg==",
+            "ofS0Yl9FkHFBY5d62DwE8Q==",
+            "tOpZQq3KWhGwnZFEQ10HsA==",
+            "uMoWvZ-nDBy544Hf67mrdw==",
+            "wKOQDTdkWStQUgY-1XBG7A=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:vmware",
+          "keyword": "VMware",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118012"
+              ],
+              "job_id": "-v5o5laZMftd0lFzPFIOdA==",
+              "title": "Senior Infrastructure Engineer (VMware, Windows, Databases) (SI)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "68MxhV9fV4kpKLfk-JcPsw==",
+              "title": "软件工程师（中级）",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118012"
+              ],
+              "job_id": "77YqVruLNl-ezOmDIvx0Rw==",
+              "title": "Senior Network Support Engineer (Cisco / VMware) (Infrastructure)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "CGrSbIBild9ZvWnrCz9fbQ==",
+              "title": "软件工程师",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "F3TrwPJOaGTzEPDv-nqhxA==",
+              "title": "Director of Software Development",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "W21jbShKNhKLoIffFwAE7g==",
+              "title": "SOFTWARE DEVELOPER – HK–BASED",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "WnRQUYNy7uaUKb7ssZSYyA==",
+              "title": "中間件開發工程師",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118012"
+              ],
+              "job_id": "_U3uI34HMn31gLYWGhyzFQ==",
+              "title": "Junior System Engineer",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "aG_usq-_-E4F_kYkUjoVcA==",
+              "title": "软件工程师",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118012"
+              ],
+              "job_id": "bDDYo77_UxA3sO78R_BgVQ==",
+              "title": "System Support Engineer (Windows Server, VMware, M365)",
+              "title_language": "en"
+            }
+          ],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 6,
+          "distinct_job_id_count": 0,
+          "duplicate_rate": 1.0,
+          "job_ids": [],
+          "job_ids_truncated": false,
+          "key": "cross-source:splunk",
+          "keyword": "Splunk",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 31,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "5-6Vagobs0Moi64lY4mmpA==",
+            "5WGn69-isK33fqJ8hcqcDg==",
+            "8CzPmDy55EmnGAzfVsRKnQ==",
+            "99l6qHZXnStnKvZa3FCa4w==",
+            "BbvYldBmkmVvQ2A7bfQlsQ==",
+            "CYffkotwb5IJCV-bFawAuA==",
+            "E4SLJbhjQeSbxdRQLQlz7A==",
+            "LFF7S5fy2d6F1rr2KXeYfQ==",
+            "PkjXt4FXKEPixqBqTQcVFg==",
+            "RH4r4W3kh285J6UFUB0XjQ==",
+            "WMlm-qOV8Vh6c-Yxi49G-w==",
+            "XDJzpgl53aTwTAeDfGvmOA==",
+            "fjtQnT3umXIlQLtuk4ijYA==",
+            "ivWOWuglHF4FqRnAKeu2xw==",
+            "kBkz_qgG_DQ4Jf06N3-Ojw==",
+            "kytznJ_yvOJ2Fg8Ub-AneA==",
+            "nTVBIXssvFPjfhVB97pqDg==",
+            "ssP2-Di6YlQgYPlDm9-fYg==",
+            "u46FRy3G8yt608irQdnO4A==",
+            "zOuI2U1TkotciiOJ_PXQvQ=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:spring boot",
+          "keyword": "Spring Boot",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "5-6Vagobs0Moi64lY4mmpA==",
+              "title": "高級java開發崗",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "5WGn69-isK33fqJ8hcqcDg==",
+              "title": "Java Development Engineer",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "8CzPmDy55EmnGAzfVsRKnQ==",
+              "title": "JAVA development engineer",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "99l6qHZXnStnKvZa3FCa4w==",
+              "title": "Java后端开发专家",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "BbvYldBmkmVvQ2A7bfQlsQ==",
+              "title": "JAVA开发工程师",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "CYffkotwb5IJCV-bFawAuA==",
+              "title": "java工程师",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118006"
+              ],
+              "job_id": "E4SLJbhjQeSbxdRQLQlz7A==",
+              "title": "Java Springboot Developer",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118013"
+              ],
+              "job_id": "LFF7S5fy2d6F1rr2KXeYfQ==",
+              "title": "Java開發工程師",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "PkjXt4FXKEPixqBqTQcVFg==",
+              "title": "java开发工程师",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118009"
+              ],
+              "job_id": "RH4r4W3kh285J6UFUB0XjQ==",
+              "title": "JAVA开发工程师",
+              "title_language": "mixed"
+            }
+          ],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 14,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "7U_BYb6c-E1GtEFuxH5sQA==",
+            "9G9g9VMEWOwQMUz-JbNFjA==",
+            "9aVv3Ekw-obQQe1TzzR3dg==",
+            "DsKUMLUge-3lu2pRhXmlig==",
+            "FC7qknoYbSXJxWBu4H9Jfw==",
+            "FvBL631sk9TW_Aq48f_PBw==",
+            "Fxoze8Nw3BHeSV4mHLcW-g==",
+            "I26TnZ6J1zbBXtF-pKpbAQ==",
+            "JFqD6_ykTq-baRioKHS-Xw==",
+            "Jc_WWYS1gFqwa3RHeiE7iw==",
+            "SVZ54TOzBOJCiZepz0UL8g==",
+            "Z8x1b474rQGjaAJITIPa9A==",
+            "fj8zUWEnSwE8qP_GdbiXwQ==",
+            "k230RoqRKCMjdGzaBrwhhw==",
+            "mwJF9v6CYpblYhfkC8pvUg==",
+            "orsL7MDmd__IND6xGUuIqw==",
+            "rCQtkvIkdOEjTSHwbP2fpw==",
+            "t5TmngTkkQ5FLOaVmL0ATA==",
+            "xJXp82wlEQmvMOhQhjo1dA==",
+            "yjsQSFZfS1RU89oCgC6XIg=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:tableau",
+          "keyword": "Tableau",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "7U_BYb6c-E1GtEFuxH5sQA==",
+              "title": "IT Manager (Transformation & Business Analysis / 5 days / Manufacturing)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118013"
+              ],
+              "job_id": "9G9g9VMEWOwQMUz-JbNFjA==",
+              "title": "教育产品实习生（UX/UI＋數據分析＋產品助理）",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "9aVv3Ekw-obQQe1TzzR3dg==",
+              "title": "數據分析實習生",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118999"
+              ],
+              "job_id": "DsKUMLUge-3lu2pRhXmlig==",
+              "title": "Data Analyst (Bank; Cantonese needed)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "FC7qknoYbSXJxWBu4H9Jfw==",
+              "title": "游戏数据分析师",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118005"
+              ],
+              "job_id": "FvBL631sk9TW_Aq48f_PBw==",
+              "title": "數據分析師 (Perm)",
+              "title_language": "mixed"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "Fxoze8Nw3BHeSV4mHLcW-g==",
+              "title": "高级数据分析专家",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "I26TnZ6J1zbBXtF-pKpbAQ==",
+              "title": "金融數據分析師",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118005"
+              ],
+              "job_id": "JFqD6_ykTq-baRioKHS-Xw==",
+              "title": "Business Data Analyst",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118002"
+              ],
+              "job_id": "Jc_WWYS1gFqwa3RHeiE7iw==",
+              "title": "DATA ANALYST 系統與運營數據分析師",
+              "title_language": "mixed"
+            }
+          ],
+          "stop_reason": "page_cap"
+        },
+        {
+          "category_id": 118000,
+          "classification_id": "offertoday:118000",
+          "classifications": [
+            "success"
+          ],
+          "corpus_detail_matches": 0,
+          "distinct_job_id_count": 20,
+          "duplicate_rate": 0.090909,
+          "job_ids": [
+            "3QuMOaMtqNXSBNSmfmvhYw==",
+            "A95iew2bxgF-DGfFhWw7nA==",
+            "BsDZCsAaYAkO5yQZicopgA==",
+            "CVwb3BTUL_uaD2uHScGC0A==",
+            "F-giry-5okr3aaqbWxmT-A==",
+            "FqXsDozpIT5uqsa0PbhxbA==",
+            "HRmbp0eld7RV9mWAzn8SzQ==",
+            "Qz4ZcErB8Wq4uHfnI8mT9A==",
+            "VvLydUPskg03zXJe_yqhuA==",
+            "WaaOWVG4sibOxNkbm3ZMog==",
+            "ZUdNWtY1Ktvi5Jw8_jEAEg==",
+            "aRKVBfUcbXyMGs_8Rb4WGg==",
+            "e1913WIchGU0FN8J_45CGw==",
+            "eQvzSgFvm5gev1VfhdB6iw==",
+            "m4U1_qNsL8KrUh8ZrN11Sw==",
+            "oJ9IjkqwYf2OyFh7KHPuKg==",
+            "pGFFDwCz2zkTAchjRWNvWA==",
+            "u81HjlgN6s9ZBpFSL7p7-w==",
+            "wLu95Wt6cILlHZqPzzcTjQ==",
+            "wSlPBxz3jLQCa_6MFClqog=="
+          ],
+          "job_ids_truncated": false,
+          "key": "cross-source:penetration testing",
+          "keyword": "penetration testing",
+          "kind": "cross_source_candidate",
+          "observed_rows": 22,
+          "pages_observed": 2,
+          "result_examples": [
+            {
+              "job_function_codes": [
+                "118000",
+                "118008"
+              ],
+              "job_id": "3QuMOaMtqNXSBNSmfmvhYw==",
+              "title": "Security Engineer AWS, Penetration Testing)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118016"
+              ],
+              "job_id": "A95iew2bxgF-DGfFhWw7nA==",
+              "title": "security leader",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118016"
+              ],
+              "job_id": "BsDZCsAaYAkO5yQZicopgA==",
+              "title": "Information Security Lead",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118999"
+              ],
+              "job_id": "CVwb3BTUL_uaD2uHScGC0A==",
+              "title": "Network Security Analyst (Cloud Network)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118016"
+              ],
+              "job_id": "F-giry-5okr3aaqbWxmT-A==",
+              "title": "Cybersecurity Specialist (13 Months Salary)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118020"
+              ],
+              "job_id": "FqXsDozpIT5uqsa0PbhxbA==",
+              "title": "渗透测试工程师（驻场）",
+              "title_language": "zh"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118001"
+              ],
+              "job_id": "HRmbp0eld7RV9mWAzn8SzQ==",
+              "title": "Chief Technology Officer (CTO)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118020"
+              ],
+              "job_id": "Qz4ZcErB8Wq4uHfnI8mT9A==",
+              "title": "Field Tester (Part-Time)",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118016"
+              ],
+              "job_id": "VvLydUPskg03zXJe_yqhuA==",
+              "title": "Cyber Security Analyst",
+              "title_language": "en"
+            },
+            {
+              "job_function_codes": [
+                "118000",
+                "118016"
+              ],
+              "job_id": "WaaOWVG4sibOxNkbm3ZMog==",
+              "title": "IT Technician / Technical Support",
+              "title_language": "en"
+            }
+          ],
+          "stop_reason": "page_cap"
+        }
+      ]
+    }
+  ],
+  "request_cap": 60,
+  "requests_started": 16,
+  "schema_version": 1,
+  "settings": {
+    "max_additions": 30,
+    "pages_per_candidate": 2
+  },
+  "started_at": "2026-08-04T14:09:07.678020+00:00",
+  "status": "complete"
+}
