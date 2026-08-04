@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import csv
 from dataclasses import dataclass, replace
 from datetime import datetime
+from html import unescape
 import json
 from pathlib import Path
 import re
@@ -70,6 +71,9 @@ DEFAULT_PAGE_DELAY_SECONDS = 1.5
 DEFAULT_REQUEST_CAP = 250
 DEFAULT_MAX_ADDITIONS = 30
 DEFAULT_MAX_RETIREMENTS = 30
+MAX_CROSS_SOURCE_REQUEST_CAP = 60
+JOBSDB_IT_CLASSIFICATION_ID = "jobsdb:6281"
+CTGOODJOBS_IT_CLASSIFICATION_ID = "ctgoodjobs:021"
 MAX_EVIDENCE_IDS_PER_TARGET = 30
 MAX_SNIPPET_LENGTH = 180
 _ASCII_ALNUM = "0-9a-z"
@@ -83,6 +87,19 @@ class CandidateTerm:
     family: str
     candidate_kind: str
     rationale: str
+
+
+@dataclass(frozen=True, slots=True)
+class CrossSourceCandidateTerm:
+    classification_id: str
+    keyword: str
+    family: str
+    candidate_kind: str
+    discovery_sources: str
+    rationale: str
+    candidate_scope: str
+    analyst_disposition: str
+    risk: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,13 +322,103 @@ def load_candidate_terms(path: Path) -> tuple[CandidateTerm, ...]:
     return tuple(candidates)
 
 
+def load_cross_source_candidate_terms(
+    path: Path,
+) -> tuple[CrossSourceCandidateTerm, ...]:
+    required = {
+        "classification_id",
+        "keyword",
+        "family",
+        "candidate_kind",
+        "discovery_sources",
+        "rationale",
+        "candidate_scope",
+        "analyst_disposition",
+        "risk",
+    }
+    allowed_scopes = {
+        "new",
+        "prior_addition",
+        "prior_retirement",
+        "prior_deferred",
+    }
+    allowed_dispositions = {"evaluate", "rejected_noise"}
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if not required.issubset(set(reader.fieldnames or ())):
+            raise ValueError(f"Cross-source candidate CSV must contain {sorted(required)}")
+        candidates: list[CrossSourceCandidateTerm] = []
+        seen: set[tuple[str, str]] = set()
+        for row_number, row in enumerate(reader, start=2):
+            values = {
+                key: " ".join(str(row.get(key) or "").split())
+                for key in required
+            }
+            if not all(values.values()):
+                raise ValueError(
+                    f"Cross-source candidate CSV row {row_number} has an empty field"
+                )
+            if values["candidate_scope"] not in allowed_scopes:
+                raise ValueError(
+                    f"Unsupported candidate_scope on row {row_number}: "
+                    f"{values['candidate_scope']}"
+                )
+            if values["analyst_disposition"] not in allowed_dispositions:
+                raise ValueError(
+                    f"Unsupported analyst_disposition on row {row_number}: "
+                    f"{values['analyst_disposition']}"
+                )
+            identity = (
+                values["classification_id"],
+                normalize_offertoday_keyword(values["keyword"]),
+            )
+            if identity in seen:
+                raise ValueError(
+                    f"Duplicate cross-source candidate identity on row {row_number}"
+                )
+            seen.add(identity)
+            candidates.append(CrossSourceCandidateTerm(**values))
+    return tuple(candidates)
+
+
 def _date_payload(value: Any) -> str | None:
     if value is None:
         return None
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-def _load_jobs(db) -> tuple[JobEvidence, ...]:
+def _load_jobs(
+    db,
+    *,
+    source_site: str = SOURCE_SITE,
+    root_classification_id: str | None = None,
+) -> tuple[JobEvidence, ...]:
+    root_job_ids = None
+    if root_classification_id is not None:
+        if not root_classification_id.startswith(f"{source_site}:"):
+            raise ValueError("root classification must belong to source site")
+        root_job_ids = (
+            select(JobSourceClassificationPath.job_id)
+            .join(
+                JobSourceClassificationPathNode,
+                JobSourceClassificationPathNode.path_id
+                == JobSourceClassificationPath.id,
+            )
+            .where(
+                JobSourceClassificationPath.source_site == source_site,
+                JobSourceClassificationPathNode.source_position == 0,
+                JobSourceClassificationPathNode.source_classification_id
+                == root_classification_id,
+            )
+        )
+    job_filters = [
+        Job.source_site == source_site,
+        Job.is_deleted.is_(False),
+        func.length(func.trim(Job.title)) > 0,
+        func.length(func.trim(Job.description)) > 0,
+    ]
+    if root_job_ids is not None:
+        job_filters.append(Job.id.in_(root_job_ids))
     rows = db.execute(
         select(
             Job.id,
@@ -322,12 +429,7 @@ def _load_jobs(db) -> tuple[JobEvidence, ...]:
             Company.name,
         )
         .join(Company, Company.id == Job.company_id)
-        .where(
-            Job.source_site == SOURCE_SITE,
-            Job.is_deleted.is_(False),
-            func.length(func.trim(Job.title)) > 0,
-            func.length(func.trim(Job.description)) > 0,
-        )
+        .where(*job_filters)
         .order_by(Job.source_job_id)
     ).all()
 
@@ -349,8 +451,10 @@ def _load_jobs(db) -> tuple[JobEvidence, ...]:
             == JobSourceClassificationPath.id,
         )
         .where(
-            Job.source_site == SOURCE_SITE,
+            Job.source_site == source_site,
+            JobSourceClassificationPath.source_site == source_site,
             Job.is_deleted.is_(False),
+            *(tuple([Job.id.in_(root_job_ids)]) if root_job_ids is not None else ()),
         )
         .order_by(
             JobSourceClassificationPath.job_id,
@@ -394,7 +498,11 @@ def _load_jobs(db) -> tuple[JobEvidence, ...]:
     return tuple(jobs)
 
 
-def _load_classifications(db) -> list[dict[str, Any]]:
+def _load_classifications(
+    db,
+    *,
+    source_site: str = SOURCE_SITE,
+) -> list[dict[str, Any]]:
     rows = db.execute(
         select(
             SourceClassification.id,
@@ -406,7 +514,7 @@ def _load_classifications(db) -> list[dict[str, Any]]:
             SourceClassification.is_top_level,
             SourceClassification.is_active,
         )
-        .where(SourceClassification.source_site == SOURCE_SITE)
+        .where(SourceClassification.source_site == source_site)
         .order_by(
             SourceClassification.depth,
             SourceClassification.classification_id,
@@ -782,6 +890,449 @@ def extract_corpus_snapshot(
         staging_summary=staging_summary,
         min_support=min_support,
         example_limit=example_limit,
+    )
+
+
+_DISCOVERY_TOKEN_PATTERN = re.compile(r"[a-z][a-z0-9+#./-]{1,31}")
+_DISCOVERY_CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]{2,12}")
+_DISCOVERY_TAG_PATTERN = re.compile(r"<[^>]+>")
+_DISCOVERY_STOPWORDS = {
+    "about",
+    "and",
+    "are",
+    "assistant",
+    "based",
+    "candidate",
+    "company",
+    "development",
+    "duties",
+    "engineer",
+    "engineering",
+    "experience",
+    "for",
+    "from",
+    "good",
+    "hong",
+    "job",
+    "kong",
+    "manager",
+    "minimum",
+    "more",
+    "officer",
+    "our",
+    "please",
+    "preferred",
+    "requirements",
+    "required",
+    "responsibilities",
+    "responsible",
+    "senior",
+    "skills",
+    "support",
+    "team",
+    "the",
+    "this",
+    "with",
+    "work",
+    "working",
+    "years",
+}
+
+
+def _plain_discovery_text(value: str) -> str:
+    return normalize_corpus_text(
+        unescape(_DISCOVERY_TAG_PATTERN.sub(" ", str(value or "")))
+    )
+
+
+def _discovery_terms(value: str, *, include_phrases: bool) -> set[str]:
+    text_value = _plain_discovery_text(value)
+    tokens = [
+        token
+        for token in _DISCOVERY_TOKEN_PATTERN.findall(text_value)
+        if token not in _DISCOVERY_STOPWORDS
+    ]
+    terms = set(tokens)
+    if include_phrases:
+        terms.update(
+            f"{first} {second}"
+            for first, second in zip(tokens, tokens[1:])
+            if first not in _DISCOVERY_STOPWORDS
+            and second not in _DISCOVERY_STOPWORDS
+        )
+        terms.update(_DISCOVERY_CJK_PATTERN.findall(text_value))
+    return {term for term in terms if 2 <= len(term) <= 64}
+
+
+def build_vocabulary_inventory(
+    jobs_by_source: Mapping[str, Sequence[JobEvidence]],
+    *,
+    current_keywords: Iterable[str],
+    limit: int = 300,
+) -> list[dict[str, Any]]:
+    if limit < 1:
+        raise ValueError("discovery inventory limit must be positive")
+    title_counts: dict[str, Counter[str]] = {}
+    detail_counts: dict[str, Counter[str]] = {}
+    for source_site, jobs in jobs_by_source.items():
+        source_titles: Counter[str] = Counter()
+        source_details: Counter[str] = Counter()
+        for job in jobs:
+            title_terms = _discovery_terms(job.title, include_phrases=True)
+            detail_terms = title_terms | _discovery_terms(
+                job.description,
+                include_phrases=False,
+            )
+            source_titles.update(title_terms)
+            source_details.update(detail_terms)
+        title_counts[source_site] = source_titles
+        detail_counts[source_site] = source_details
+
+    current = {normalize_offertoday_keyword(value) for value in current_keywords}
+    all_terms = set().union(*(set(counts) for counts in detail_counts.values()))
+    rows = []
+    for term in all_terms:
+        per_source = {
+            source_site: {
+                "title_match_count": int(title_counts[source_site][term]),
+                "detail_match_count": int(detail_counts[source_site][term]),
+            }
+            for source_site in sorted(jobs_by_source)
+        }
+        combined_title = sum(row["title_match_count"] for row in per_source.values())
+        combined_detail = sum(row["detail_match_count"] for row in per_source.values())
+        if combined_title < 2 and combined_detail < 6:
+            continue
+        rows.append(
+            {
+                "term": term,
+                "normalized_term": normalize_offertoday_keyword(term),
+                "in_current_offertoday_pack": (
+                    normalize_offertoday_keyword(term) in current
+                ),
+                "combined_title_match_count": combined_title,
+                "combined_detail_match_count": combined_detail,
+                "sources": per_source,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            -sum(
+                int(source["detail_match_count"] > 0)
+                for source in row["sources"].values()
+            ),
+            -int(row["combined_title_match_count"]),
+            -int(row["combined_detail_match_count"]),
+            str(row["normalized_term"]),
+        )
+    )
+    return rows[:limit]
+
+
+def _source_population_payload(
+    jobs: Sequence[JobEvidence],
+    *,
+    usable_job_count: int,
+) -> dict[str, Any]:
+    dates = sorted(job.posted_date for job in jobs if job.posted_date)
+    return {
+        "usable_jobs": usable_job_count,
+        "included_it_jobs": len(jobs),
+        "excluded_without_it_root": usable_job_count - len(jobs),
+        "posted_date_min": dates[0] if dates else None,
+        "posted_date_max": dates[-1] if dates else None,
+        "title_language_counts": dict(
+            sorted(Counter(title_language(job.title) for job in jobs).items())
+        ),
+        "source_classification_path_count": sum(len(job.paths) for job in jobs),
+    }
+
+
+def _cross_source_example_payload(
+    source_site: str,
+    example: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {"source_site": source_site, **dict(example)}
+
+
+def _catalog_rows(rows: Iterable[Mapping[str, Any]]) -> list[tuple[Any, ...]]:
+    return sorted(
+        (
+            str(row.get("entry_id") or ""),
+            str(row.get("classification_id") or ""),
+            str(row.get("keyword") or ""),
+            str(row.get("normalized_keyword") or ""),
+            bool(row.get("enabled")),
+            row.get("last_new_job_ids"),
+            row.get("last_duplicate_rate"),
+            row.get("last_run_at"),
+        )
+        for row in rows
+    )
+
+
+def build_cross_source_snapshot(
+    *,
+    jobs_by_source: Mapping[str, Sequence[JobEvidence]],
+    usable_job_counts: Mapping[str, int],
+    offertoday_jobs: Sequence[JobEvidence],
+    keyword_entries: Sequence[Mapping[str, Any]],
+    candidates: Sequence[CrossSourceCandidateTerm],
+    baseline_corpus: Mapping[str, Any],
+    discovery_limit: int = 300,
+    example_limit: int = DEFAULT_EXAMPLE_LIMIT,
+    extracted_at: datetime | None = None,
+) -> dict[str, Any]:
+    if example_limit < 1:
+        raise ValueError("example limit must be positive")
+    if baseline_corpus.get("kind") != "offertoday_keyword_corpus_snapshot":
+        raise ValueError("cross-source review requires an OfferToday corpus baseline")
+    if len(offertoday_jobs) != int(
+        baseline_corpus.get("population", {}).get("published_jobs") or 0
+    ):
+        raise RuntimeError("OfferToday Job corpus differs from archived baseline")
+    if _catalog_rows(keyword_entries) != _catalog_rows(
+        baseline_corpus.get("keywords", [])
+    ):
+        raise RuntimeError("OfferToday Keyword catalog differs from archived baseline")
+
+    current_identities = {
+        (
+            str(row["classification_id"]),
+            str(row["normalized_keyword"]),
+        )
+        for row in keyword_entries
+    }
+    candidate_rows: list[dict[str, Any]] = []
+    all_jobs = {**jobs_by_source, SOURCE_SITE: offertoday_jobs}
+    for candidate in candidates:
+        evidence: dict[str, dict[str, Any]] = {}
+        for source_site, jobs in sorted(all_jobs.items()):
+            analysis, _, _ = _term_analysis(
+                jobs,
+                candidate.keyword,
+                example_limit=example_limit,
+            )
+            evidence[source_site] = {
+                **analysis,
+                "examples": [
+                    _cross_source_example_payload(source_site, example)
+                    for example in analysis["examples"]
+                ],
+            }
+
+        identity = (
+            candidate.classification_id,
+            normalize_offertoday_keyword(candidate.keyword),
+        )
+        external_supported = all(
+            int(evidence[source]["detail_match_count"]) >= DEFAULT_MIN_SUPPORT
+            for source in ("jobsdb", "ctgoodjobs")
+        )
+        offertoday_supported = (
+            max(
+                int(evidence["jobsdb"]["detail_match_count"]),
+                int(evidence["ctgoodjobs"]["detail_match_count"]),
+            )
+            >= DEFAULT_MIN_SUPPORT
+            and int(evidence[SOURCE_SITE]["detail_match_count"])
+            >= DEFAULT_MIN_SUPPORT
+        )
+        title_support = sum(
+            int(row["title_match_count"]) for row in evidence.values()
+        )
+        supported = (
+            (external_supported or offertoday_supported) and title_support >= 2
+        )
+        if candidate.analyst_disposition == "rejected_noise":
+            disposition = "rejected_noise"
+        elif candidate.candidate_scope == "prior_addition":
+            disposition = "prior_addition_revalidated"
+        elif candidate.candidate_scope == "prior_retirement":
+            disposition = "retire_candidate"
+        elif candidate.candidate_scope == "prior_deferred":
+            disposition = "retain"
+        elif identity in current_identities:
+            disposition = "already_present"
+        elif supported:
+            disposition = "probe_candidate"
+        else:
+            disposition = "needs_offertoday_evidence"
+        candidate_rows.append(
+            {
+                "classification_id": candidate.classification_id,
+                "keyword": candidate.keyword,
+                "normalized_keyword": identity[1],
+                "family": candidate.family,
+                "candidate_kind": candidate.candidate_kind,
+                "discovery_sources": candidate.discovery_sources,
+                "rationale": candidate.rationale,
+                "candidate_scope": candidate.candidate_scope,
+                "analyst_disposition": candidate.analyst_disposition,
+                "risk": candidate.risk,
+                "pre_probe_disposition": disposition,
+                "source_evidence": evidence,
+            }
+        )
+    candidate_rows.sort(
+        key=lambda row: (
+            str(row["candidate_scope"]),
+            str(row["normalized_keyword"]),
+        )
+    )
+
+    now = extracted_at or utc_now()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "offertoday_keyword_cross_source_corpus",
+        "extracted_at": now.isoformat(),
+        "source_roots": {
+            "jobsdb": JOBSDB_IT_CLASSIFICATION_ID,
+            "ctgoodjobs": CTGOODJOBS_IT_CLASSIFICATION_ID,
+            SOURCE_SITE: OFFERTODAY_IT_CLASSIFICATION_ID,
+        },
+        "population": {
+            **{
+                source_site: _source_population_payload(
+                    jobs,
+                    usable_job_count=int(usable_job_counts[source_site]),
+                )
+                for source_site, jobs in sorted(jobs_by_source.items())
+            },
+            SOURCE_SITE: _source_population_payload(
+                offertoday_jobs,
+                usable_job_count=len(offertoday_jobs),
+            ),
+        },
+        "offertoday_baseline": {
+            "archived_extracted_at": baseline_corpus.get("extracted_at"),
+            "published_jobs": len(offertoday_jobs),
+            "keyword_entries": len(keyword_entries),
+            "catalog_matches_archived_snapshot": True,
+        },
+        "discovery_inventory": build_vocabulary_inventory(
+            jobs_by_source,
+            current_keywords=(row["keyword"] for row in keyword_entries),
+            limit=discovery_limit,
+        ),
+        "candidates": candidate_rows,
+        "limitations": [
+            "Cross-source frequency is discovery evidence, not OfferToday query recall or precision.",
+            "JobsDB and CTGoodJobs date, language, taxonomy, and collection routes differ.",
+            "Description matches may name a tool dependency rather than the hiring role.",
+            "The archived OfferToday probe and any fresh candidate probe are temporally different bounded samples.",
+        ],
+    }
+
+
+def extract_cross_source_snapshot(
+    *,
+    candidate_file: Path,
+    baseline_corpus_file: Path,
+    output_path: Path,
+    discovery_limit: int,
+    example_limit: int,
+    statement_timeout_ms: int,
+    session_factory: Callable[[], Any] = SessionLocal,
+) -> dict[str, Any]:
+    candidates = load_cross_source_candidate_terms(candidate_file)
+    baseline_corpus = read_json(baseline_corpus_file)
+    roots = {
+        "jobsdb": JOBSDB_IT_CLASSIFICATION_ID,
+        "ctgoodjobs": CTGOODJOBS_IT_CLASSIFICATION_ID,
+    }
+    with read_only_session(
+        session_factory,
+        statement_timeout_ms=statement_timeout_ms,
+    ) as db:
+        usable_jobs = {
+            source_site: _load_jobs(db, source_site=source_site)
+            for source_site in roots
+        }
+        jobs_by_source = {
+            source_site: _load_jobs(
+                db,
+                source_site=source_site,
+                root_classification_id=root,
+            )
+            for source_site, root in roots.items()
+        }
+        offertoday_jobs = _load_jobs(
+            db,
+            source_site=SOURCE_SITE,
+            root_classification_id=OFFERTODAY_IT_CLASSIFICATION_ID,
+        )
+        keyword_entries = _load_keyword_entries(db)
+    snapshot = build_cross_source_snapshot(
+        jobs_by_source=jobs_by_source,
+        usable_job_counts={
+            source_site: len(jobs) for source_site, jobs in usable_jobs.items()
+        },
+        offertoday_jobs=offertoday_jobs,
+        keyword_entries=keyword_entries,
+        candidates=candidates,
+        baseline_corpus=baseline_corpus,
+        discovery_limit=discovery_limit,
+        example_limit=example_limit,
+    )
+    write_json(output_path, snapshot)
+    return snapshot
+
+
+def build_cross_source_probe_plan(
+    corpus: Mapping[str, Any],
+    *,
+    max_additions: int,
+    pages_per_candidate: int,
+    request_cap: int,
+) -> tuple[ProbeTarget, ...]:
+    if min(max_additions, pages_per_candidate, request_cap) < 1:
+        raise ValueError("cross-source probe limits must be positive")
+    if max_additions > 30:
+        raise ValueError("cross-source probe cannot exceed 30 candidates")
+    if pages_per_candidate > 2:
+        raise ValueError("cross-source probe cannot exceed two pages per candidate")
+    if request_cap > MAX_CROSS_SOURCE_REQUEST_CAP:
+        raise ValueError(
+            f"cross-source probe request cap cannot exceed {MAX_CROSS_SOURCE_REQUEST_CAP}"
+        )
+    effective_limit = min(max_additions, request_cap // pages_per_candidate)
+    rows = sorted(
+        (
+            row
+            for row in corpus.get("candidates", [])
+            if isinstance(row, Mapping)
+            and row.get("candidate_scope") == "new"
+            and row.get("pre_probe_disposition") == "probe_candidate"
+        ),
+        key=lambda row: (
+            -sum(
+                int(source.get("title_match_count") or 0)
+                for source in row.get("source_evidence", {}).values()
+            ),
+            -sum(
+                int(source.get("detail_match_count") or 0)
+                for source in row.get("source_evidence", {}).values()
+            ),
+            str(row.get("normalized_keyword") or ""),
+        ),
+    )[:effective_limit]
+    return tuple(
+        ProbeTarget(
+            key=f"cross-source:{row['normalized_keyword']}",
+            kind="cross_source_candidate",
+            classification_id=OFFERTODAY_IT_CLASSIFICATION_ID,
+            category_id=118000,
+            keyword=str(row["keyword"]),
+            pages=pages_per_candidate,
+            corpus_detail_matches=int(
+                row.get("source_evidence", {})
+                .get(SOURCE_SITE, {})
+                .get("detail_match_count")
+                or 0
+            ),
+        )
+        for row in rows
     )
 
 
@@ -1419,6 +1970,370 @@ async def execute_live_probe(
     return payload
 
 
+async def execute_cross_source_probe(
+    corpus: Mapping[str, Any],
+    baseline_probe: Mapping[str, Any],
+    *,
+    output_path: Path,
+    max_additions: int,
+    pages_per_candidate: int,
+    request_cap: int,
+    page_delay_seconds: float,
+    headed: bool,
+    runtime_factory=OfferTodayBrowserRuntime,
+) -> dict[str, Any]:
+    if corpus.get("kind") != "offertoday_keyword_cross_source_corpus":
+        raise ValueError("cross-source probe requires a cross-source corpus snapshot")
+    if (
+        baseline_probe.get("kind") != "offertoday_keyword_live_probe"
+        or baseline_probe.get("status") != "complete"
+    ):
+        raise ValueError("cross-source probe requires a complete archived baseline probe")
+    targets = build_cross_source_probe_plan(
+        corpus,
+        max_additions=max_additions,
+        pages_per_candidate=pages_per_candidate,
+        request_cap=request_cap,
+    )
+    budget = ProbeRequestBudget(request_cap)
+    started_at = utc_now()
+    passes: list[dict[str, Any]] = []
+    status = "complete"
+    safe_error: dict[str, str] | None = None
+    try:
+        async with runtime_factory(headed=headed) as runtime:
+            passes.append(
+                await _run_probe_group(
+                    targets=targets,
+                    pass_id="cross-source-candidates",
+                    runtime=runtime,
+                    budget=budget,
+                    page_delay_seconds=page_delay_seconds,
+                )
+            )
+        if any(probe_pass.get("status") != "complete" for probe_pass in passes):
+            status = "stopped"
+    except Exception as exc:
+        status = "stopped"
+        safe_error = {
+            "error_type": type(exc).__name__,
+            "classification": str(getattr(exc, "classification", "unexpected")),
+        }
+
+    baseline_ids = _target_id_map(baseline_probe.get("passes", []))
+    native_union = set().union(
+        *(ids for key, ids in baseline_ids.items() if key.startswith("native:"))
+    )
+    current_union = set().union(
+        *(ids for key, ids in baseline_ids.items() if key.startswith("current:"))
+    )
+    fresh_ids = _target_id_map(passes)
+    target_payloads = {
+        str(row.get("key") or ""): row
+        for probe_pass in passes
+        for row in probe_pass.get("targets", [])
+        if isinstance(row, Mapping)
+    }
+    results: dict[str, dict[str, Any]] = {}
+    for target in targets:
+        own = fresh_ids.get(target.key, set())
+        results[target.key] = {
+            "keyword": target.keyword,
+            "observed_rows": int(
+                target_payloads.get(target.key, {}).get("observed_rows") or 0
+            ),
+            "distinct_job_ids": len(own),
+            "new_vs_archived_native": len(own - native_union),
+            "new_vs_archived_current_pack": len(own - native_union - current_union),
+            "decision": (
+                "supported_addition"
+                if status == "complete" and len(own - native_union - current_union) > 0
+                else "needs_offertoday_evidence"
+            ),
+        }
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "offertoday_keyword_cross_source_probe",
+        "started_at": started_at.isoformat(),
+        "finished_at": utc_now().isoformat(),
+        "status": status,
+        "request_cap": request_cap,
+        "requests_started": budget.started,
+        "page_delay_seconds": page_delay_seconds,
+        "settings": {
+            "max_additions": max_additions,
+            "pages_per_candidate": pages_per_candidate,
+        },
+        "archived_baseline": {
+            "started_at": baseline_probe.get("started_at"),
+            "finished_at": baseline_probe.get("finished_at"),
+            "native_distinct_job_ids": len(native_union),
+            "current_pack_distinct_job_ids": len(current_union),
+        },
+        "passes": passes,
+        "analysis": {"candidate_results": results},
+        "limitations": [
+            "Fresh candidate IDs are compared with an earlier archived bounded sample.",
+            "Ranking and inventory may have changed between probe timestamps.",
+            "A bounded new-ID count is not full-source recall or precision.",
+        ],
+        "error": safe_error,
+    }
+    write_json(output_path, payload)
+    return payload
+
+
+def build_cross_source_review_payload(
+    corpus: Mapping[str, Any],
+    probe: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    probe_results = dict((probe or {}).get("analysis", {}).get("candidate_results", {}))
+    rows: list[dict[str, Any]] = []
+    for candidate in corpus.get("candidates", []):
+        if not isinstance(candidate, Mapping):
+            continue
+        key = f"cross-source:{candidate.get('normalized_keyword')}"
+        probe_result = dict(probe_results.get(key, {}))
+        disposition = str(candidate.get("pre_probe_disposition") or "")
+        if disposition == "probe_candidate":
+            disposition = str(
+                probe_result.get("decision") or "needs_offertoday_evidence"
+            )
+            if disposition == "supported_addition" and candidate.get(
+                "candidate_kind"
+            ) in {"language_variant", "product_variant", "term_replacement"}:
+                disposition = "variant_or_replacement"
+        rows.append(
+            {
+                **dict(candidate),
+                "probe_result": probe_result or None,
+                "final_disposition": disposition,
+            }
+        )
+    rows.sort(
+        key=lambda row: (
+            str(row["candidate_scope"]),
+            str(row["normalized_keyword"]),
+        )
+    )
+    supported = [
+        row for row in rows if row["final_disposition"] == "supported_addition"
+    ]
+    prior_additions = [
+        row
+        for row in rows
+        if row["final_disposition"] == "prior_addition_revalidated"
+    ]
+    retirements = [
+        row for row in rows if row["final_disposition"] == "retire_candidate"
+    ]
+    variants = [
+        row
+        for row in rows
+        if row["final_disposition"] == "variant_or_replacement"
+    ]
+    retained = [row for row in rows if row["final_disposition"] == "retain"]
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": "offertoday_keyword_cross_source_review",
+        "verdict": "insufficient" if supported or prior_additions else "inconclusive",
+        "corpus": dict(corpus),
+        "probe": dict(probe) if probe is not None else None,
+        "candidates": rows,
+        "recommendations": {
+            "new_supported_additions": [row["keyword"] for row in supported],
+            "prior_additions_revalidated": [row["keyword"] for row in prior_additions],
+            "variants_or_replacements": [row["keyword"] for row in variants],
+            "retire_candidates": [row["keyword"] for row in retirements],
+            "retained_deferred_terms": [row["keyword"] for row in retained],
+        },
+    }
+
+
+def render_cross_source_markdown(review: Mapping[str, Any]) -> str:
+    corpus = review["corpus"]
+    probe = review.get("probe") or {}
+    recommendations = review["recommendations"]
+    verdict_text = (
+        "INSUFFICIENT — retain the prior proposal and review supported cross-source additions."
+        if review["verdict"] == "insufficient"
+        else "INCONCLUSIVE — no additional OfferToday mutation is justified."
+    )
+    lines = [
+        "# OfferToday Keyword Pack cross-source review",
+        "",
+        f"**Verdict: {verdict_text}**",
+        "",
+        "This follow-up is read-only. JobsDB and CTGoodJobs are discovery evidence; OfferToday remains the recommendation authority.",
+        "",
+        "## Corpus scope",
+        "",
+        "| Source | IT root | Usable details | Included IT details | Excluded without root | Date range |",
+        "| --- | --- | ---: | ---: | ---: | --- |",
+    ]
+    for source_site, population in sorted(corpus.get("population", {}).items()):
+        lines.append(
+            "| {source} | {root} | {usable:,} | {included:,} | {excluded:,} | {start} to {end} |".format(
+                source=_markdown_escape(source_site),
+                root=_markdown_escape(corpus.get("source_roots", {}).get(source_site)),
+                usable=int(population.get("usable_jobs") or 0),
+                included=int(population.get("included_it_jobs") or 0),
+                excluded=int(population.get("excluded_without_it_root") or 0),
+                start=_markdown_escape(population.get("posted_date_min")),
+                end=_markdown_escape(population.get("posted_date_max")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "### Title language distribution",
+            "",
+            "| Source | Latin | Mixed | Chinese | Other |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for source_site, population in sorted(corpus.get("population", {}).items()):
+        languages = population.get("title_language_counts", {})
+        lines.append(
+            "| {source} | {latin:,} | {mixed:,} | {zh:,} | {other:,} |".format(
+                source=_markdown_escape(source_site),
+                latin=int(languages.get("latin") or 0),
+                mixed=int(languages.get("mixed") or 0),
+                zh=int(languages.get("zh") or 0),
+                other=int(languages.get("other") or 0),
+            )
+        )
+    lines.extend(["", "## Limitations", ""])
+    lines.extend(f"- {item}" for item in corpus.get("limitations", []))
+    lines.extend(f"- {item}" for item in probe.get("limitations", []))
+
+    lines.extend(
+        [
+            "",
+            "## Candidate evidence and disposition",
+            "",
+            "| Candidate | Scope | JobsDB title/detail | CTGoodJobs title/detail | OfferToday title/detail | Final disposition | Risk |",
+            "| --- | --- | ---: | ---: | ---: | --- | --- |",
+        ]
+    )
+    for row in review.get("candidates", []):
+        evidence = row.get("source_evidence", {})
+        lines.append(
+            "| {keyword} | {scope} | {jt:,}/{jd:,} | {ct:,}/{cd:,} | {ot:,}/{od:,} | {decision} | {risk} |".format(
+                keyword=_markdown_escape(row.get("keyword")),
+                scope=_markdown_escape(row.get("candidate_scope")),
+                jt=int(evidence.get("jobsdb", {}).get("title_match_count") or 0),
+                jd=int(evidence.get("jobsdb", {}).get("detail_match_count") or 0),
+                ct=int(evidence.get("ctgoodjobs", {}).get("title_match_count") or 0),
+                cd=int(evidence.get("ctgoodjobs", {}).get("detail_match_count") or 0),
+                ot=int(evidence.get(SOURCE_SITE, {}).get("title_match_count") or 0),
+                od=int(evidence.get(SOURCE_SITE, {}).get("detail_match_count") or 0),
+                decision=_markdown_escape(row.get("final_disposition")),
+                risk=_markdown_escape(row.get("risk")),
+            )
+        )
+
+    lines.extend(["", "### Representative Job Details", ""])
+    for row in review.get("candidates", []):
+        examples = []
+        for source_site in ("jobsdb", "ctgoodjobs", SOURCE_SITE):
+            examples.extend(
+                row.get("source_evidence", {})
+                .get(source_site, {})
+                .get("examples", [])[:2]
+            )
+        if not examples:
+            continue
+        lines.extend([f"#### `{row['keyword']}`", ""])
+        for example in examples:
+            lines.append(
+                "- {source}: `{job_id}` — {title} ({field})".format(
+                    source=_markdown_escape(example.get("source_site")),
+                    job_id=_markdown_escape(example.get("source_job_id")),
+                    title=_markdown_escape(example.get("title")),
+                    field=_markdown_escape(example.get("matched_field")),
+                )
+            )
+        lines.append("")
+
+    lines.extend(["", "## Fresh OfferToday probe", ""])
+    if probe:
+        lines.extend(
+            [
+                f"- Status: `{probe.get('status')}`",
+                f"- Listing API requests: {int(probe.get('requests_started') or 0)} / {int(probe.get('request_cap') or 0)}",
+                f"- Archived baseline finished at: `{probe.get('archived_baseline', {}).get('finished_at')}`",
+                f"- Fresh probe finished at: `{probe.get('finished_at')}`",
+                "",
+                "| Candidate | Observed rows | Distinct IDs | New vs archived current pack | Decision |",
+                "| --- | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for row in sorted(
+            probe.get("analysis", {}).get("candidate_results", {}).values(),
+            key=lambda item: str(item.get("keyword") or ""),
+        ):
+            observed_rows = int(row.get("observed_rows") or 0)
+            if not observed_rows:
+                for probe_pass in probe.get("passes", []):
+                    match = next(
+                        (
+                            target
+                            for target in probe_pass.get("targets", [])
+                            if target.get("keyword") == row.get("keyword")
+                        ),
+                        None,
+                    )
+                    if match is not None:
+                        observed_rows = int(match.get("observed_rows") or 0)
+                        break
+            lines.append(
+                f"| {_markdown_escape(row.get('keyword'))} | "
+                f"{observed_rows:,} | "
+                f"{int(row.get('distinct_job_ids') or 0):,} | "
+                f"{int(row.get('new_vs_archived_current_pack') or 0):,} | "
+                f"{_markdown_escape(row.get('decision'))} |"
+            )
+    else:
+        lines.append("No fresh probe artifact was supplied.")
+
+    lines.extend(
+        [
+            "",
+            "## Recommendations",
+            "",
+            "- Newly supported additions: "
+            + ", ".join(
+                f"`{term}`"
+                for term in recommendations["new_supported_additions"]
+            ),
+            "- Prior additions revalidated: "
+            + ", ".join(
+                f"`{term}`"
+                for term in recommendations["prior_additions_revalidated"]
+            ),
+            "- Variants or replacements: "
+            + ", ".join(
+                f"`{term}`"
+                for term in recommendations["variants_or_replacements"]
+            ),
+            "- Retire candidates: "
+            + ", ".join(
+                f"`{term}`" for term in recommendations["retire_candidates"]
+            ),
+            "- Retain/defer: "
+            + ", ".join(
+                f"`{term}`"
+                for term in recommendations["retained_deferred_terms"]
+            ),
+            "",
+            "No catalog mutation is performed. Accepted changes must use a separate CSV preview/confirm workflow.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _markdown_escape(value: Any) -> str:
     return str(value if value is not None else "—").replace("|", "\\|").replace("\n", " ")
 
@@ -1803,6 +2718,55 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--probe", type=Path)
     report.add_argument("--output", type=Path, required=True)
     report.add_argument("--format", choices=("markdown", "json"), default="markdown")
+
+    cross_corpus = subparsers.add_parser(
+        "cross-source-corpus",
+        help="Extract JobsDB/CTGoodJobs IT evidence without database writes",
+    )
+    cross_corpus.add_argument("--candidate-file", type=Path, required=True)
+    cross_corpus.add_argument("--baseline-corpus", type=Path, required=True)
+    cross_corpus.add_argument("--output", type=Path, required=True)
+    cross_corpus.add_argument("--discovery-limit", type=int, default=300)
+    cross_corpus.add_argument("--example-limit", type=int, default=2)
+    cross_corpus.add_argument(
+        "--statement-timeout-ms",
+        type=int,
+        default=DEFAULT_STATEMENT_TIMEOUT_MS,
+    )
+
+    cross_probe = subparsers.add_parser(
+        "cross-source-probe",
+        help="Probe only newly qualified cross-source candidates",
+    )
+    cross_probe.add_argument("--corpus", type=Path, required=True)
+    cross_probe.add_argument("--baseline-probe", type=Path, required=True)
+    cross_probe.add_argument("--output", type=Path, required=True)
+    cross_probe.add_argument("--max-additions", type=int, default=30)
+    cross_probe.add_argument("--pages-per-candidate", type=int, default=2)
+    cross_probe.add_argument(
+        "--request-cap",
+        type=int,
+        default=MAX_CROSS_SOURCE_REQUEST_CAP,
+    )
+    cross_probe.add_argument(
+        "--page-delay-seconds",
+        type=float,
+        default=DEFAULT_PAGE_DELAY_SECONDS,
+    )
+    cross_probe.add_argument("--headed", action="store_true")
+
+    cross_report = subparsers.add_parser(
+        "cross-source-report",
+        help="Render the additive cross-source review",
+    )
+    cross_report.add_argument("--corpus", type=Path, required=True)
+    cross_report.add_argument("--probe", type=Path)
+    cross_report.add_argument("--output", type=Path, required=True)
+    cross_report.add_argument(
+        "--format",
+        choices=("markdown", "json"),
+        default="markdown",
+    )
     return parser
 
 
@@ -1833,6 +2797,45 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0 if result["status"] == "complete" else 2
+    if args.command == "cross-source-corpus":
+        extract_cross_source_snapshot(
+            candidate_file=args.candidate_file,
+            baseline_corpus_file=args.baseline_corpus,
+            output_path=args.output,
+            discovery_limit=args.discovery_limit,
+            example_limit=args.example_limit,
+            statement_timeout_ms=args.statement_timeout_ms,
+        )
+        return 0
+    if args.command == "cross-source-probe":
+        corpus = read_json(args.corpus)
+        baseline_probe = read_json(args.baseline_probe)
+        result = asyncio.run(
+            execute_cross_source_probe(
+                corpus,
+                baseline_probe,
+                output_path=args.output,
+                max_additions=args.max_additions,
+                pages_per_candidate=args.pages_per_candidate,
+                request_cap=args.request_cap,
+                page_delay_seconds=args.page_delay_seconds,
+                headed=args.headed,
+            )
+        )
+        return 0 if result["status"] == "complete" else 2
+    if args.command == "cross-source-report":
+        corpus = read_json(args.corpus)
+        probe = read_json(args.probe) if args.probe else None
+        review = build_cross_source_review_payload(corpus, probe)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        if args.format == "json":
+            write_json(args.output, review)
+        else:
+            args.output.write_text(
+                render_cross_source_markdown(review) + "\n",
+                encoding="utf-8",
+            )
+        return 0
     corpus = read_json(args.corpus)
     probe = read_json(args.probe) if args.probe else None
     review = build_review_payload(corpus, probe)

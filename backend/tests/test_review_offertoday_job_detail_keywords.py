@@ -7,18 +7,23 @@ import pytest
 
 from scripts.review_offertoday_job_detail_keywords import (
     CandidateTerm,
+    CrossSourceCandidateTerm,
     JobEvidence,
     ProbeBudgetExceeded,
     ProbeRequestBudget,
     ProbeTarget,
     analyze_first_pass,
     build_corpus_snapshot,
+    build_cross_source_probe_plan,
+    build_cross_source_review_payload,
+    build_cross_source_snapshot,
     build_probe_plan,
     build_review_payload,
     finalize_probe_analysis,
     matches_term,
     normalize_corpus_text,
     read_only_session,
+    render_cross_source_markdown,
     render_markdown_review,
     title_language,
 )
@@ -387,3 +392,173 @@ def test_markdown_report_is_deterministic_and_accounts_for_current_terms() -> No
     assert "INCONCLUSIVE" in first
     assert "| support | yes |" in first
     assert "No Keyword Pack change is justified" in first
+
+
+def test_cross_source_snapshot_counts_each_source_and_requires_title_support() -> None:
+    jobsdb_jobs = tuple(
+        replace(
+            _job(f"jobsdb-{index}", "Databricks Engineer", "Databricks platform"),
+            paths=(_path(("jobsdb:6281", "ICT")),),
+        )
+        for index in range(3)
+    )
+    ctgoodjobs_jobs = tuple(
+        replace(
+            _job(f"ct-{index}", "Data Engineer", "Databricks platform"),
+            paths=(_path(("ctgoodjobs:021", "IT")),),
+        )
+        for index in range(3)
+    )
+    offertoday_jobs = tuple(
+        _job(f"offer-{index}", "Data Engineer", "Databricks platform")
+        for index in range(3)
+    )
+    keyword_entries = (_keyword("support"),)
+    baseline = {
+        "kind": "offertoday_keyword_corpus_snapshot",
+        "population": {"published_jobs": 3},
+        "keywords": list(keyword_entries),
+    }
+    candidate = CrossSourceCandidateTerm(
+        classification_id="offertoday:118000",
+        keyword="Databricks",
+        family="data_platform",
+        candidate_kind="product",
+        discovery_sources="jobsdb+ctgoodjobs",
+        rationale="Repeated platform",
+        candidate_scope="new",
+        analyst_disposition="evaluate",
+        risk="Tool dependency",
+    )
+
+    snapshot = build_cross_source_snapshot(
+        jobs_by_source={
+            "jobsdb": jobsdb_jobs,
+            "ctgoodjobs": ctgoodjobs_jobs,
+        },
+        usable_job_counts={"jobsdb": 4, "ctgoodjobs": 3},
+        offertoday_jobs=offertoday_jobs,
+        keyword_entries=keyword_entries,
+        candidates=(candidate,),
+        baseline_corpus=baseline,
+        discovery_limit=20,
+        example_limit=2,
+        extracted_at=SimpleNamespace(isoformat=lambda: "2026-08-04T00:00:00+00:00"),
+    )
+
+    row = snapshot["candidates"][0]
+    assert snapshot["population"]["jobsdb"]["included_it_jobs"] == 3
+    assert snapshot["population"]["jobsdb"]["excluded_without_it_root"] == 1
+    assert row["source_evidence"]["jobsdb"]["detail_match_count"] == 3
+    assert row["source_evidence"]["ctgoodjobs"]["detail_match_count"] == 3
+    assert row["pre_probe_disposition"] == "probe_candidate"
+    assert row["source_evidence"]["jobsdb"]["examples"][0]["source_site"] == "jobsdb"
+    assert snapshot["discovery_inventory"]
+
+
+def test_cross_source_probe_plan_enforces_approved_hard_cap() -> None:
+    corpus = {
+        "candidates": [
+            {
+                "candidate_scope": "new",
+                "pre_probe_disposition": "probe_candidate",
+                "normalized_keyword": "databricks",
+                "keyword": "Databricks",
+                "source_evidence": {
+                    "jobsdb": {"title_match_count": 4, "detail_match_count": 10},
+                    "ctgoodjobs": {"title_match_count": 3, "detail_match_count": 8},
+                    "offertoday": {"title_match_count": 1, "detail_match_count": 3},
+                },
+            }
+        ]
+    }
+    targets = build_cross_source_probe_plan(
+        corpus,
+        max_additions=30,
+        pages_per_candidate=2,
+        request_cap=60,
+    )
+    assert [target.keyword for target in targets] == ["Databricks"]
+    assert targets[0].pages == 2
+    with pytest.raises(ValueError, match="cannot exceed 60"):
+        build_cross_source_probe_plan(
+            corpus,
+            max_additions=30,
+            pages_per_candidate=2,
+            request_cap=61,
+        )
+    with pytest.raises(ValueError, match="two pages"):
+        build_cross_source_probe_plan(
+            corpus,
+            max_additions=30,
+            pages_per_candidate=3,
+            request_cap=60,
+        )
+
+
+def test_cross_source_report_is_deterministic_and_keeps_variants_separate() -> None:
+    corpus = {
+        "schema_version": 1,
+        "kind": "offertoday_keyword_cross_source_corpus",
+        "source_roots": {
+            "jobsdb": "jobsdb:6281",
+            "ctgoodjobs": "ctgoodjobs:021",
+        },
+        "population": {
+            "jobsdb": {
+                "usable_jobs": 1,
+                "included_it_jobs": 1,
+                "excluded_without_it_root": 0,
+                "posted_date_min": "2026-08-04",
+                "posted_date_max": "2026-08-04",
+            }
+        },
+        "limitations": [],
+        "candidates": [
+            {
+                "classification_id": "offertoday:118000",
+                "keyword": "Microsoft 365",
+                "normalized_keyword": "microsoft 365",
+                "family": "microsoft",
+                "candidate_kind": "product_variant",
+                "candidate_scope": "new",
+                "pre_probe_disposition": "probe_candidate",
+                "risk": "Overlap",
+                "source_evidence": {
+                    source: {
+                        "title_match_count": 2,
+                        "detail_match_count": 3,
+                        "examples": [],
+                    }
+                    for source in ("jobsdb", "ctgoodjobs", "offertoday")
+                },
+            }
+        ],
+    }
+    probe = {
+        "status": "complete",
+        "requests_started": 2,
+        "request_cap": 60,
+        "finished_at": "2026-08-04T01:00:00+00:00",
+        "archived_baseline": {"finished_at": "2026-08-04T00:00:00+00:00"},
+        "analysis": {
+            "candidate_results": {
+                "cross-source:microsoft 365": {
+                    "keyword": "Microsoft 365",
+                    "distinct_job_ids": 10,
+                    "new_vs_archived_current_pack": 2,
+                    "decision": "supported_addition",
+                }
+            }
+        },
+        "limitations": [],
+    }
+    review = build_cross_source_review_payload(corpus, probe)
+    first = render_cross_source_markdown(review)
+    second = render_cross_source_markdown(review)
+
+    assert first == second
+    assert review["recommendations"]["variants_or_replacements"] == [
+        "Microsoft 365"
+    ]
+    assert "variant_or_replacement" in first
