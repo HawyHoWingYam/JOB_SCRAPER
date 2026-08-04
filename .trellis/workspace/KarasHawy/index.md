@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 59
+- **Total Sessions**: 60
 - **Last Active**: 2026-08-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~108 | Active |
+| `journal-2.md` | ~141 | Active |
 | `journal-1.md` | ~1968 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 60 | 2026-08-04 | Skip published jobs during listing crawls | `3b0d7431` | `codex/offertoday-it-coverage-20260702` |
 | 59 | 2026-08-04 | Apply OfferToday keyword pack recommendations | `e887fc2e` | `codex/offertoday-it-coverage-20260702` |
 | 58 | 2026-08-04 | Extend OfferToday keyword review with cross-source evidence | `4c666b79`, `539d626f` | `codex/offertoday-it-coverage-20260702` |
 | 57 | 2026-08-04 | Review OfferToday keyword coverage | `1e18f3bd`, `0d9b8d6a` | `codex/offertoday-it-coverage-20260702` |

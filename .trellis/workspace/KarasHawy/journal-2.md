@@ -106,3 +106,36 @@ Applied seven reviewed OfferToday keyword additions and disabled pentest through
 ### Next Steps
 
 - None - task complete
+
+
+## Session 60: Skip published jobs during listing crawls
+
+**Date**: 2026-08-04
+**Task**: Skip published jobs during listing crawls
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Made JobsDB, CTGoodJobs, and OfferToday listing crawls fail-closed when published job identities already exist; hard-deleted approved historical duplicate listings and obsolete dispatch plans; preserved surviving-row metrics; added a strict removed-dispatch-plan tombstone projection so task board and crawl task APIs remain available.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b0d7431` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
