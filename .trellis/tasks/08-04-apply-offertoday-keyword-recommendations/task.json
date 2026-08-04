@@ -1,0 +1,29 @@
+{
+  "id": "apply-offertoday-keyword-recommendations",
+  "name": "apply-offertoday-keyword-recommendations",
+  "title": "Apply OfferToday keyword pack recommendations",
+  "description": "Apply the approved cross-source OfferToday keyword recommendations from issue #49 without adding deferred Splunk or mutating unrelated data.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-04",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 49,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/49"
+  }
+}

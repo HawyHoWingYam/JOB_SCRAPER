@@ -1,0 +1,63 @@
+{
+  "source_classification_id": "offertoday:118000",
+  "actor": "local-operator",
+  "baseline": {
+    "entry_count": 127,
+    "enabled_count": 127
+  },
+  "preview": {
+    "valid": true,
+    "warnings": [],
+    "actions": {
+      "add": 7,
+      "disable": 1,
+      "update": 0
+    },
+    "added_keywords": [
+      "Databricks",
+      "Dynamics 365",
+      "penetration testing",
+      "RPA",
+      "Spring Boot",
+      "Tableau",
+      "VMware"
+    ],
+    "disabled_keywords": [
+      "pentest"
+    ],
+    "enabled_keyword_delta": 6,
+    "resulting_enabled_count": 133
+  },
+  "confirmation": {
+    "added": 7,
+    "updated": 0,
+    "disabled": 1,
+    "mutation_log_increment": 1
+  },
+  "verified_state": {
+    "entry_count": 134,
+    "enabled_count": 133,
+    "retained_enabled": [
+      "Angular",
+      "Dynamics",
+      "penetration"
+    ],
+    "retired_disabled": [
+      "pentest"
+    ],
+    "deferred_absent": [
+      "Splunk"
+    ],
+    "jobs_unchanged": true,
+    "crawl_jobs_unchanged": true
+  },
+  "safety": {
+    "catalog_mutation_path": "CSV preview/confirm",
+    "confirmation_token_recorded": false,
+    "csv_content_recorded": false,
+    "crawl_launched": false,
+    "github_issue": 49,
+    "github_issue_comment": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/49#issuecomment-5180534132",
+    "github_issue_state": "OPEN"
+  }
+}
