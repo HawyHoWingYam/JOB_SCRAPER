@@ -1,0 +1,21 @@
+classification_id,keyword,family,candidate_kind,rationale
+offertoday:118000,Microsoft,microsoft_ecosystem,product,Recurring vendor ecosystem evidence absent from the current pack
+offertoday:118000,Oracle,oracle_ecosystem,product,Recurring database and enterprise application evidence absent from the current pack
+offertoday:118000,AIGC,generative_ai,acronym,Recurring source vocabulary not covered by the existing GenAI spelling
+offertoday:118000,UAT,software_delivery,acronym,Recurring testing and business-analysis vocabulary absent from the current pack
+offertoday:118000,CRM,enterprise_applications,acronym,Recurring enterprise application vocabulary absent from the current pack
+offertoday:118000,Helpdesk,it_support,role_phrase,Recurring IT support role phrase absent from the current pack
+offertoday:118000,Power BI,business_intelligence,product,Recurring analytics product evidence absent from the current pack
+offertoday:118000,SharePoint,microsoft_ecosystem,product,Recurring collaboration platform evidence absent from the current pack
+offertoday:118000,ServiceNow,enterprise_applications,product,Recurring service-management platform evidence absent from the current pack
+offertoday:118000,Salesforce,enterprise_applications,product,Recurring CRM platform evidence absent from the current pack
+offertoday:118000,桌面運維,it_support,language_variant,Recurring Traditional Chinese title phrase overlapping but not identical to Support
+offertoday:118000,技術支援,it_support,language_variant,Recurring Traditional Chinese title phrase overlapping but not identical to Support
+offertoday:118000,技术支持,it_support,language_variant,Recurring Simplified Chinese title phrase overlapping but not identical to Support
+offertoday:118000,駐場工程師,field_engineering,language_variant,Recurring Traditional Chinese role phrase absent from the current pack
+offertoday:118000,前端开发工程师,frontend,language_variant,Recurring Simplified Chinese title phrase corresponding to Frontend
+offertoday:118000,运维工程师,operations,language_variant,Recurring Simplified Chinese operations role phrase absent from the current pack
+offertoday:118000,软件工程师,software_engineering,language_variant,Recurring Simplified Chinese title phrase corresponding to Software Engineer
+offertoday:118000,軟件工程師,software_engineering,language_variant,Recurring Traditional Chinese title phrase corresponding to Software Engineer
+offertoday:118000,後端開發工程師,backend,language_variant,Recurring Traditional Chinese title phrase corresponding to Backend
+offertoday:118000,網絡工程師,network,language_variant,Recurring Traditional Chinese title phrase corresponding to Network Engineer
