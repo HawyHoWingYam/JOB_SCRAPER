@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 57
+- **Total Sessions**: 58
 - **Last Active**: 2026-08-04
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~41 | Active |
+| `journal-2.md` | ~75 | Active |
 | `journal-1.md` | ~1968 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 58 | 2026-08-04 | Extend OfferToday keyword review with cross-source evidence | `4c666b79`, `539d626f` | `codex/offertoday-it-coverage-20260702` |
 | 57 | 2026-08-04 | Review OfferToday keyword coverage | `1e18f3bd`, `0d9b8d6a` | `codex/offertoday-it-coverage-20260702` |
 | 55 | 2026-07-30 | Improve Company and Data Explorer experience | `71f3a9af`, `d8f6329e` | `codex/offertoday-it-coverage-20260702` |
 | 54 | 2026-07-29 | Remove canonical job taxonomy | `0a88ab68`, `e5697cb2`, `1e0afa04`, `19c74554` | `codex/offertoday-it-coverage-20260702` |

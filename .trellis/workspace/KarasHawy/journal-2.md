@@ -39,3 +39,37 @@ Built a PostgreSQL-read-only OfferToday Job Detail keyword analyzer, completed a
 ### Next Steps
 
 - None - task complete
+
+
+## Session 58: Extend OfferToday keyword review with cross-source evidence
+
+**Date**: 2026-08-04
+**Task**: Extend OfferToday keyword review with cross-source evidence
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Reviewed 6,737 JobsDB/CTGoodJobs IT Job Details, completed a 16-request OfferToday no-write probe, and added five supported terms plus two variant/replacement candidates.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4c666b79` | (see git log) |
+| `539d626f` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
