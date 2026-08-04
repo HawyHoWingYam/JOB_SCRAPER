@@ -1,0 +1,29 @@
+{
+  "id": "skip-historical-listing-identities",
+  "name": "skip-historical-listing-identities",
+  "title": "Skip historical listing identities in manual listing runs",
+  "description": "Prevent manual listing runs from staging Source Job identities already published or staged by an earlier crawl run.",
+  "status": "in_progress",
+  "dev_type": "backend",
+  "scope": "backend",
+  "package": "backend",
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-05",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 53,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/53"
+  }
+}

@@ -125,9 +125,11 @@ Apply classification precedence:
 2. historical OfferToday code `2520` terminal -> skip;
 3. any published Job -> skip, regardless of completeness, prior failure,
    expiry, or age;
-4. unpublished Job with historical staging evidence -> one current-crawl
-   pending `repair` row; and
-5. absent Job without historical staging evidence -> one current-crawl pending
+4. for a manual run, unpublished Job with historical staging evidence -> skip
+   as `historical_existing` and leave detail ownership with the original run;
+5. for a scheduled run, unpublished Job with historical staging evidence ->
+   preserve the existing one-current-crawl pending `repair` behavior; and
+6. absent Job without historical staging evidence -> one current-crawl pending
    `new` row.
 
 Persist `detail_target_kind` (`new` or `repair`) in staging JSON. The current
@@ -141,10 +143,11 @@ do not create another current-crawl row or target.
 #### Detail boundary and metrics
 
 Load detail targets only after every listing condition is natural or allowed
-partial. New and unpublished-historical repair IDs produce one target each;
-published, terminal, supplemental-only, duplicate, and conflict IDs produce
-none. The detail boundary repeats the source-aware published-Job lookup and
-reconciles legacy staged rows rather than fetching them.
+partial. New IDs and scheduled-run unpublished-historical repair IDs produce
+one target each. Manual-run historical, published, terminal,
+supplemental-only, duplicate, and conflict IDs produce none. The detail
+boundary repeats the source-aware published-Job lookup and reconciles legacy
+staged rows rather than fetching them.
 
 Production metrics include at least:
 
@@ -206,7 +209,8 @@ is not evidence that the production cursor contract should be relaxed.
 | Any existing published Job | Count and skip; zero detail request |
 | Historical code-2520 terminal | Count and skip; zero detail request |
 | Incomplete existing published Job | Count and skip; dedicated repair only |
-| Unpublished ID with historical staging evidence | One repair staging row and one detail target |
+| Manual-run unpublished ID with historical staging evidence | Skip; original row remains owned by its detail/recovery workflow |
+| Scheduled-run unpublished ID with historical staging evidence | Preserve one repair staging row and one detail target |
 | New canonical ID | One new staging row and one detail target |
 | Bulk lookup or staging write fails | Roll back the page batch and fail the run |
 | Any per-ID existence query appears | Test failure; implementation is invalid |
@@ -238,9 +242,10 @@ is not evidence that the production cursor contract should be relaxed.
 - `test_offertoday_listing_runner.py`: two result-empty confirmations,
   supplemental exclusion/non-blocking identity issues, page-cap
   retain/continue, immediate validated staging, and every hard stop.
-- `test_crawl_job_runtime.py`: one fail-closed bulk Job lookup per page, no N+1,
-  exact published/terminal/new/unpublished-repair/conflict partition, atomic
-  rollback, and one current-crawl row/target per ID.
+- `test_crawl_job_runtime.py`: fail-closed bulk Published Job and manual-history
+  lookups per page, no N+1, exact manual-historical/scheduled-repair/new/
+  terminal/conflict partition, atomic rollback, and one current-crawl
+  row/target per ID.
 - `test_offertoday_standalone_crawl.py`: detail begins after all natural/partial
   conditions, page-cap run completes partial, hard stops have no detail, and
   exact metrics/event order.
@@ -268,7 +273,8 @@ for job_id in result.accepted_job_ids:
 ```
 
 This omits the production cursor policy, creates N+1 reads, and cannot
-distinguish terminal, historical unpublished repair, or new targets.
+distinguish terminal, manual historical exclusion, scheduled historical
+repair, or new targets.
 
 #### Correct
 

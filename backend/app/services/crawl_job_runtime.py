@@ -57,6 +57,7 @@ class ListingBatchPersistResult:
     published_source_job_ids: tuple[str, ...]
     job_ids_seen: int
     skipped_existing: int
+    historical_source_job_ids: tuple[str, ...] = ()
     complete_existing_source_job_ids: tuple[str, ...] = ()
     terminal_unavailable_source_job_ids: tuple[str, ...] = ()
     new_source_job_ids: tuple[str, ...] = ()
@@ -413,6 +414,19 @@ class CrawlJobRuntime:
             if is_offertoday:
                 self.crawl_job_listing_repository.acquire_offertoday_staging_lock(db)
 
+            crawl_job = self.crawl_job_repository.get_crawl_job_by_id(
+                db,
+                crawl_job_id,
+            )
+            if crawl_job is None:
+                raise ValueError(f"Crawl job not found: {crawl_job_id}")
+            skip_historical_listings = (
+                str(getattr(crawl_job, "trigger_type", "") or "")
+                .strip()
+                .lower()
+                == "manual"
+            )
+
             existing_jobs_by_source_id = (
                 self.job_repository.list_existing_jobs_by_source_ids(
                     db,
@@ -429,6 +443,24 @@ class CrawlJobRuntime:
                 if source_job_id in existing_jobs_by_source_id
             )
             published_source_job_id_set = set(published_source_job_ids)
+            historical_source_job_id_set = (
+                self.crawl_job_listing_repository.list_existing_source_job_ids(
+                    db,
+                    source_site=normalized_source,
+                    source_job_ids=ordered_job_ids,
+                    exclude_crawl_job_id=crawl_job_id,
+                )
+                if skip_historical_listings and seen_job_ids
+                else set()
+            )
+            historical_source_job_ids = tuple(
+                source_job_id
+                for source_job_id in ordered_job_ids
+                if source_job_id in historical_source_job_id_set
+            )
+            excluded_existing_source_job_id_set = (
+                published_source_job_id_set | historical_source_job_id_set
+            )
 
             source_rows = (
                 self.crawl_job_listing_repository.list_source_rows_by_job_ids(
@@ -582,6 +614,7 @@ class CrawlJobRuntime:
                     for source_job_id in ordered_job_ids
                     if source_job_id not in terminal_unavailable_source_job_id_set
                     and source_job_id not in published_source_job_id_set
+                    and source_job_id not in historical_source_job_id_set
                     and source_job_id not in duplicate_source_job_id_set
                     and bool(historical_rows_by_source_job_id[source_job_id])
                 )
@@ -591,6 +624,7 @@ class CrawlJobRuntime:
                     for source_job_id in ordered_job_ids
                     if source_job_id not in terminal_unavailable_source_job_id_set
                     and source_job_id not in published_source_job_id_set
+                    and source_job_id not in historical_source_job_id_set
                     and source_job_id not in duplicate_source_job_id_set
                     and source_job_id not in repair_source_job_id_set
                 )
@@ -604,6 +638,8 @@ class CrawlJobRuntime:
                         in complete_existing_source_job_id_set
                         else "published_existing"
                         if source_job_id in published_source_job_id_set
+                        else "historical_existing"
+                        if source_job_id in historical_source_job_id_set
                         else "duplicate"
                         if source_job_id in duplicate_source_job_id_set
                         else "repair"
@@ -643,16 +679,14 @@ class CrawlJobRuntime:
                 if not source_job_id:
                     continue
                 detail_target_kind: str | None = None
+                if source_job_id in excluded_existing_source_job_id_set:
+                    skipped_existing += 1
+                    continue
                 if is_offertoday:
                     classification = classification_by_source_job_id[source_job_id]
                     if classification not in {"new", "repair"}:
-                        if source_job_id in published_source_job_id_set:
-                            skipped_existing += 1
                         continue
                     detail_target_kind = classification
-                elif source_job_id in published_source_job_id_set:
-                    skipped_existing += 1
-                    continue
 
                 next_rank += 1
                 listing_rank = (
@@ -721,6 +755,9 @@ class CrawlJobRuntime:
                         "published_source_job_ids": list(
                             published_source_job_ids
                         ),
+                        "historical_source_job_ids": list(
+                            historical_source_job_ids
+                        ),
                         "preexisting_staged_source_job_ids": list(
                             current_staged_source_job_ids
                         ),
@@ -752,6 +789,7 @@ class CrawlJobRuntime:
                     current_staged_source_job_ids
                 ),
                 published_source_job_ids=published_source_job_ids,
+                historical_source_job_ids=historical_source_job_ids,
                 job_ids_seen=len(ordered_job_ids),
                 skipped_existing=skipped_existing,
                 complete_existing_source_job_ids=(

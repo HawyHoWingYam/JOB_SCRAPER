@@ -368,6 +368,7 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
     created_source_job_ids: dict[str, None] = {}
     preexisting_staged_source_job_ids: dict[str, None] = {}
     published_source_job_ids: dict[str, None] = {}
+    historical_source_job_ids: dict[str, None] = {}
     skipped_existing_source_job_ids: dict[str, None] = {}
     current_page_context: dict[str, Any] = {}
     page_started_at: dict[tuple[int, int], float] = {}
@@ -443,8 +444,10 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
             preexisting_staged_source_job_ids.setdefault(str(source_job_id), None)
         for source_job_id in batch_result.published_source_job_ids:
             published_source_job_ids.setdefault(str(source_job_id), None)
-            if args.skip_existing:
-                skipped_existing_source_job_ids.setdefault(str(source_job_id), None)
+            skipped_existing_source_job_ids.setdefault(str(source_job_id), None)
+        for source_job_id in batch_result.historical_source_job_ids:
+            historical_source_job_ids.setdefault(str(source_job_id), None)
+            skipped_existing_source_job_ids.setdefault(str(source_job_id), None)
 
         started_at = page_started_at.pop((category_id, page), None)
         elapsed_ms = (
@@ -583,6 +586,7 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
             preexisting_staged_source_job_ids
         ),
         published_source_job_ids=tuple(published_source_job_ids),
+        historical_source_job_ids=tuple(historical_source_job_ids),
         job_ids_seen=len(seen_source_job_ids),
         skipped_existing=len(skipped_existing_source_job_ids),
         raw_job_ids_seen=raw_job_ids_collected,

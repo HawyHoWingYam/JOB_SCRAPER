@@ -21,6 +21,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Cross-source crawl cadence, correlation, bounded fields, and secret-safe URLs | Active |
 | [Crawl Task Detail Metrics](./crawl-task-detail-metrics.md) | Cross-source detail denominators, outcomes, remaining work, and UI projection | Active |
+| [Manual Listing Identity Exclusion](./manual-listing-identity-exclusion.md) | Cross-source Published Job and historical listing ownership for manual runs | Active |
 | [Manual Job Detail Pacing](./scraper-detail-pacing.md) | Source settings, immutable task snapshots, dispatch exclusion, and per-attempt pacing | Active |
 | [AI Enrichment Run Operations](./ai-enrichment-runs.md) | Filter candidates, single-active scheduling, waiting promotion, monitor, retry, and cooperative Stop | Active |
 | [Company Enrichment Runs](./company-enrichment-runs.md) | Krill Chat/Responses routing, explicit Company-only Web Search, capability probes, persistence, and safe diagnostics | Active |

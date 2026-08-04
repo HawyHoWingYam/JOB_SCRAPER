@@ -585,6 +585,72 @@ async def test_planned_standalone_targets_ignore_payload_and_stop_empty_target(
 
 
 @pytest.mark.asyncio
+async def test_jobsdb_listing_summary_counts_historical_skips(
+    monkeypatch,
+) -> None:
+    class JobsdbScraper:
+        before_request = None
+        sleep = None
+
+        async def scrape_category(
+            self,
+            category_id,
+            *,
+            max_pages,
+            page_sink,
+            on_page_start,
+        ):
+            self.before_request()
+            await on_page_start(
+                category_id=category_id,
+                category_name="Category",
+                page=1,
+                total_pages=1,
+            )
+            await page_sink(
+                category_id=category_id,
+                category_name="Category",
+                page=1,
+                total_pages=1,
+                jobs=[{"id": "historical"}, {"id": "new"}],
+            )
+
+    class Runtime(_Runtime):
+        def stage_listing_batch(self, **_kwargs):
+            return ListingBatchPersistResult(
+                rows_created=1,
+                created_source_job_ids=("new",),
+                preexisting_staged_source_job_ids=(),
+                published_source_job_ids=(),
+                historical_source_job_ids=("historical",),
+                job_ids_seen=2,
+                skipped_existing=1,
+                raw_job_ids_seen=2,
+            )
+
+    monkeypatch.setattr(jobsdb_crawl, "CategoryListScraper", JobsdbScraper)
+    runtime = Runtime()
+    args = SimpleNamespace(
+        crawl_job_id="jobsdb-historical-skip",
+        crawl_mode="headless",
+        category_ids=[1200],
+        max_pages=1,
+        skip_existing=True,
+    )
+    jobsdb_crawl._apply_listing_runtime_plan(
+        args,
+        _runtime_plan("jobsdb", ("jobsdb:1200",), page_depth=1),
+    )
+
+    result = await jobsdb_crawl.run_listing_phase(args, runtime)
+
+    assert result.historical_source_job_ids == ("historical",)
+    assert result.skipped_existing == 1
+    assert runtime.events[-1][0] == "crawl.page_processed"
+    assert runtime.events[-1][1]["jobs_skipped_existing"] == 1
+
+
+@pytest.mark.asyncio
 async def test_offertoday_runner_counts_retries_against_aggregate_cap() -> None:
     class RetryingTransport:
         browser_context_hash = "c" * 64

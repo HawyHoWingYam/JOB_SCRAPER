@@ -24,10 +24,13 @@ class _FakeCrawlJobRepository:
         self.metrics_patch = dict(metrics_patch)
 
     def get_crawl_job_by_id(self, *_args, **_kwargs):
-        return SimpleNamespace(metrics={})
+        return SimpleNamespace(metrics={}, trigger_type="manual")
 
 
 class _FakeListingRepository:
+    def list_existing_source_job_ids(self, *_args, **_kwargs):
+        return set()
+
     def count_detail_statuses(self, *_args, **_kwargs):
         return {}
 
@@ -38,13 +41,18 @@ class _FakeListingRepository:
         return SimpleNamespace(), "created"
 
 
+class _FakeJobRepository:
+    def list_existing_jobs_by_source_ids(self, *_args, **_kwargs):
+        return {}
+
+
 def test_stage_listing_batch_tracks_raw_and_distinct_job_ids_separately() -> None:
     crawl_job_repository = _FakeCrawlJobRepository()
     runtime = CrawlJobRuntime(
         db_session_factory=_FakeDb,
         crawl_job_repository=crawl_job_repository,
         crawl_job_listing_repository=_FakeListingRepository(),
-        job_repository=object(),
+        job_repository=_FakeJobRepository(),
     )
 
     result = runtime.stage_listing_batch(
