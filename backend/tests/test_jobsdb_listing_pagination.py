@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.scraper.category_scraper import (
@@ -13,6 +16,173 @@ from scripts import jobsdb_standalone_crawl as jobsdb_crawl
 
 async def _no_sleep(_seconds: float) -> None:
     return None
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_listing_retries_transient_server_disconnect() -> None:
+    attempts: list[httpx.Request] = []
+    retry_delays: list[float] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        if len(attempts) == 1:
+            raise httpx.RemoteProtocolError(
+                "Server disconnected without sending a response.",
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "application/json"},
+            json={"totalCount": 1, "data": [{"id": "job-1"}]},
+        )
+
+    async def record_sleep(seconds: float) -> None:
+        retry_delays.append(seconds)
+
+    scraper = CategoryListScraper(sleep=record_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle_request)) as client:
+        result = await scraper.fetch_page(6281, page=7, client=client)
+
+    assert result["data"] == [{"id": "job-1"}]
+    assert len(attempts) == 2
+    assert attempts[0].url == attempts[1].url
+    assert retry_delays == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_listing_logs_only_retryable_transport_attempts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    attempts = 0
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.RemoteProtocolError("sensitive upstream detail", request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "application/json"},
+            json={"totalCount": 0, "data": []},
+        )
+
+    scraper = CategoryListScraper(sleep=_no_sleep)
+    with caplog.at_level(logging.WARNING):
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handle_request)
+        ) as client:
+            await scraper.fetch_page(6281, page=7, client=client)
+
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert "SCRAPE_LISTING_PAGE_RETRY" in message
+    assert "error_type=RemoteProtocolError" in message
+    assert "attempt=1" in message
+    assert "max_attempts=4" in message
+    assert "sensitive upstream detail" not in message
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_listing_stops_after_bounded_transport_retries() -> None:
+    attempts = 0
+    retry_delays: list[float] = []
+
+    def disconnect(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.RemoteProtocolError(
+            "Server disconnected without sending a response.",
+            request=request,
+        )
+
+    async def record_sleep(seconds: float) -> None:
+        retry_delays.append(seconds)
+
+    scraper = CategoryListScraper(sleep=record_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(disconnect)) as client:
+        with pytest.raises(
+            httpx.RemoteProtocolError,
+            match="Server disconnected without sending a response",
+        ):
+            await scraper.fetch_page(6281, page=7, client=client)
+
+    assert attempts == 4
+    assert retry_delays == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_listing_does_not_retry_http_status_failures() -> None:
+    attempts = 0
+    retry_delays: list[float] = []
+
+    def service_unavailable(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            503,
+            request=request,
+            headers={"content-type": "application/json"},
+            json={"error": "unavailable"},
+        )
+
+    async def record_sleep(seconds: float) -> None:
+        retry_delays.append(seconds)
+
+    scraper = CategoryListScraper(sleep=record_sleep)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(service_unavailable)
+    ) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await scraper.fetch_page(6281, page=7, client=client)
+
+    assert attempts == 1
+    assert retry_delays == []
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_listing_does_not_retry_local_protocol_errors() -> None:
+    attempts = 0
+    retry_delays: list[float] = []
+
+    def invalid_request(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.LocalProtocolError("invalid request", request=request)
+
+    async def record_sleep(seconds: float) -> None:
+        retry_delays.append(seconds)
+
+    scraper = CategoryListScraper(sleep=record_sleep)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(invalid_request)
+    ) as client:
+        with pytest.raises(httpx.LocalProtocolError):
+            await scraper.fetch_page(6281, page=7, client=client)
+
+    assert attempts == 1
+    assert retry_delays == []
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_listing_retry_backoff_is_cancellation_aware() -> None:
+    attempts = 0
+
+    def disconnect(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.RemoteProtocolError("disconnected", request=request)
+
+    async def cancel_during_backoff(_seconds: float) -> None:
+        raise asyncio.CancelledError
+
+    scraper = CategoryListScraper(sleep=cancel_during_backoff)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(disconnect)) as client:
+        with pytest.raises(asyncio.CancelledError):
+            await scraper.fetch_page(6281, page=7, client=client)
+
+    assert attempts == 1
 
 
 @pytest.mark.asyncio

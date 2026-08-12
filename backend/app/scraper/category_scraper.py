@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 ListingPageSink = Callable[..., Awaitable[None]]
 ListingPageStartSink = Callable[..., Awaitable[None]]
+JOBSDB_RETRYABLE_TRANSPORT_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
+    httpx.ProxyError,
+)
 
 
 class JobsDBListingPaginationInconsistentError(RuntimeError):
@@ -81,11 +87,32 @@ class CategoryListScraper:
             client = httpx.AsyncClient(timeout=30.0)
 
         try:
-            response = await client.get(
-                self.BASE_URL,
-                params=params,
-                headers=self.headers,
-            )
+            max_retries = max(int(settings.scraper_max_retries), 0)
+            for attempt in range(1, max_retries + 2):
+                try:
+                    response = await client.get(
+                        self.BASE_URL,
+                        params=params,
+                        headers=self.headers,
+                    )
+                    break
+                except JOBSDB_RETRYABLE_TRANSPORT_ERRORS as exc:
+                    if attempt > max_retries:
+                        raise
+                    delay = float(2 ** (attempt - 1))
+                    logger.warning(
+                        build_scrape_log_event(
+                            "SCRAPE_LISTING_PAGE_RETRY",
+                            source="jobsdb",
+                            category_id=classification_id,
+                            current_page=page,
+                            attempt=attempt,
+                            max_attempts=max_retries + 1,
+                            delay_seconds=delay,
+                            error_type=type(exc).__name__,
+                        )
+                    )
+                    await self.sleep(delay)
             content_type = str(response.headers.get("content-type") or "").lower()
             access_text = (
                 ""

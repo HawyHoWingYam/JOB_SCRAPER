@@ -76,6 +76,26 @@ also render a challenge page. An explicit `cf-mitigated: challenge` response
 header is stronger than a generic 403 and must classify as `waf_challenge`.
 Never store or log the inspected response body.
 
+#### JobsDB listing transport retry boundary
+
+`CategoryListScraper.fetch_page()` retries only transient JobsDB transport
+exceptions: `httpx.TimeoutException`, `httpx.NetworkError`,
+`httpx.RemoteProtocolError`, and `httpx.ProxyError`. The existing
+`settings.scraper_max_retries` value is the retry count, so the default `3`
+allows four total attempts with cancellation-aware 1, 2, and 4 second waits.
+
+An internal transport retry belongs to the same logical listing page. It does
+not call the outer `before_request` hook again and therefore consumes no extra
+Dispatch Plan request-budget claim. Emit `SCRAPE_LISTING_PAGE_RETRY` only when
+another attempt will occur; include category, page, attempt, maximum attempts,
+delay, and exception type, but never raw exception text.
+
+HTTP status errors, positive access-block/manual-action evidence, malformed
+JSON, `httpx.LocalProtocolError`, programming errors, and cancellation are not
+retryable at this boundary. Exhausted transient attempts re-raise the last
+exception so the standalone executor records the existing truthful terminal
+failure while retaining previously staged pages.
+
 #### Pause payload and state
 
 A confirmed block raises `ManualActionRequiredError` with:
@@ -197,6 +217,10 @@ verification signal never triggers a hidden headless-to-headed retry.
 | OfferToday exact code `-1000035` | Typed `ip_blocked`, code preserved, no transient retry |
 | OfferToday other verify URL | `waf_challenge` |
 | DNS/timeout/connection failure | Existing transient/failure behavior; never IP |
+| JobsDB listing transport disconnect followed by success | Retry the same logical page without another request-budget claim |
+| JobsDB listing transient failure on every attempt | Four attempts by default, then re-raise the final transport exception |
+| JobsDB HTTP/local-protocol/parser/manual-action failure | Do not retry; preserve the typed or original failure |
+| Cancellation during JobsDB retry backoff | Stop immediately; issue no later attempt |
 | Listing block after committed pages | Keep prefix, emit manual action, skip detail |
 | Detail block after completed targets | Keep completed targets; stop later targets |
 | Resume attempted from `failed`/`running` | Reject; only `manual_action_required` is resumable |
@@ -225,6 +249,11 @@ verification signal never triggers a hidden headless-to-headed retry.
   bounded retry policy.
 - **Bad:** Any `Failed to fetch` is labeled IP blocked. A DNS outage now asks
   the operator to change IP and disables valid retry behavior.
+- **Good:** JobsDB disconnects before response headers on page 124, waits one
+  cancellation-aware second, and retries page 124 without claiming page 123's
+  request budget.
+- **Bad:** Catch every `httpx.TransportError`, causing a malformed local request
+  to retry four times, or call `before_request` inside each transport attempt.
 - **Bad:** A paused worker polls every few seconds and resumes itself. This
   violates explicit operator control and can immediately re-trigger a block.
 - **Good:** A paused detail task emits `crawl.detail_segment` after
@@ -250,6 +279,9 @@ verification signal never triggers a hidden headless-to-headed retry.
   WAF/generic transport classification, immediate stop, committed page replay,
   same-task upsert behavior, compact/source-aware payloads, and completed-detail
   exclusion.
+- `backend/tests/test_jobsdb_listing_pagination.py` covers transient disconnect
+  recovery, bounded exhaustion, structured secret-safe retry logging, immediate
+  HTTP/local-protocol failure, and cancellation-aware backoff.
 - `backend/tests/test_cross_source_crawl_logging.py` covers listing/detail
   manual-action and terminal summaries plus no-later-target behavior.
 - `frontend/src/components/scraper/ipBlockGuidance.test.js` covers source-aware

@@ -1,0 +1,29 @@
+{
+  "id": "retry-jobsdb-listing-disconnects",
+  "name": "retry-jobsdb-listing-disconnects",
+  "title": "Retry transient JobsDB listing disconnects",
+  "description": "",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-12",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 57,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/57"
+  }
+}
