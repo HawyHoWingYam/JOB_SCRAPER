@@ -845,8 +845,7 @@ export default function CrawlTasksPage() {
         <div>
           <h1>Crawl Tasks</h1>
           <p className="form-hint">
-            Durable crawl job history with filters, paging, and operator
-            actions.
+            Track collection runs, inspect their progress, and resolve issues.
           </p>
           <div className="crawl-tasks-refreshed">
             {refreshedAt

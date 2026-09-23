@@ -77,3 +77,14 @@ and appended bucket order.
 <!-- Component-related mistakes your team has made -->
 
 (To be filled by the team)
+
+## Laptop usability
+
+Use English interface copy and the existing dark tokens. Keep Sidebar groups
+Data, Collection, and Processing expanded; Dashboard remains the default and
+Settings stays in the footer. Grouping must not add an extra navigation click.
+Preserve explicit configuration controls rather than introducing a general
+Advanced Options gate. Check 1366×768 and 1440×900 with actual content, not only
+loading placeholders. Use the shared `formatControlDateTime` for run timestamps
+with timezone context. Display labels may change while persisted status codes,
+API payloads, and route identities remain stable.

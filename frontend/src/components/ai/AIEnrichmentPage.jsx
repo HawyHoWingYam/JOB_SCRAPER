@@ -12,6 +12,7 @@ import {
   Square,
 } from 'lucide-react';
 import { apiPath } from '../../api/base';
+import { formatControlDateTime } from '../../features/taskControl/shared/controlTime';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
@@ -84,13 +85,13 @@ function formatPendingGateProgress(pendingGateProgress, { compact = false } = {}
   return 'Ingest settle progress unavailable';
 }
 
-function formatTimestampIso(value) {
+function formatRunTimestamp(value) {
   const parsed = parseDateMs(value);
   if (parsed === null) {
     return null;
   }
 
-  return new Date(parsed).toISOString();
+  return formatControlDateTime(value);
 }
 
 function sortRunsNewestFirst(runList) {
@@ -1019,7 +1020,9 @@ export default function AIEnrichmentPage() {
                     ? previewError
                     : preview
                       ? `${Number(preview.matching_pending_count || 0).toLocaleString()} match · ${Number(preview.effective_item_count || 0).toLocaleString()} will run${Number(preview.excluded_item_count || 0) > 0 ? ` · ${Number(preview.excluded_item_count).toLocaleString()} excluded` : ''}`
-                      : 'Choose filters to preview the run.'}
+                      : hasLoadedOverview && Number(overview?.pending_jobs) === 0
+                        ? 'No jobs are waiting for enrichment. Collect or add jobs, then return here to start a run.'
+                        : 'Choose filters, or confirm all pending jobs, to preview the run.'}
               </div>
 
               {Number(preview?.excluded_item_count || 0) > 0 && (
@@ -1071,7 +1074,7 @@ export default function AIEnrichmentPage() {
                 <div>
                   <h3>Run Monitor</h3>
                   <p className="ai-console-copy">
-                    Active plus latest terminal, or the latest two terminal runs.
+                    Track the current run and recent results. Retry failed jobs from their run card.
                   </p>
                 </div>
               </div>
@@ -1124,8 +1127,8 @@ export default function AIEnrichmentPage() {
 
                   const startedMs = parseDateMs(run.started_at);
                   const completedMs = parseDateMs(run.completed_at);
-                  const completedIso = formatTimestampIso(run.completed_at);
-                  const createdIso = formatTimestampIso(run.created_at);
+                  const completedLabel = formatRunTimestamp(run.completed_at);
+                  const createdLabel = formatRunTimestamp(run.created_at);
                   const durationSeconds =
                     startedMs !== null && completedMs !== null ? Math.max(0, (completedMs - startedMs) / 1000) : null;
                   const activeRunFocus = describeActiveRunFocus({
@@ -1154,9 +1157,9 @@ export default function AIEnrichmentPage() {
                               <Copy size={14} />
                             </button>
                           </div>
-                          <div className="ai-run-source">{run.source_type}</div>
+                          <div className="ai-run-source">{run.source_type === 'manual_pending' ? 'Manually started' : String(run.source_type || 'Unknown origin').replaceAll('_', ' ')}</div>
                         </div>
-                        <div className={`ai-run-status-badge ai-run-status-${statusTone}`}>{normalizedStatus}</div>
+                        <div className={`ai-run-status-badge ai-run-status-${statusTone}`}>{normalizedStatus.replaceAll('_', ' ')}</div>
                       </div>
 
                       <div
@@ -1199,7 +1202,7 @@ export default function AIEnrichmentPage() {
                             <span>{isQueuedPendingRun
                               ? run.pending_gate_reason === 'waiting_for_ingest_settle'
                                 ? formatPendingGateProgress(run.pending_gate_progress, { compact: true })
-                                : `Queued at ${createdIso || '-'}`
+                                : `Queued at ${createdLabel || '-'}`
                               : `Elapsed ${startedMs === null ? '-' : formatDurationShort((Date.now() - startedMs) / 1000)}`
                             }</span>
                             <span>Remaining {remainingItems}</span>
@@ -1209,7 +1212,7 @@ export default function AIEnrichmentPage() {
                         <div className="ai-run-summary ai-run-summary-terminal">
                           <div className="ai-run-summary-title">Completed summary</div>
                           <div className="ai-run-summary-body ai-run-summary-stack">
-                            <span>Completed at {completedIso || '-'}</span>
+                            <span>Completed at {completedLabel || '-'}</span>
                             <span>
                               Duration {durationSeconds === null ? '-' : formatDurationShort(durationSeconds)}
                             </span>
@@ -1221,7 +1224,7 @@ export default function AIEnrichmentPage() {
                           <div className="ai-run-summary-body ai-run-summary-stack">
                             <span>Succeeded {Number(run.completed_items || 0)}</span>
                             <span>Excluded {excludedItems}</span>
-                            <span>Completed at {completedIso || '-'}</span>
+                            <span>Completed at {completedLabel || '-'}</span>
                             <span>
                               Duration {durationSeconds === null ? '-' : formatDurationShort(durationSeconds)}
                             </span>

@@ -142,3 +142,13 @@ setAttention(items => items.filter(item => item.entityId !== taskId));
 await dismissFailedRunAttention(taskId, item.failureEventSequence);
 await loadBoard();
 ```
+
+## Action presentation
+
+The Scheduler and Crawl Tasks remain separate routes under the expanded
+Collection navigation group. Render `view_task` as `View task` and `view_logs`
+as `View logs`. When primary and secondary descriptors repeat on the same
+entity, collapse only descriptors with identical action, enabled state, and
+reason code. Do not merge actions across entities or infer authorization.
+The failed-attention test asserts one task button while preserving Logs and
+Dismiss behavior.

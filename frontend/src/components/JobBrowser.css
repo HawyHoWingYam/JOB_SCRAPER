@@ -821,3 +821,34 @@
         width: 100%;
     }
 }
+
+/* Search stays above a visible filter column and the result list. */
+.browser-controls { grid-template-columns: 280px minmax(0, 1fr); }
+.query-console { grid-column: 1 / -1; gap: 12px; padding: 16px; }
+.query-console-top { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.query-console-copy h2 { font-size: 24px; }
+.query-console-status { justify-content: flex-end; max-width: 400px; }
+.query-console-main { grid-template-columns: minmax(0, 1fr) 220px; align-items: start; gap: 12px; }
+.query-action-row, .query-validation-message { grid-column: 1 / -1; }
+.query-mode-row { gap: 4px; }
+.query-mode-note { font-size: 12px; }
+.console-pill, .tag { text-transform: none; letter-spacing: 0; font-weight: 600; }
+.filter-deck { padding: 16px; }
+.filter-grid { grid-template-columns: minmax(0, 1fr); }
+.filter-field-wide { grid-column: auto; }
+.job-results-area { min-width: 0; }
+.browser-result-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.browser-result-toolbar .query-console-results { display: flex; gap: 24px; flex: 1; }
+.browser-result-toolbar .query-console-results > div { padding: 0; border: 0; background: transparent; }
+.browser-result-toolbar .query-export-note { flex-basis: 100%; }
+.job-results-area .job-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1000px) {
+    .browser-controls { grid-template-columns: minmax(0, 1fr); }
+    .query-console-top, .query-console-main { grid-template-columns: minmax(0, 1fr); }
+    .query-console-status { justify-content: flex-start; max-width: none; }
+}
+
+@media (min-width: 1001px) {
+    .query-console-main .query-mode-row { grid-column: 2; grid-row: 1 / span 2; }
+    .query-console-main .query-action-row { grid-column: 1; }
+}

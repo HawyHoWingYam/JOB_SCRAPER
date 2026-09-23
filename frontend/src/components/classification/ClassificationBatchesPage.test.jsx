@@ -62,22 +62,22 @@ describe('ClassificationBatchesPage', () => {
 
   it('renders a compact candidate list and evidence panel', async () => {
     render(<ClassificationBatchesPage />);
-    expect(await screen.findByRole('heading', { name: '待确认 Skill' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Skills to review' })).toBeInTheDocument();
     expect(screen.getByText('Frontend Engineer')).toBeInTheDocument();
     expect(screen.getByText('React is preferred for this role.')).toBeInTheDocument();
-    expect(screen.getByText('Jev 建议保留 Candidate')).toBeInTheDocument();
-    expect(screen.getByText('置信 82%')).toBeInTheDocument();
+    expect(screen.getByText('Jev recommends keeping this Candidate')).toBeInTheDocument();
+    expect(screen.getByText('Confidence 82%')).toBeInTheDocument();
     expect(screen.getByText('receipt gen-1')).toBeInTheDocument();
-    expect(screen.getByText('最多 1 个')).toBeInTheDocument();
-    expect(screen.getByLabelText('搜索 Candidate')).toBeInTheDocument();
+    expect(screen.getByText('Up to 1 matches')).toBeInTheDocument();
+    expect(screen.getByLabelText('Search Candidates')).toBeInTheDocument();
   });
 
   it('confirms a recommended existing Skill and removes the candidate', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-    await screen.findByRole('heading', { name: '待确认 Skill' });
+    await screen.findByRole('heading', { name: 'Skills to review' });
     await user.click(await screen.findByRole('button', { name: /TypeScript/ }));
-    await user.click(screen.getByRole('button', { name: '保存并下一个' }));
+    await user.click(screen.getByRole('button', { name: 'Save and next' }));
     await waitFor(() => expect(decideSkillCandidate).toHaveBeenCalledWith('candidate-1', {
       action: 'match_existing', skill_code: 'typescript',
     }));
@@ -87,11 +87,11 @@ describe('ClassificationBatchesPage', () => {
   it('requires a structured reason for generic and rejection decisions', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-    await screen.findByRole('heading', { name: '待确认 Skill' });
-    await user.click(screen.getByRole('button', { name: '通用词' }));
-    expect(screen.getByRole('button', { name: '保存并下一个' })).toBeDisabled();
-    await user.selectOptions(screen.getByLabelText('原因'), 'general_capability');
-    await user.click(screen.getByRole('button', { name: '保存并下一个' }));
+    await screen.findByRole('heading', { name: 'Skills to review' });
+    await user.click(screen.getByRole('button', { name: 'Generic term' }));
+    expect(screen.getByRole('button', { name: 'Save and next' })).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText('Reason'), 'general_capability');
+    await user.click(screen.getByRole('button', { name: 'Save and next' }));
     expect(decideSkillCandidate).toHaveBeenCalledWith('candidate-1', {
       action: 'generic', generic_tag: 'general_capability',
     });
@@ -100,20 +100,29 @@ describe('ClassificationBatchesPage', () => {
   it('supports creating under existing Technology with explicit aliases', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-    await screen.findByRole('heading', { name: '待确认 Skill' });
-    await user.click(screen.getByRole('button', { name: '创建新 Skill' }));
+    await screen.findByRole('heading', { name: 'Skills to review' });
+    await user.click(screen.getByRole('button', { name: 'Create new Skill' }));
     await user.click(screen.getByRole('option', { name: 'Frontend → Web' }));
     await user.click(screen.getByLabelText('React.js'));
-    await user.click(screen.getByRole('button', { name: '保存并下一个' }));
+    await user.click(screen.getByRole('button', { name: 'Save and next' }));
     expect(decideSkillCandidate).toHaveBeenCalledWith('candidate-1', expect.objectContaining({
       action: 'create', category_code: 'frontend', technology_code: 'web', name: 'React', aliases: ['React.js'],
     }));
   });
 
+  it('keeps candidate review available when maintenance status fails', async () => {
+    fetchSkillMaintenanceStatus.mockRejectedValueOnce(new Error('Maintenance offline'));
+    render(<ClassificationBatchesPage />);
+    expect(await screen.findByText('Frontend Engineer')).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load maintenance status: Maintenance offline/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run maintenance now' })).toBeDisabled();
+    expect(screen.getByText('Jev recommends keeping this Candidate')).toBeInTheDocument();
+  });
+
   it('reports an unavailable taxonomy clearly', async () => {
     fetchCurrentSkillTree.mockResolvedValueOnce({ nodes: [] });
     render(<ClassificationBatchesPage />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('taxonomy 尚未就绪');
+    expect(await screen.findByRole('alert')).toHaveTextContent('taxonomy is not ready');
   });
 
   it('paginates the candidate queue instead of relying on page scrolling', async () => {
@@ -122,8 +131,8 @@ describe('ClassificationBatchesPage', () => {
       .mockResolvedValueOnce({ threshold: 10, total_count: 30, items: [candidate] })
       .mockResolvedValueOnce({ threshold: 10, total_count: 30, items: [{ ...candidate, id: 'candidate-2', canonical_raw_name: 'Python' }] });
     render(<ClassificationBatchesPage />);
-    expect(await screen.findByRole('button', { name: '下一页' })).toBeEnabled();
-    await user.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByRole('button', { name: 'Next page' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
     await waitFor(() => expect(fetchSkillCandidates).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 25, offset: 25 })));
     expect(await screen.findByRole('heading', { name: 'Python' })).toBeInTheDocument();
   });
@@ -131,7 +140,7 @@ describe('ClassificationBatchesPage', () => {
   it('runs a free maintenance eligibility path without treating it as approval', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-    await screen.findByRole('heading', { name: '待确认 Skill' });
+    await screen.findByRole('heading', { name: 'Skills to review' });
 
     await user.click(screen.getByRole('button', { name: 'Run maintenance now' }));
 
@@ -167,7 +176,7 @@ describe('ClassificationBatchesPage', () => {
   it('previews a free bounded historical backfill before queueing it', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-    await screen.findByRole('heading', { name: '待确认 Skill' });
+    await screen.findByRole('heading', { name: 'Skills to review' });
 
     await user.clear(screen.getByLabelText('Jev Skill backfill limit'));
     await user.type(screen.getByLabelText('Jev Skill backfill limit'), '12');

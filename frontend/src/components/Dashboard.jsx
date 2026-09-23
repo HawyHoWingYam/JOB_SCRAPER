@@ -162,7 +162,7 @@ export default function Dashboard({
         <div className="dashboard-header-copy">
           <h2>Command Center</h2>
           <p className="subtitle">
-            Scrape volume, enrichment coverage, and governed-skill health.
+            Review collected jobs, enrichment progress, and Skills that need attention.
           </p>
           <p className="dashboard-refresh-status" role="status">
             {isRefreshing

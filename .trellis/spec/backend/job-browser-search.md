@@ -154,3 +154,15 @@ void refreshFacetsForLatestScope(results.applied_scope);
 
 Do not put the facet request back inside the result-loading promise or enable
 stale selectors while that independent refresh is pending.
+
+## Laptop presentation and failed application
+
+- Job Browser places search/actions above a visible filter column and results.
+  At 1366×768 and 1440×900, a populated initial result row must be visible
+  without scrolling. Jev advisory controls must not precede the primary list.
+- Draft edits require explicit submission. Keep replace, refine, and edit
+  semantics distinct; an unapplied draft never changes the export scope.
+- A failed apply renders an accessible error alongside prior successful rows.
+  Keeping rows in state while an error conditional hides them is insufficient.
+- `frontend/e2e/usability.spec.js` verifies viewport geometry, explicit apply,
+  failed-apply row retention, and export availability against an isolated API.

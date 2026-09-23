@@ -13,16 +13,16 @@ import {
 import './ClassificationBatchesPage.css';
 
 const GENERIC_REASONS = [
-  ['general_capability', '通用能力'],
-  ['responsibility', '职责描述'],
-  ['job_attribute', '职位属性'],
-  ['not_a_skill', '非技能'],
+  ['general_capability', 'General capability'],
+  ['responsibility', 'Responsibility'],
+  ['job_attribute', 'Job attribute'],
+  ['not_a_skill', 'Not a skill'],
 ];
 const REJECTION_REASONS = [
-  ['noise', '噪声'],
-  ['parse_error', '解析错误'],
-  ['too_specific', '过于具体'],
-  ['inappropriate', '敏感或不适合'],
+  ['noise', 'Noise'],
+  ['parse_error', 'Parsing error'],
+  ['too_specific', 'Too specific'],
+  ['inappropriate', 'Sensitive or inappropriate'],
 ];
 
 function nodeLabel(node) {
@@ -30,15 +30,15 @@ function nodeLabel(node) {
 }
 
 function jevStatusLabel(item) {
-  if (!item?.jev) return '未经过 Jev';
+  if (!item?.jev) return 'Not evaluated by Jev';
   if (item.jev.status === 'answered') {
     const route = item.jev.decision?.route;
-    if (route === 'candidate') return 'Jev 建议保留 Candidate';
-    if (route === 'match_existing') return 'Jev 建议现有 Skill';
-    return 'Jev 已回答';
+    if (route === 'candidate') return 'Jev recommends keeping this Candidate';
+    if (route === 'match_existing') return 'Jev recommends an existing Skill';
+    return 'Jev evaluated';
   }
-  if (item.jev.status === 'unavailable') return 'Jev 暂不可用';
-  if (item.jev.status === 'invalid') return 'Jev 回答无效';
+  if (item.jev.status === 'unavailable') return 'Jev unavailable';
+  if (item.jev.status === 'invalid') return 'Invalid Jev response';
   return `Jev ${item.jev.status}`;
 }
 
@@ -60,7 +60,7 @@ function normalizedBackfillLimit(value) {
 
 function CandidateList({ candidates, selectedId, onSelect }) {
   return (
-    <div className="skill-review-list" role="listbox" aria-label="待确认 Skill">
+    <div className="skill-review-list" role="listbox" aria-label="Skills to review">
       {candidates.map((candidate) => (
         <button
           type="button"
@@ -72,7 +72,7 @@ function CandidateList({ candidates, selectedId, onSelect }) {
         >
           <span className="skill-review-list-copy">
             <strong>{candidate.canonical_raw_name}</strong>
-            <small>{Number(candidate.distinct_job_count).toLocaleString()} 份 Job</small>
+            <small>{Number(candidate.distinct_job_count).toLocaleString()} jobs</small>
           </span>
           <ChevronRight size={17} aria-hidden="true" />
         </button>
@@ -89,8 +89,9 @@ function MaintenancePanel({ payload, busy, feedback, onRun, onApprove }) {
       <div>
         <strong>Jev taxonomy maintenance</strong>
         <p>
-          {eligibility.eligible_count ?? 0} exceptions · starts at {eligibility.minimum_count ?? 50}
-          {eligibility.enabled ? '' : ' · disabled in Settings'}
+          {payload
+            ? `${eligibility.eligible_count ?? 0} exceptions · starts at ${eligibility.minimum_count ?? 50}${eligibility.enabled ? '' : ' · disabled in Settings'}`
+            : 'Maintenance status unavailable until loaded.'}
         </p>
         {batch && (
           <>
@@ -295,43 +296,43 @@ function ReviewPanel({ candidate, nodes, onResolved, onSkip, onClose }) {
   };
 
   return (
-    <aside className="skill-review-panel" aria-label={`${candidate.canonical_raw_name} 处理面板`}>
+    <aside className="skill-review-panel" aria-label={`${candidate.canonical_raw_name} review panel`}>
       <header className="skill-review-panel-header">
         <div>
-          <span className="skill-review-kicker">正在确认</span>
+          <span className="skill-review-kicker">Reviewing</span>
           <h2>{candidate.canonical_raw_name}</h2>
-          <p>{candidate.distinct_job_count} 份 Job · {candidate.occurrence_count} 次出现</p>
+          <p>{candidate.distinct_job_count} jobs · {candidate.occurrence_count} mentions</p>
         </div>
-        <button type="button" className="skill-review-icon-button" onClick={onClose} aria-label="关闭处理面板"><X size={18} /></button>
+        <button type="button" className="skill-review-icon-button" onClick={onClose} aria-label="Close review panel"><X size={18} /></button>
       </header>
 
       <section className="skill-review-section">
-        <div className="skill-review-section-title"><h3>代表性 evidence</h3><span>最多 {candidate.evidence?.length || 0} 条</span></div>
+        <div className="skill-review-section-title"><h3>Job evidence</h3><span>Up to {candidate.evidence?.length || 0} examples</span></div>
         <div className="skill-evidence-list">
           {(candidate.evidence || []).map((item) => (
             <div key={item.job_id} className="skill-evidence-row">
               <div className="skill-evidence-heading">
-                <strong>{item.title || '未命名 Job'}</strong>
+                <strong>{item.title || 'Untitled job'}</strong>
                 <small>{item.source_site}</small>
               </div>
               {item.evidence_excerpt && <p>{item.evidence_excerpt}</p>}
               <div className="skill-evidence-jev">
                 <span>{jevStatusLabel(item)}</span>
                 {item.jev?.decision?.confidence != null && (
-                  <small>置信 {Math.round(item.jev.decision.confidence * 100)}%</small>
+                  <small>Confidence {Math.round(item.jev.decision.confidence * 100)}%</small>
                 )}
                 {item.jev?.model && <small>{item.jev.model}</small>}
                 {item.jev?.request_id && <small>receipt {item.jev.request_id}</small>}
               </div>
             </div>
           ))}
-          {!candidate.evidence?.length && <p className="skill-review-muted">暂无可展示的 Job evidence。</p>}
+          {!candidate.evidence?.length && <p className="skill-review-muted">No job evidence is available.</p>}
         </div>
-        {variants.length > 0 && <p className="skill-review-variants">原始写法：{variants.join('、')}</p>}
+        {variants.length > 0 && <p className="skill-review-variants">Original terms: {variants.join(', ')}</p>}
       </section>
 
       <section className="skill-review-section">
-        <div className="skill-review-section-title"><h3>推荐已有 Skill</h3><span>最多 {candidate.recommendations?.length || 0} 个</span></div>
+        <div className="skill-review-section-title"><h3>Suggested existing Skills</h3><span>Up to {candidate.recommendations?.length || 0} matches</span></div>
         <div className="skill-recommendation-list">
           {(candidate.recommendations || []).map((item) => (
             <button type="button" key={item.code} className={`skill-recommendation ${skillCode === item.code ? 'selected' : ''}`} onClick={() => chooseMatch(item.code)}>
@@ -339,11 +340,11 @@ function ReviewPanel({ candidate, nodes, onResolved, onSkip, onClose }) {
               <span className="skill-match-score">{Math.round(item.score * 100)}%</span>
             </button>
           ))}
-          {!candidate.recommendations?.length && <p className="skill-review-muted">没有足够相似的已有 Skill。</p>}
+          {!candidate.recommendations?.length && <p className="skill-review-muted">No sufficiently similar Skill was found.</p>}
         </div>
         <SearchableOptionList
-          label="搜索全部已有 Skill"
-          placeholder="输入名称或关键词…"
+          label="Search all existing Skills"
+          placeholder="Enter a name or keyword…"
           options={skills}
           value={skillCode}
           onChange={chooseMatch}
@@ -356,33 +357,33 @@ function ReviewPanel({ candidate, nodes, onResolved, onSkip, onClose }) {
       </section>
 
       <section className="skill-review-section">
-        <h3>其他处理方式</h3>
-        <div className="skill-action-tabs" role="group" aria-label="处理方式">
-          <button type="button" aria-pressed={action === 'create'} onClick={() => setAction('create')}>创建新 Skill</button>
-          <button type="button" aria-pressed={action === 'generic'} onClick={() => { setAction('generic'); setReason(''); }}>通用词</button>
-          <button type="button" aria-pressed={action === 'reject'} onClick={() => { setAction('reject'); setReason(''); }}>拒绝</button>
+        <h3>Other decisions</h3>
+        <div className="skill-action-tabs" role="group" aria-label="Decision">
+          <button type="button" aria-pressed={action === 'create'} onClick={() => setAction('create')}>Create new Skill</button>
+          <button type="button" aria-pressed={action === 'generic'} onClick={() => { setAction('generic'); setReason(''); }}>Generic term</button>
+          <button type="button" aria-pressed={action === 'reject'} onClick={() => { setAction('reject'); setReason(''); }}>Reject</button>
         </div>
 
         {action === 'create' && (
           <div className="skill-review-form-stack">
-            <SearchableOptionList label="已有 Category → Technology" placeholder="搜索父级路径…" options={technologies} value={technologyCode} onChange={setTechnologyCode} renderOption={(technology) => `${nodeLabel(byCode[technology.parent_code])} → ${nodeLabel(technology)}`} />
-            <label className="skill-review-field"><span>新 Skill 名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-            <fieldset className="skill-alias-fieldset"><legend>确认 Alias</legend>{variants.filter((variant) => variant !== name).map((variant) => <label key={variant}><input type="checkbox" checked={aliases.includes(variant)} onChange={(event) => setAliases((current) => event.target.checked ? [...current, variant] : current.filter((item) => item !== variant))} />{variant}</label>)}</fieldset>
+            <SearchableOptionList label="Existing Category → Technology" placeholder="Search parent path…" options={technologies} value={technologyCode} onChange={setTechnologyCode} renderOption={(technology) => `${nodeLabel(byCode[technology.parent_code])} → ${nodeLabel(technology)}`} />
+            <label className="skill-review-field"><span>New Skill name</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
+            <fieldset className="skill-alias-fieldset"><legend>Confirm aliases</legend>{variants.filter((variant) => variant !== name).map((variant) => <label key={variant}><input type="checkbox" checked={aliases.includes(variant)} onChange={(event) => setAliases((current) => event.target.checked ? [...current, variant] : current.filter((item) => item !== variant))} />{variant}</label>)}</fieldset>
           </div>
         )}
 
         {(action === 'generic' || action === 'reject') && (
           <div className="skill-review-form-stack">
-            <label className="skill-review-field"><span>原因</span><select value={reason} onChange={(event) => setReason(event.target.value)}><option value="">请选择</option>{(action === 'generic' ? GENERIC_REASONS : REJECTION_REASONS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            <label className="skill-review-field"><span>备注（可选）</span><textarea value={note} maxLength={500} onChange={(event) => setNote(event.target.value)} /></label>
+            <label className="skill-review-field"><span>Reason</span><select value={reason} onChange={(event) => setReason(event.target.value)}><option value="">Choose a reason</option>{(action === 'generic' ? GENERIC_REASONS : REJECTION_REASONS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="skill-review-field"><span>Notes (optional)</span><textarea value={note} maxLength={500} onChange={(event) => setNote(event.target.value)} /></label>
           </div>
         )}
       </section>
 
       {error && <p className="skill-candidate-error" role="alert">{error}</p>}
       <footer className="skill-review-panel-footer">
-        <button type="button" className="skill-review-secondary" onClick={onSkip}><SkipForward size={16} />跳过</button>
-        <button type="button" className="skill-review-primary" onClick={submit} disabled={!valid || saving}><Check size={16} />{saving ? '保存中…' : '保存并下一个'}</button>
+        <button type="button" className="skill-review-secondary" onClick={onSkip}><SkipForward size={16} />Skip</button>
+        <button type="button" className="skill-review-primary" onClick={submit} disabled={!valid || saving}><Check size={16} />{saving ? 'Saving…' : 'Save and next'}</button>
       </footer>
     </aside>
   );
@@ -407,16 +408,20 @@ export default function ClassificationBatchesPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    Promise.all([fetchSkillCandidates({ limit: pageSize, offset: page * pageSize, signal: controller.signal }), fetchCurrentSkillTree({ signal: controller.signal }), fetchSkillMaintenanceStatus({ signal: controller.signal })])
-      .then(([candidates, tree, maintenancePayload]) => {
+    setLoading(true);
+    fetchSkillMaintenanceStatus({ signal: controller.signal })
+      .then((value) => { if (!controller.signal.aborted) { setMaintenance(value); setMaintenanceFeedback(''); } })
+      .catch((nextError) => { if (!controller.signal.aborted) { setMaintenance(null); setMaintenanceFeedback(`Could not load maintenance status: ${nextError.message}. Candidate review remains available.`); } });
+    Promise.all([fetchSkillCandidates({ limit: pageSize, offset: page * pageSize, signal: controller.signal }), fetchCurrentSkillTree({ signal: controller.signal })])
+      .then(([candidates, tree]) => {
+        if (controller.signal.aborted) return;
         setPayload(candidates);
         setNodes(tree.nodes || []);
-        setMaintenance(maintenancePayload);
         setSelectedId(candidates.items?.[0]?.id || null);
         setError('');
       })
-      .catch((nextError) => { if (nextError?.name !== 'AbortError') setError(nextError?.message || '无法加载 Skill Candidate。'); })
-      .finally(() => setLoading(false));
+      .catch((nextError) => { if (!controller.signal.aborted) setError(nextError?.message || 'Unable to load Skill Candidates.'); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [page]);
 
@@ -529,8 +534,8 @@ export default function ClassificationBatchesPage() {
   return (
     <section className="classification-page">
       <header className="classification-header">
-        <div><p className="eyebrow">JOB INTELLIGENCE</p><h1>待确认 Skill</h1><p>只显示出现在至少 {payload?.threshold ?? 10} 份 Job、仍需要人工判断的新词。每页 {pageSize} 条。</p></div>
-        <div className="skill-review-progress"><strong>{items.length}</strong><span>待确认</span></div>
+        <div><p className="eyebrow">JOB INTELLIGENCE</p><h1>Skills to review</h1><p>Review new terms found in at least {payload?.threshold ?? 10} jobs. Showing up to {pageSize} Candidates per page.</p></div>
+        <div className="skill-review-progress"><strong>{items.length}</strong><span>Awaiting review</span></div>
       </header>
 
       <MaintenancePanel
@@ -551,22 +556,22 @@ export default function ClassificationBatchesPage() {
         onStart={startBackfill}
       />
 
-      {loading && <p>加载中…</p>}
+      {loading && <p>Loading…</p>}
       {error && <p role="alert" className="skill-candidate-error">{error}</p>}
-      {!loading && !error && nodes.length === 0 && <p role="alert" className="skill-candidate-error">Skill taxonomy 尚未就绪，暂时无法确认 Candidate。</p>}
-      {!loading && !error && nodes.length > 0 && items.length === 0 && <p className="classification-empty">目前没有需要确认的 Skill。</p>}
+      {!loading && !error && nodes.length === 0 && <p role="alert" className="skill-candidate-error">The Skill taxonomy is not ready. Candidate review is unavailable.</p>}
+      {!loading && !error && nodes.length > 0 && items.length === 0 && <p className="classification-empty">There are no Skills to review.</p>}
 
       {!loading && !error && items.length > 0 && (
         <div className="skill-review-workspace">
           <section className="skill-review-sidebar">
-            <div className="skill-review-search"><Search size={17} /><input aria-label="搜索 Candidate" placeholder="搜索 Candidate" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-            <div className="skill-review-nav"><span>{filtered.length} / {payload?.total_count ?? items.length} 项</span><div><button type="button" onClick={() => move(-1)} aria-label="上一个 Candidate"><ArrowUp size={15} /></button><button type="button" onClick={() => move(1)} aria-label="下一个 Candidate"><ArrowDown size={15} /></button></div></div>
+            <div className="skill-review-search"><Search size={17} /><input aria-label="Search Candidates" placeholder="Search Candidates" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+            <div className="skill-review-nav"><span>{filtered.length} / {payload?.total_count ?? items.length} Candidates</span><div><button type="button" onClick={() => move(-1)} aria-label="Previous Candidate"><ArrowUp size={15} /></button><button type="button" onClick={() => move(1)} aria-label="Next Candidate"><ArrowDown size={15} /></button></div></div>
             <CandidateList candidates={filtered} selectedId={selectedId} onSelect={setSelectedId} />
           </section>
-          {selected ? <ReviewPanel candidate={selected} nodes={nodes} onResolved={removeResolved} onSkip={() => move(1)} onClose={() => setSelectedId(null)} /> : <div className="skill-review-placeholder"><p>选择一个 Candidate 开始确认。</p></div>}
+          {selected ? <ReviewPanel candidate={selected} nodes={nodes} onResolved={removeResolved} onSkip={() => move(1)} onClose={() => setSelectedId(null)} /> : <div className="skill-review-placeholder"><p>Select a Candidate to review its evidence and choose a decision.</p></div>}
         </div>
       )}
-      {!loading && !error && totalPages > 1 && <nav className="skill-review-pagination" aria-label="Candidate 分页"><button type="button" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>上一页</button><span>第 {page + 1} / {totalPages} 页</span><button type="button" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>下一页</button></nav>}
+      {!loading && !error && totalPages > 1 && <nav className="skill-review-pagination" aria-label="Candidate pages"><button type="button" disabled={page === 0} onClick={() => setPage((current) => current - 1)}>Previous page</button><span>Page {page + 1} / {totalPages}</span><button type="button" disabled={page + 1 >= totalPages} onClick={() => setPage((current) => current + 1)}>Next page</button></nav>}
     </section>
   );
 }

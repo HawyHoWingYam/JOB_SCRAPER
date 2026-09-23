@@ -157,7 +157,7 @@ function CompaniesPage() {
           <p className="companies-eyebrow">Company Intelligence</p>
           <h2>Companies</h2>
           <p className="companies-subtitle">
-            Company rows, AI description coverage, and the global generation queue.
+            Find companies, review their descriptions, and generate missing company information.
           </p>
 
           <div className="companies-hero-stats">

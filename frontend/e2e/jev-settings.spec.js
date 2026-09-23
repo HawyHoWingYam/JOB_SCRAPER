@@ -62,7 +62,7 @@ test("runs Jev Skill maintenance in the web UI and aggregate-approves a new Skil
 }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Classification" }).click();
-  await expect(page.getByRole("heading", { name: "待确认 Skill" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Skills to review" })).toBeVisible();
   await expect(page.getByText("NovelDB", { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/1 exceptions · starts at 1/)).toBeVisible();
 
@@ -80,7 +80,7 @@ test("runs Jev Skill maintenance in the web UI and aggregate-approves a new Skil
 
   await page.getByRole("button", { name: "Approve proposed Skills" }).click();
   await expect(page.getByText(/Latest: applied/)).toBeVisible();
-  await expect(page.getByText("目前没有需要确认的 Skill。")).toBeVisible();
+  await expect(page.getByText("There are no Skills to review.")).toBeVisible();
 
   const treeResponse = await request.get(
     "http://127.0.0.1:18001/api/job-intelligence/skills/tree",

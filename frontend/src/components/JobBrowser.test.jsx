@@ -756,7 +756,7 @@ describe('JobBrowser governed filters', () => {
     render(<JobBrowser />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'System Error: Search service offline',
+      'Could not update results: Search service offline',
     );
   });
 

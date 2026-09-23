@@ -290,7 +290,7 @@ describe('AIEnrichmentPage', () => {
     render(<AIEnrichmentPage />);
 
     const card = within((await screen.findAllByTestId('run-monitor-card'))[0]);
-    expect(card.getByText('completed_with_exclusions')).toBeInTheDocument();
+    expect(card.getByText('completed with exclusions')).toBeInTheDocument();
     expect(card.getAllByText('Excluded 2')).toHaveLength(2);
     expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
     expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();

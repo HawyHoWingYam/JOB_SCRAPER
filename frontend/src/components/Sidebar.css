@@ -1,5 +1,5 @@
 .sidebar {
-    width: 268px;
+    width: 228px;
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -44,8 +44,8 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
-    padding: var(--space-4) var(--space-3);
+    gap: 2px;
+    padding: 10px var(--space-3);
     overflow-y: auto;
 }
 
@@ -201,4 +201,15 @@
         justify-content: center;
         padding: 0;
     }
+}
+
+.nav-group-heading {
+    margin: 8px 12px 2px;
+    color: var(--color-text-muted);
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+@media (max-width: 900px) {
+    .nav-group-heading { display: none; }
 }

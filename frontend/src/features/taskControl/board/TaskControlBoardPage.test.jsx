@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -120,7 +120,11 @@ describe('TaskControlBoardPage', () => {
     api.dismissFailedRunAttention.mockResolvedValue({ replayed: false });
 
     render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
-    await user.click(await screen.findByRole('button', { name: 'Dismiss' }));
+    await screen.findByRole('button', { name: 'Dismiss' });
+    const failureCard = within(screen.getByRole('button', { name: 'Dismiss' }).closest('article'));
+    expect(failureCard.getAllByRole('button', { name: 'View task', exact: true })).toHaveLength(1);
+    expect(failureCard.getByRole('button', { name: 'View logs' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
 
     await waitFor(() => expect(api.dismissFailedRunAttention).toHaveBeenCalledWith('failed-task', 7));
     await waitFor(() => expect(api.getTaskControlBoard.mock.calls.length).toBeGreaterThan(1));

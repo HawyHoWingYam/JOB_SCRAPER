@@ -97,7 +97,7 @@ function downloadBlob(blob, filename) {
 
 function formatPendingChangesLabel(count) {
     if (!count) {
-        return 'No refinements armed';
+        return 'All jobs' ;
     }
 
     return `${count} pending change${count === 1 ? '' : 's'} armed`;
@@ -709,9 +709,9 @@ function JobBrowser({
                 <section className="query-console glass-panel">
                     <div className="query-console-top">
                         <div className="query-console-copy">
-                            <p className="console-eyebrow">Query Console</p>
-                            <h2>Data Explorer</h2>
-                            <p className="subtitle">Captured listings, active filters, retrieval mode, and export state.</p>
+                            <p className="console-eyebrow">Find opportunities</p>
+                            <h2>Job Browser</h2>
+                            <p className="subtitle">Choose your search and filters, then apply them to see matching jobs.</p>
                         </div>
 
                         <div className="query-console-status">
@@ -732,7 +732,7 @@ function JobBrowser({
                                 {hasPendingChanges
                                     ? formatPendingChangesLabel(pendingChangeCount)
                                     : activeScope.layers.length === 0
-                                        ? 'No refinements armed'
+                                        ? 'All jobs'
                                         : `${activeScope.layers.length} applied layers`}
                             </span>
                         </div>
@@ -767,7 +767,7 @@ function JobBrowser({
                                 <option value="semantic" disabled={!semanticAvailable}>Semantic</option>
                             </select>
                             <p className="query-mode-note">
-                                Current retrieval profile for the submitted search scope.
+                                Lexical matches words; semantic matches meaning; hybrid combines both.
                             </p>
                         </div>
 
@@ -817,6 +817,30 @@ function JobBrowser({
                             <p className="filter-validation-message query-validation-message">{searchError}</p>
                         )}
 
+                    </div>
+                </section>
+
+                <FilterPanel
+                    filters={draftLayer.structured_filters}
+                    onFilterChange={handleFilterChange}
+                    onReset={handleResetDraft}
+                    onDatePresetChange={handleDatePresetChange}
+                    filterOptions={filterOptions}
+                    isLoading={isLoading}
+                    isFacetsLoading={isFacetsLoading}
+                    facetsError={facetsError}
+                    onRetryFacets={() => {
+                        void fetchFacets({
+                            scope: activeScope,
+                            retrievalMode,
+                        });
+                    }}
+                    datePreset={draftDatePreset}
+                    validationError={dateValidationError}
+                    pendingChangeCount={pendingChangeCount}
+                />
+            <div className="job-results-area">
+                <div className="browser-result-toolbar">
                         <div className="query-console-results">
                             <div>
                                 <span className="query-console-results-label">Matched jobs</span>
@@ -840,96 +864,13 @@ function JobBrowser({
                         </div>
 
                         {hasPendingChanges && (
-                            <p className="query-export-note">Export uses current results, not pending edits.</p>
+                            <p className="query-export-note" role="status">Unapplied changes. Export uses current results, not pending edits.</p>
                         )}
                         {exportError && (
                             <p className="filter-validation-message query-validation-message">{exportError}</p>
                         )}
-                    </div>
-                </section>
+                </div>
 
-                <FilterPanel
-                    filters={draftLayer.structured_filters}
-                    onFilterChange={handleFilterChange}
-                    onReset={handleResetDraft}
-                    onDatePresetChange={handleDatePresetChange}
-                    filterOptions={filterOptions}
-                    isLoading={isLoading}
-                    isFacetsLoading={isFacetsLoading}
-                    facetsError={facetsError}
-                    onRetryFacets={() => {
-                        void fetchFacets({
-                            scope: activeScope,
-                            retrievalMode,
-                        });
-                    }}
-                    datePreset={draftDatePreset}
-                    validationError={dateValidationError}
-                    pendingChangeCount={pendingChangeCount}
-                />
-            </div>
-
-            <div className="job-results-area">
-                <section
-                    className="scope-trail glass-panel"
-                    aria-label="Jev search relevance advisory"
-                >
-                    <div className="scope-trail-header">
-                        <div>
-                            <h3>Jev search relevance</h3>
-                            <p>
-                                Preview freezes a bounded lexical prefix for free.
-                                Jev may reorder that prefix only; membership, totals,
-                                filters, paging, facets, and CSV export stay unchanged.
-                            </p>
-                        </div>
-                        <div className="scope-trail-actions">
-                            <button
-                                type="button"
-                                className="scope-remove-btn"
-                                onClick={handleSearchRerankPreview}
-                                disabled={searchRerankPending !== null || pagination.total === 0 || retrievalMode !== 'lexical'}
-                            >
-                                Preview rerank candidates
-                            </button>
-                            <button
-                                type="button"
-                                className="scope-remove-btn"
-                                onClick={handleSearchRerankEvaluate}
-                                disabled={searchRerankPending !== null || !searchRerank?.preview?.enabled || !searchRerank?.preview?.selected_count}
-                            >
-                                Evaluate with Jev
-                            </button>
-                        </div>
-                    </div>
-                    {retrievalMode !== 'lexical' && (
-                        <p>Jev reranking currently supports lexical search only.</p>
-                    )}
-                    {searchRerank?.preview && (
-                        <p role="status">
-                            Free database preview: {searchRerank.preview.selected_count} selected / {searchRerank.preview.eligible_count} eligible. Candidate membership is frozen. No Jev request was sent.
-                        </p>
-                    )}
-                    {searchRerank?.preview && !searchRerank.preview.enabled && (
-                        <p>Search reranking is disabled in Settings.</p>
-                    )}
-                    {searchRerankError && <p role="alert">{searchRerankError}</p>}
-                    {searchRerank?.evaluation && (
-                        <div data-testid="jev-search-rerank-receipt">
-                            <p>
-                                <strong>Latest:</strong> {searchRerank.evaluation.status}
-                                {searchRerank.evaluation.request_id && ` · receipt ${searchRerank.evaluation.request_id}`}
-                                {searchRerank.evaluation.provider && ` · ${searchRerank.evaluation.provider}`}
-                                {searchRerank.evaluation.cost_usd != null && ` · cost USD ${Number(searchRerank.evaluation.cost_usd).toFixed(5)}`}
-                            </p>
-                            {searchRerank.evaluation.status !== 'completed' && (
-                                <p data-testid="jev-search-rerank-fallback">
-                                    Fallback: baseline order retained; no candidate was added or removed.
-                                </p>
-                            )}
-                        </div>
-                    )}
-                </section>
                 {activeScope.layers.length > 0 && (
                     <section
                         className="scope-trail glass-panel"
@@ -992,26 +933,27 @@ function JobBrowser({
                     </section>
                 )}
 
-                {error ? (
+                {error && (
                     <div className="error-message glass-panel" role="alert">
-                        System Error: {error}
+                        Could not update results: {error}
                     </div>
-                ) : isLoading ? (
+                )}
+                {isLoading ? (
                     <div className="loading-state" role="status" aria-live="polite">
                         <Activity className="spinner" size={32} aria-hidden="true" />
                         <p>Querying jobs…</p>
                     </div>
-                ) : jobs.length === 0 ? (
+                ) : jobs.length === 0 && !error ? (
                     <div className="no-results glass-panel" role="status" aria-live="polite">
                         <BrainCircuit size={48} className="empty-icon" aria-hidden="true" />
                         <h3>No Jobs Found</h3>
-                        <p>Adjust your parameters to broaden the search.</p>
+                        <p>Try a broader search or remove an applied filter.</p>
                     </div>
-                ) : (
+                ) : jobs.length > 0 ? (
                     <>
                         <div className="results-summary-bar glass-panel">
                             <div>
-                                <span className="results-summary-label">Live slice</span>
+                                <span className="results-summary-label">Showing</span>
                                 <strong>{jobs.length} jobs on this page</strong>
                             </div>
                             <div>
@@ -1081,7 +1023,69 @@ function JobBrowser({
                             hideWhenSinglePage
                         />
                     </>
-                )}
+                ) : null}
+                <section
+                    className="scope-trail glass-panel"
+                    aria-label="Jev search relevance advisory"
+                >
+                    <div className="scope-trail-header">
+                        <div>
+                            <h3>Jev search relevance</h3>
+                            <p>
+                                Preview freezes a bounded lexical prefix for free.
+                                Jev may reorder that prefix only; membership, totals,
+                                filters, paging, facets, and CSV export stay unchanged.
+                            </p>
+                        </div>
+                        <div className="scope-trail-actions">
+                            <button
+                                type="button"
+                                className="scope-remove-btn"
+                                onClick={handleSearchRerankPreview}
+                                disabled={searchRerankPending !== null || pagination.total === 0 || retrievalMode !== 'lexical'}
+                            >
+                                Preview rerank candidates
+                            </button>
+                            <button
+                                type="button"
+                                className="scope-remove-btn"
+                                onClick={handleSearchRerankEvaluate}
+                                disabled={searchRerankPending !== null || !searchRerank?.preview?.enabled || !searchRerank?.preview?.selected_count}
+                            >
+                                Evaluate with Jev
+                            </button>
+                        </div>
+                    </div>
+                    {retrievalMode !== 'lexical' && (
+                        <p>Jev reranking currently supports lexical search only.</p>
+                    )}
+                    {searchRerank?.preview && (
+                        <p role="status">
+                            Free database preview: {searchRerank.preview.selected_count} selected / {searchRerank.preview.eligible_count} eligible. Candidate membership is frozen. No Jev request was sent.
+                        </p>
+                    )}
+                    {searchRerank?.preview && !searchRerank.preview.enabled && (
+                        <p>Search reranking is disabled in Settings.</p>
+                    )}
+                    {searchRerankError && <p role="alert">{searchRerankError}</p>}
+                    {searchRerank?.evaluation && (
+                        <div data-testid="jev-search-rerank-receipt">
+                            <p>
+                                <strong>Latest:</strong> {searchRerank.evaluation.status}
+                                {searchRerank.evaluation.request_id && ` · receipt ${searchRerank.evaluation.request_id}`}
+                                {searchRerank.evaluation.provider && ` · ${searchRerank.evaluation.provider}`}
+                                {searchRerank.evaluation.cost_usd != null && ` · cost USD ${Number(searchRerank.evaluation.cost_usd).toFixed(5)}`}
+                            </p>
+                            {searchRerank.evaluation.status !== 'completed' && (
+                                <p data-testid="jev-search-rerank-fallback">
+                                    Fallback: baseline order retained; no candidate was added or removed.
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </section>
+            </div>
+
             </div>
 
             {selectedJobId && (

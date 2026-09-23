@@ -5,14 +5,14 @@ import './Sidebar.css';
 const Sidebar = ({ activeView, setActiveView }) => {
     const navItems = [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'jobs', label: 'Job Browser', icon: Briefcase },
+        { group: 'Data', id: 'jobs', label: 'Job Browser', icon: Briefcase },
         { id: 'add-job', label: 'Add Job', icon: PlusCircle },
         { id: 'companies', label: 'Companies', icon: Building2 },
-        { id: 'ai', label: 'AI Enrichment', icon: BrainCircuit },
-        { id: 'classification', label: 'Classification', icon: ListTree },
-        { id: 'offertoday-keywords', label: 'OfferToday Keywords', icon: ListTree },
-        { id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
+        { group: 'Collection', id: 'scheduler', label: 'Scheduler', icon: CalendarClock },
         { id: 'crawl-tasks', label: 'Crawl Tasks', icon: ListTree },
+        { id: 'offertoday-keywords', label: 'OfferToday Keywords', icon: ListTree },
+        { group: 'Processing', id: 'ai', label: 'AI Enrichment', icon: BrainCircuit },
+        { id: 'classification', label: 'Classification', icon: ListTree },
     ];
 
     return (
@@ -25,21 +25,25 @@ const Sidebar = ({ activeView, setActiveView }) => {
                 <div className="logo-subtitle">Crawler operations console</div>
             </div>
 
-            <nav className="sidebar-nav">
+            <nav className="sidebar-nav" aria-label="Main navigation">
                 {navItems.map((item) => {
                     const Icon = item.icon;
                     const isActive = activeView === item.id;
                     return (
-                        <button
-                            key={item.id}
-                            className={`nav-item ${isActive ? 'active' : ''}`}
-                            onClick={() => setActiveView(item.id)}
-                            aria-label={item.label}
-                        >
-                            <Icon size={20} className="nav-icon" />
-                            <span>{item.label}</span>
-                            {isActive && <div className="active-indicator" />}
-                        </button>
+                        <React.Fragment key={item.id}>
+                            {item.group && <h2 className="nav-group-heading">{item.group}</h2>}
+                            <button
+                                type="button"
+                                aria-current={isActive ? 'page' : undefined}
+                                className={`nav-item ${isActive ? 'active' : ''}`}
+                                onClick={() => setActiveView(item.id)}
+                                aria-label={item.label}
+                            >
+                                <Icon size={20} className="nav-icon" />
+                                <span>{item.label}</span>
+                                {isActive && <div className="active-indicator" />}
+                            </button>
+                        </React.Fragment>
                     );
                 })}
             </nav>

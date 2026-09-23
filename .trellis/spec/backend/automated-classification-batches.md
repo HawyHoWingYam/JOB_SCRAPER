@@ -94,3 +94,13 @@ onCandidateLoaded(candidate).then(() => decideSkillCandidate(candidate.id, {
 operatorClickRecommendation(candidate.recommendations[0]);
 submitDecisionOnlyAfterExplicitConfirmation();
 ```
+
+## Independent maintenance availability
+
+Candidate/Skill-tree reads and maintenance-status reads have separate failure
+boundaries in `ClassificationBatchesPage`. A maintenance outage must not hide
+successfully loaded Candidates or their evidence. Show a maintenance-local
+message, disable maintenance dispatch when eligibility is unavailable, and
+never turn missing status into a claim that maintenance is disabled in Settings.
+Aborted requests may not update state after a route/page change. The component
+regression test rejects maintenance while asserting evidence remains visible.
