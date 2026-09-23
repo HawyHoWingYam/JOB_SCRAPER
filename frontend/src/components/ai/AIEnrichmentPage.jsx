@@ -1,3 +1,4 @@
+import { buildSettingsRoute } from '../settings/settingsRoute';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -11,8 +12,10 @@ import {
   Sparkles,
   Square,
 } from 'lucide-react';
+import { buildCrawlTaskRoute } from '../../features/taskControl/board/boardRoute';
 import { apiPath } from '../../api/base';
 import { formatControlDateTime } from '../../features/taskControl/shared/controlTime';
+import AIEnrichmentHistory from './AIEnrichmentHistory';
 import '../Dashboard.css';
 import './AIEnrichmentPage.css';
 
@@ -352,7 +355,11 @@ export default function AIEnrichmentPage() {
   const [filterHierarchy, setFilterHierarchy] = useState([]);
   const [filterOptionsError, setFilterOptionsError] = useState(null);
   const [allPendingAcknowledged, setAllPendingAcknowledged] = useState(false);
-  const [preview, setPreview] = useState(null);
+  const [previewSnapshot, setPreview] = useState(null);
+  const [filterRevision, setFilterRevision] = useState(0);
+  const [filterOptionsLoading, setFilterOptionsLoading] = useState(true);
+  const [actionRunId, setActionRunId] = useState(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -396,9 +403,12 @@ export default function AIEnrichmentPage() {
   const activeRun = monitorSlots.find((run) => isActiveRun(run)) || null;
   const ordinaryFiltersSelected = hasOrdinaryFilters(filters);
   const normalizedLimit = Math.min(5000, Math.max(1, Number(pendingLimit) || 1));
+  const previewSignature = JSON.stringify([filters, normalizedLimit, allPendingAcknowledged]);
+  const preview = previewSnapshot?.requestSignature === previewSignature ? previewSnapshot : null;
   const canPreview = ordinaryFiltersSelected || allPendingAcknowledged;
-  const canLaunch = !submitting
+  const canLaunch = canPreview && !submitting
     && !activeRun
+    && overviewActiveRunsCount === 0
     && !previewLoading
     && !previewError
     && Number(preview?.effective_item_count || 0) > 0;
@@ -456,6 +466,8 @@ export default function AIEnrichmentPage() {
 
   useEffect(() => {
     let cancelled = false;
+    setFilterOptionsLoading(true);
+    setFilterOptionsError(null);
     fetch(apiPath('/ai/pending/filter-options'))
       .then((response) => {
         if (!response.ok) {
@@ -466,17 +478,19 @@ export default function AIEnrichmentPage() {
       .then((payload) => {
         if (!cancelled) {
           setFilterHierarchy(Array.isArray(payload.sources) ? payload.sources : []);
+          setFilterOptionsLoading(false);
         }
       })
       .catch((error) => {
         if (!cancelled) {
           setFilterOptionsError(error.message);
+          setFilterOptionsLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [filterRevision]);
 
   useEffect(() => {
     previewControllerRef.current?.abort();
@@ -512,7 +526,7 @@ export default function AIEnrichmentPage() {
         }
         const payload = await response.json();
         if (!controller.signal.aborted) {
-          setPreview(payload);
+          setPreview({ ...payload, requestSignature: previewSignature });
           setPreviewLoading(false);
         }
       } catch (error) {
@@ -527,7 +541,7 @@ export default function AIEnrichmentPage() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [allPendingAcknowledged, canPreview, filters, normalizedLimit]);
+  }, [allPendingAcknowledged, canPreview, filters, normalizedLimit, previewSignature]);
 
   useEffect(() => {
     if (typeof document === 'undefined') {
@@ -712,6 +726,7 @@ export default function AIEnrichmentPage() {
   }, [fetchAIConsole, hasConsoleData, isPageVisible, loading, shouldPollRuns]);
 
   async function runPendingEnrichment() {
+    if (!canLaunch) return;
     if (!ordinaryFiltersSelected && !allPendingAcknowledged) {
       setActionError('Select at least one filter or acknowledge all pending jobs.');
       return;
@@ -725,6 +740,7 @@ export default function AIEnrichmentPage() {
       setActionError(null);
       setActionErrorNeedsSettings(false);
       setActionMessage(null);
+      setActionRunId(null);
       setPendingLimit(String(normalizedLimit));
 
       const response = await fetch(apiPath('/ai/runs'), {
@@ -759,16 +775,17 @@ export default function AIEnrichmentPage() {
 
       setAllPendingAcknowledged(false);
       const payload = await response.json();
-      const excludedCount = Number(payload?.excluded_items || preview?.excluded_item_count || 0);
-      const selectedCount = Number(payload?.total_items || preview?.selected_item_count || normalizedLimit);
-      const effectiveCount = Number(
-        preview?.effective_item_count ?? Math.max(selectedCount - excludedCount, 0),
-      );
+      const excludedCount = Number(payload?.excluded_items ?? 0);
+      const selectedCount = Number(payload?.total_items ?? 0);
+      const effectiveCount = Math.max(selectedCount - excludedCount, 0);
+      setActionRunId(payload.id || null);
+      if (payload.id) setRuns(current => [payload, ...current.filter(run => run.id !== payload.id)]);
       setActionMessage(
         excludedCount > 0
           ? `Filtered run submitted for ${effectiveCount.toLocaleString()} jobs; ${excludedCount.toLocaleString()} excluded by taxonomy.`
           : `Filtered run submitted for ${effectiveCount.toLocaleString()} jobs.`,
       );
+      setHistoryRevision(value => value + 1);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -788,6 +805,7 @@ export default function AIEnrichmentPage() {
       setActionError(null);
       setActionErrorNeedsSettings(false);
       setActionMessage(null);
+      setActionRunId(null);
 
       const response = await fetch(apiPath('/ai/runs/' + run.id + '/retry-failed'), {
         method: 'POST',
@@ -797,7 +815,11 @@ export default function AIEnrichmentPage() {
         throw new Error(`Retry request failed with ${response.status}`);
       }
 
+      const retry = await response.json();
+      setActionRunId(retry.id || null);
+      if (retry.id) setRuns(current => [retry, ...current.filter(run => run.id !== retry.id)]);
       setActionMessage(`Retry run created from ${run.id}.`);
+      setHistoryRevision(value => value + 1);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -813,6 +835,7 @@ export default function AIEnrichmentPage() {
       setActionError(null);
       setActionErrorNeedsSettings(false);
       setActionMessage(null);
+      setActionRunId(null);
       const response = await fetch(apiPath(`/ai/runs/${run.id}/resume-cancelled-backfill`), {
         method: 'POST',
       });
@@ -820,7 +843,10 @@ export default function AIEnrichmentPage() {
         throw new Error(`Resume request failed with ${response.status}`);
       }
       const continuation = await response.json();
+      setActionRunId(continuation.id || null);
+      if (continuation.id) setRuns(current => [continuation, ...current.filter(run => run.id !== continuation.id)]);
       setActionMessage(`Resumed cancelled backfill ${run.id} as ${continuation.id}.`);
+      setHistoryRevision(value => value + 1);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
@@ -841,7 +867,11 @@ export default function AIEnrichmentPage() {
       if (!response.ok) {
         throw new Error(`Stop request failed with ${response.status}`);
       }
+      const stopped = await response.json();
+      if (stopped.id) setRuns(current => current.map(item => item.id === stopped.id ? stopped : item));
+      setActionRunId(run.id);
       setActionMessage(`Stop requested for ${run.id}.`);
+      setHistoryRevision(value => value + 1);
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (error) {
       setActionError(error.message);
@@ -852,6 +882,7 @@ export default function AIEnrichmentPage() {
 
   async function copyRunId(runId) {
     try {
+      setActionRunId(null);
       await window.navigator.clipboard?.writeText?.(runId);
       setActionMessage(`Copied run UUID ${runId}.`);
     } catch {
@@ -946,6 +977,20 @@ export default function AIEnrichmentPage() {
             <div><AlertTriangle size={18} /><span>Failed jobs</span><strong>{failedJobsDisplay}</strong></div>
           </div>
 
+              {actionMessage && <div className="ai-status-banner ai-status-success" role="status">{actionMessage}{actionRunId && <> <a href={`#ai?run=${encodeURIComponent(actionRunId)}`}>Inspect submitted run {actionRunId}</a></>}</div>}
+              {actionError && (
+                <div className="ai-status-banner ai-status-error" role="alert">
+                  <span>{actionError}</span>
+                  {actionErrorNeedsSettings && (
+                    <>
+                      {' Configure and successfully test the Jobs profile before retrying.'}
+                      {' '}
+                      <a href={buildSettingsRoute({ profile: 'jobs', returnToAI: true })}>Open AI Settings</a>
+                    </>
+                  )}
+                </div>
+              )}
+
           <div className="ai-console-grid">
             <section className="chart-wrapper glass-panel ai-console-panel ai-filter-panel">
               <div className="ai-console-header">
@@ -982,7 +1027,8 @@ export default function AIEnrichmentPage() {
                 )}
               </div>
 
-              {filterOptionsError && <div className="ai-status-banner ai-status-error">{filterOptionsError}</div>}
+              {filterOptionsLoading && <p role="status">Loading filter choices…</p>}
+              {filterOptionsError && <div className="ai-status-banner ai-status-error" role="alert">{filterOptionsError}. Filter choices are unavailable; existing selections are retained. <button type="button" disabled={filterOptionsLoading} onClick={() => setFilterRevision(value => value + 1)}>Retry filter choices</button></div>}
 
               <div className="ai-date-limit-grid">
                 <label className="ai-input-group" htmlFor="posted-date-from">
@@ -1025,6 +1071,8 @@ export default function AIEnrichmentPage() {
                         : 'Choose filters, or confirm all pending jobs, to preview the run.'}
               </div>
 
+              {preview && <p className="ai-preview-explanation">Selected {Number(preview.selected_item_count ?? (Number(preview.effective_item_count || 0) + Number(preview.excluded_item_count || 0))).toLocaleString()} within the limit of {normalizedLimit.toLocaleString()}, oldest first. Exclusions are not replaced. This preview does not reserve jobs; the submitted run may contain a different count.</p>}
+
               {Number(preview?.excluded_item_count || 0) > 0 && (
                 <div className="ai-exclusion-panel" data-testid="pending-exclusion-details">
                   <strong>{Number(preview.excluded_item_count).toLocaleString()} jobs will be excluded before execution.</strong>
@@ -1054,19 +1102,6 @@ export default function AIEnrichmentPage() {
                 </button>
               </div>
 
-              {actionMessage && <div className="ai-status-banner ai-status-success">{actionMessage}</div>}
-              {actionError && (
-                <div className="ai-status-banner ai-status-error">
-                  <span>{actionError}</span>
-                  {actionErrorNeedsSettings && (
-                    <>
-                      {' Configure and successfully test the Jobs profile before retrying.'}
-                      {' '}
-                      <a href="#settings">Open AI Settings</a>
-                    </>
-                  )}
-                </div>
-              )}
             </section>
 
             <section className="chart-wrapper glass-panel ai-console-panel ai-monitor-panel">
@@ -1193,6 +1228,9 @@ export default function AIEnrichmentPage() {
                         </div>
                       )}
 
+                      {run.trigger_crawl_job_id && <p><a href={buildCrawlTaskRoute(run.trigger_crawl_job_id)}>Open linked crawl task</a>{run.pending_gate_crawl_job_status ? ` · ${run.pending_gate_crawl_job_status.replaceAll('_', ' ')}` : ''}</p>}
+                      {run.pending_gate_reason === 'waiting_for_ai_runtime' && <p><a href={buildSettingsRoute({ profile: 'jobs', returnToAI: true, returnRun: run.id })}>Configure and test AI runtime in Settings</a></p>}
+
                       {active ? (
                         <div className="ai-run-summary ai-run-summary-live">
                           <div className="ai-run-summary-title">
@@ -1274,6 +1312,7 @@ export default function AIEnrichmentPage() {
                       )}
 
                       <div className="ai-run-actions">
+                        <a href={`#ai?run=${encodeURIComponent(run.id)}`}>Inspect run outcomes</a>
                         {active && normalizeRunStatus(run.status) !== 'stopping' && (
                           <button type="button" className="ai-secondary-button" disabled={submitting} onClick={() => stopRun(run)}>
                             <Square size={14} /> Stop
@@ -1303,6 +1342,7 @@ export default function AIEnrichmentPage() {
               </div>
             </section>
           </div>
+          <AIEnrichmentHistory revision={historyRevision} busy={submitting} hasActiveRun={Boolean(activeRun) || overviewActiveRunsCount > 0} onRetry={retryFailedItems} onResume={resumeCancelledBackfill} onStop={stopRun} />
         </>
       )}
     </section>

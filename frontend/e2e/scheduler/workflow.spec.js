@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { interceptScheduler } from './fixtures';
 
-const evidence = '../.trellis/tasks/09-23-improve-scheduler-workflow-ux/research';
+const evidence = '/tmp/job-scraper-scheduler-evidence';
 for (const size of [{ width: 1366, height: 768 }, { width: 1440, height: 900 }]) {
   test(`edit, review, correct, save and restore source ${size.width}`, async ({ page }) => {
     await page.setViewportSize(size);

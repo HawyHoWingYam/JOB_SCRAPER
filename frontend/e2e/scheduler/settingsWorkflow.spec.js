@@ -1,0 +1,55 @@
+import { test, expect } from '@playwright/test';
+import { interceptScheduler } from './fixtures';
+import { interceptSettings } from './settingsFixtures';
+import { interceptAI } from './aiFixtures';
+
+for (const width of [1366, 1440, 760]) {
+  test(`Settings retry, draft continuity, save/test and return at ${width}`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await interceptScheduler(page);
+    await interceptAI(page);
+    const fixture = await interceptSettings(page);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto('/#settings?section=ai-runtime&profile=jobs&return=ai&returnRun=older-failed');
+    await expect(page.getByRole('button', { name: 'Retry loading settings' })).toBeVisible();
+    fixture.allowLoad();
+    await page.getByRole('button', { name: 'Retry loading settings' }).click();
+    const model = page.getByRole('group', { name: 'AI Enrichment Gemini settings' }).getByLabel('AI Enrichment Model', { exact: true });
+    await model.fill('draft-model');
+    await page.getByRole('button', { name: 'Scraper Pacing', exact: true }).click();
+    await page.getByLabel('JobsDB Burst size', { exact: true }).fill('44');
+    await expect(page).toHaveURL(/section=scraper-pacing/);
+    await page.getByRole('button', { name: 'AI Runtime', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(model).toHaveValue('draft-model');
+    await expect(page).toHaveURL(/section=ai-runtime/);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.goBack();
+    await expect(page.getByLabel('JobsDB Burst size', { exact: true })).toHaveValue('44');
+    await page.goForward();
+    await expect(model).toHaveValue('draft-model');
+    await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('Validation failed');
+    await expect(model).toHaveValue('draft-model');
+    fixture.allowSave();
+    await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('AI runtime settings saved');
+    await expect(page.getByRole('button', { name: 'Discard changes', exact: true })).toBeDisabled();
+    await page.getByRole('button', { name: 'Test AI Enrichment configuration', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('passed');
+    await page.getByRole('button', { name: 'Scraper Pacing', exact: true }).click();
+    await expect(page.getByLabel('JobsDB Burst size', { exact: true })).toHaveValue('44');
+    await page.getByRole('button', { name: 'Save JobsDB', exact: true }).click();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Scraper Pacing', exact: true })).toBeVisible();
+    await expect(page.getByLabel('JobsDB Burst size', { exact: true })).toHaveValue('44');
+    await page.locator('.app-main').evaluate(element => { element.scrollTop = 0; });
+    await page.screenshot({ path: `/tmp/job-scraper-settings-${width}.png`, fullPage: true });
+    await page.getByRole('link', { name: 'Return to AI Enrichment' }).click();
+    await expect(page).toHaveURL(/#ai\?run=older-failed/);
+    await expect(page.getByText('Provider timed out', { exact: true })).toBeVisible();
+    expect(fixture.requests.filter(request => request.path === '/api/settings/ai/test')).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+}

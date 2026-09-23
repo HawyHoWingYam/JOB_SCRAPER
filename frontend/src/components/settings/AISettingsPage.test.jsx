@@ -295,6 +295,7 @@ describe("AISettingsPage", () => {
   let testProfileResponse;
 
   beforeEach(() => {
+    window.history.replaceState(null, "", "#settings");
     currentSettingsPayload = clonePayload(aiSettingsPayload);
     putSettingsResponse = vi.fn(async (_url, init) => {
       const nextPayload = clonePayload(currentSettingsPayload);
@@ -1800,4 +1801,38 @@ describe("AISettingsPage", () => {
       "true",
     );
   });
+  it('preserves drafts across section history and can discard AI edits explicitly', async () => {
+    render(<AISettingsPage />);
+    await waitForSettingsLoaded();
+    const model = within(getProviderSettingsGroup('AI Enrichment', 'Gemini')).getByLabelText(/AI Enrichment model/i);
+    const saved = model.value;
+    await userEvent.clear(model);
+    await userEvent.type(model, 'draft-model');
+    await userEvent.click(screen.getByRole('button', { name: 'Scraper Pacing', exact: true }));
+    const burst = await screen.findByLabelText('JobsDB Burst size');
+    await userEvent.clear(burst);
+    await userEvent.type(burst, '44');
+    expect(window.location.hash).toContain('section=scraper-pacing');
+    await userEvent.click(screen.getByRole('button', { name: 'AI Runtime', exact: true }));
+    expect(model).toHaveValue('draft-model');
+    await userEvent.click(screen.getByRole('button', { name: 'Discard changes', exact: true }));
+    expect(model).toHaveValue(saved);
+    await userEvent.click(screen.getByRole('button', { name: 'Scraper Pacing', exact: true }));
+    expect(screen.getByLabelText('JobsDB Burst size')).toHaveValue(44);
+  });
+
+  it('retries initial settings failure and preserves a bounded return link', async () => {
+    window.history.replaceState(null, '', '#settings?section=ai-runtime&profile=jobs&return=ai&returnRun=run-7');
+    const original = globalThis.fetch;
+    let failed = true;
+    globalThis.fetch = vi.fn((url, init) => String(url).endsWith('/settings/ai') && failed ? mockJsonResponse({}, { ok: false, status: 503 }) : original(url, init));
+    render(<AISettingsPage />);
+    const retry = await screen.findByRole('button', { name: 'Retry loading settings' });
+    failed = false;
+    await userEvent.click(retry);
+    await waitForSettingsLoaded();
+    expect(screen.getByRole('link', { name: 'Return to AI Enrichment' })).toHaveAttribute('href', '#ai?run=run-7');
+    expect(document.getElementById('settings-jobs')).toHaveFocus();
+  });
+
 });

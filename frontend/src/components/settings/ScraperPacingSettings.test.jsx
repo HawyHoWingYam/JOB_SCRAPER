@@ -20,6 +20,7 @@ function sourceCard(name) {
 
 describe("ScraperPacingSettings", () => {
   beforeEach(() => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = String(input);
       const method = init.method || "GET";
@@ -106,4 +107,27 @@ describe("ScraperPacingSettings", () => {
 
     expect(await within(card).findByRole("alert")).toHaveTextContent("source setting was rejected");
   });
+  it('keeps dirty values when a defaults reset is declined, and supports local discard', async () => {
+    window.confirm.mockReturnValue(false);
+    render(<ScraperPacingSettings />);
+    const card = await waitFor(() => sourceCard('JobsDB'));
+    fireEvent.change(within(card).getByLabelText('JobsDB Burst size'), { target: { value: '44' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Reset defaults' }));
+    expect(within(card).getByLabelText('JobsDB Burst size')).toHaveValue(44);
+    expect(globalThis.fetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    fireEvent.click(within(card).getByRole('button', { name: 'Discard JobsDB changes' }));
+    expect(within(card).getByLabelText('JobsDB Burst size')).toHaveValue(20);
+    expect(within(card).getByRole('button', { name: 'Save JobsDB' })).toBeDisabled();
+  });
+
+  it('retries a failed read without inventing defaults', async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockImplementationOnce(() => Promise.reject(new Error('Pacing unavailable'))).mockImplementation(original);
+    render(<ScraperPacingSettings />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Pacing unavailable');
+    expect(screen.queryByLabelText('JobsDB Burst size')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading pacing' }));
+    expect(await screen.findByLabelText('JobsDB Burst size')).toHaveValue(20);
+  });
+
 });

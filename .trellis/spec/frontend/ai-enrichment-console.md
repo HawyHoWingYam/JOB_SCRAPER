@@ -110,3 +110,13 @@ const canRetry = isRetryableTerminalRun(run);
 
 Keep the persisted run status and exclusion reason visible. Exclusions are
 non-attempted taxonomy decisions, not provider errors.
+
+## Workflow continuity and history
+
+- Preview snapshots carry the current filters/limit/acknowledgement signature. Old counts cannot enable launch or remain presented as current after input changes. Preview is oldest-first, bounded before exclusions, and reserves no jobs.
+- Creation receipts derive membership/effective/excluded counts from the returned run, preserving zero. They link to `#ai?run=<id>`; retry and continuation receipts identify the returned new run.
+- Keep exactly two monitor slots. A separate latest-20 history includes waiting work and fetches exact run/item endpoints for selection, even outside that history window. Item outcome filters never reinterpret exclusions as failures. Lists render at most 50 fetched items per page.
+- Selected live runs refresh every five seconds while visible. Async reads are aborted on identity/filter change; old run actions never render under another run ID.
+- History actions retain the same run-specific failed-only retry, cancelled-Jev-backfill continuation and cooperative-stop authority. Display active-slot disabled reasons.
+- Display mutation receipts above the console, separately from refresh errors. Filter metadata failures retain prior choices and offer explicit retry.
+- Crawl-triggered runs link to the exact task, with server-reported crawl gate status. Runtime waiting links to Settings.

@@ -294,7 +294,8 @@ describe('AIEnrichmentPage', () => {
     expect(card.getAllByText('Excluded 2')).toHaveLength(2);
     expect(card.getByText(/Farming \(offertoday:113000\)/)).toBeInTheDocument();
     expect(card.getByText(/No defensible internal taxonomy domain/)).toBeInTheDocument();
-    expect(card.queryByRole('link')).not.toBeInTheDocument();
+    expect(card.getByRole('link', { name: 'Inspect run outcomes' })).toHaveAttribute('href', '#ai?run=run-excluded-1');
+    expect(card.getAllByRole('link')).toHaveLength(1);
     expect(card.queryByRole('button', { name: /Retry failed/i })).not.toBeInTheDocument();
     expect(card.queryByRole('button', { name: /assign|accept|reject/i })).not.toBeInTheDocument();
   });
@@ -342,7 +343,7 @@ describe('AIEnrichmentPage', () => {
 
     expect(await screen.findByText(/jobs profile is not configured/i)).toBeInTheDocument();
     expect(screen.getByText(/configure and successfully test the Jobs profile/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Open AI Settings/i })).toHaveAttribute('href', '#settings');
+    expect(screen.getByRole('link', { name: /Open AI Settings/i })).toHaveAttribute('href', '#settings?section=ai-runtime&profile=jobs&return=ai');
   });
 
   it('preserves the active-run ID for a structured 409 conflict', async () => {
@@ -494,7 +495,7 @@ describe('AIEnrichmentPage', () => {
       '/api/ai/runs/run-backfill-cancelled/resume-cancelled-backfill',
       { method: 'POST' },
     );
-    expect(await screen.findByText(/run-backfill-resumed/)).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Inspect submitted run run-backfill-resumed' })).toBeInTheDocument();
   });
 
   it('copies the visible run UUID for debugging', async () => {
@@ -521,4 +522,47 @@ describe('AIEnrichmentPage', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2500); });
     expect(globalThis.fetch).toHaveBeenCalledTimes(hiddenCallCount);
   });
+});
+
+beforeEach(() => { window.localStorage.clear(); window.history.replaceState(null, '', '#ai'); });
+
+it('uses actual created membership rather than the preview in its receipt', async () => {
+  installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [completedRun],
+    createRunResponse: { status: 200, payload: { ...excludedRun, id: 'actual-run', total_items: 3, excluded_items: 3 } },
+  });
+  render(<AIEnrichmentPage />);
+  await userEvent.click(await screen.findByLabelText('jobsdb'));
+  await userEvent.click(await screen.findByRole('button', { name: 'Run 12 filtered jobs' }));
+  expect(await screen.findByText('Filtered run submitted for 0 jobs; 3 excluded by taxonomy.')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Inspect submitted run actual-run' })).toHaveAttribute('href', '#ai?run=actual-run');
+});
+
+it('invalidates an existing preview immediately when its limit changes', async () => {
+  installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [completedRun] });
+  const original = globalThis.fetch;
+  globalThis.fetch = vi.fn((url, init) => {
+    if (String(url).endsWith('/ai/pending/preview') && JSON.parse(init.body).limit === 7) return new Promise(() => {});
+    return original(url, init);
+  });
+  render(<AIEnrichmentPage />);
+  await userEvent.click(await screen.findByLabelText('jobsdb'));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Run 12 filtered jobs' })).toBeEnabled());
+  const limit = screen.getByLabelText('Pending Limit');
+  await userEvent.clear(limit);
+  await userEvent.type(limit, '7');
+  expect(screen.getByRole('button', { name: /Run .* filtered jobs/ })).toBeDisabled();
+  expect(screen.queryByText('12 match · 12 will run')).not.toBeInTheDocument();
+});
+
+it('retries unavailable filter choices without requiring a page reload', async () => {
+  installFetch();
+  const original = globalThis.fetch;
+  let unavailable = true;
+  globalThis.fetch = vi.fn((url, init) => String(url).endsWith('/filter-options') && unavailable ? jsonResponse({}, 503) : original(url, init));
+  render(<AIEnrichmentPage />);
+  const retry = await screen.findByRole('button', { name: 'Retry filter choices' });
+  unavailable = false;
+  await userEvent.click(retry);
+  expect(await screen.findByLabelText('jobsdb')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Retry filter choices' })).not.toBeInTheDocument();
 });

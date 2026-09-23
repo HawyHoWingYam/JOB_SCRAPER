@@ -214,3 +214,13 @@ const label =
 
 Status and continuation are terminal-state aware; the normalized projection,
 not raw event flags, remains the UI authority.
+
+## Task navigation and diagnostics
+
+- Crawl Tasks links support `task`, `view=events`, list `status`, `source`, `mode`, `range`, and `page`. The route codec validates filters and defaults invalid pages to one. Existing Scheduler task links remain compatible.
+- Selecting tasks, opening audit events, and returning to details preserve list context. Browser hash navigation restores filters and page. Off-page deep links fetch the task directly and explicitly identify the selection as outside the visible list.
+- Audit events use the existing bounded task events endpoint (latest 100). Display total versus visible count, loading, empty, failure/retry and retained stale events. They never replace normalized progress authority.
+- Keep task status and workload ahead of immutable authority and optional content-quality analysis. Cross-task incident triage follows the primary monitoring surface; its controls remain accessible.
+- Detail responses have latest-request protection and abort on selection/poll lifecycle changes. Render detail actions only for the selected identity.
+- Map normalized recovery attempt fields into the recovery panel's display model. A pending outcome disables duplicate Resume; do not reconstruct the attempt from audit events.
+- List polling reports one minute, or one second while a visible cancellation awaits acknowledgement. A request receipt never means cancellation has completed.

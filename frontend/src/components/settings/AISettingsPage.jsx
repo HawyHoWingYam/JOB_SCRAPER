@@ -1,4 +1,4 @@
-import { createElement, useEffect, useState } from "react";
+import { createElement, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   BrainCircuit,
@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   FlaskConical,
 } from "lucide-react";
+import { buildSettingsRoute, parseSettingsRoute } from "./settingsRoute";
 import { apiPath } from "../../api/base";
 import { formatApiErrorDetail } from "../../api/errors";
 import ScraperPacingSettings from "./ScraperPacingSettings";
@@ -617,12 +618,16 @@ function getProfileSummaryProviderValue(
 }
 
 function FeedbackBanner({ feedback }) {
+  const ref = useRef(null);
+  useEffect(() => { if (feedback) ref.current?.focus(); }, [feedback]);
   if (!feedback) {
     return null;
   }
 
   return (
     <div
+      ref={ref}
+      tabIndex={-1}
       className={`ai-settings-message ai-settings-message-${feedback.tone} glass-panel`}
       role="alert"
     >
@@ -686,7 +691,7 @@ function ProfileSection({
     providerFields.length === 0 && !secretRequestKey;
 
   return (
-    <section className="ai-settings-panel glass-panel">
+    <section id={`settings-${profileKey}`} tabIndex={-1} className="ai-settings-panel glass-panel">
       <div className="ai-settings-section-heading">
         <div>
           <h2>{profileLabel} Profile</h2>
@@ -708,6 +713,7 @@ function ProfileSection({
         </button>
       </div>
 
+      <p className="ai-settings-test-note">Testing sends the current draft to the provider and may incur usage charges. Save settings to apply edited configuration; testing alone does not save the draft.</p>
       <div
         className="ai-settings-provider-picker"
         role="group"
@@ -863,7 +869,8 @@ function ProfileSection({
   );
 }
 
-function AIRuntimeSettings() {
+function AIRuntimeSettings({ profileFocus }) {
+  const [loadRevision, setLoadRevision] = useState(0);
   const [settingsPayload, setSettingsPayload] = useState(null);
   const [formState, setFormState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -877,6 +884,19 @@ function AIRuntimeSettings() {
   const [secretVisibility, setSecretVisibility] = useState(
     createSecretVisibilityState,
   );
+
+  const dirty = Boolean(formState && settingsPayload && JSON.stringify(formState) !== JSON.stringify(createFormState(settingsPayload)));
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = event => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+  useEffect(() => {
+    if (!loading && profileFocus) {
+      document.getElementById(`settings-${profileFocus}`)?.focus();
+    }
+  }, [loading, profileFocus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -913,7 +933,7 @@ function AIRuntimeSettings() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -939,7 +959,7 @@ function AIRuntimeSettings() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadRevision]);
 
   function updateProfileProvider(profileKey, provider) {
     setFormState((currentState) => ({
@@ -1115,7 +1135,7 @@ function AIRuntimeSettings() {
           setFeedback({
             tone: "error",
             title: "Validation failed",
-            lines: formatValidationErrors(payload?.detail),
+            lines: [...formatValidationErrors(payload?.detail), "Your unsaved changes are retained. Correct the fields and save again."],
           });
           return;
         }
@@ -1156,7 +1176,7 @@ function AIRuntimeSettings() {
       setFeedback({
         tone: "error",
         title: "Save failed",
-        lines: [err.message],
+        lines: [err.message, "Your unsaved changes are retained. Retry Save settings when ready."],
       });
     } finally {
       setSaving(false);
@@ -1191,7 +1211,15 @@ function AIRuntimeSettings() {
         return;
       }
 
-      setFeedback(buildProfileTestFeedback(profileKey, payload));
+      const nextFeedback = buildProfileTestFeedback(profileKey, payload);
+      try {
+        const refreshed = await fetch(apiPath('/settings/ai'));
+        if (!refreshed.ok) throw new Error('Saved runtime status could not be refreshed.');
+        setSettingsPayload(await refreshed.json());
+      } catch {
+        nextFeedback.lines = [...(nextFeedback.lines || []), 'The test finished, but saved runtime status could not be refreshed. Your draft is retained.'];
+      }
+      setFeedback(nextFeedback);
     } catch (err) {
       setFeedback({
         tone: "error",
@@ -1229,6 +1257,7 @@ function AIRuntimeSettings() {
           role="alert"
         >
           {error}
+          <button type="button" onClick={() => setLoadRevision(value => value + 1)}>Retry loading settings</button>
         </div>
       </section>
     );
@@ -1259,7 +1288,7 @@ function AIRuntimeSettings() {
         </div>
         <div className="ai-settings-hero-badges">
           <span className="ai-settings-chip">
-            {saving ? "Saving..." : "Editable"}
+            {saving ? "Saving..." : dirty ? "Unsaved changes" : "Saved configuration"}
           </span>
           <span
             className={`ai-settings-chip ${isAnyDegraded ? "warning" : "success"}`}
@@ -1273,6 +1302,9 @@ function AIRuntimeSettings() {
 
       <FeedbackBanner feedback={feedback} />
 
+      <nav className="ai-settings-jump-nav" aria-label="Runtime configuration sections">
+        {[["jobs", "AI Enrichment profile"], ["companies", "Companies profile"], ["jev", "Jev System One"], ["throughput", "Throughput"]].map(([id, label]) => <button type="button" key={id} onClick={() => document.getElementById(`settings-${id}`)?.focus()}>{label}</button>)}
+      </nav>
       <section className="ai-settings-summary-grid">
         <SummaryCard
           icon={BrainCircuit}
@@ -1343,14 +1375,22 @@ function AIRuntimeSettings() {
                 once to apply both profiles.
               </p>
             </div>
+            <div className="ai-settings-edit-actions">
+            <span role="status">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
+            <button type="button" disabled={!dirty || saving || Boolean(testingProfile)} onClick={() => {
+              setFormState(createFormState(settingsPayload));
+              setSecretVisibility(createSecretVisibilityState());
+              setFeedback({ tone: 'success', title: 'Changes discarded', lines: ['The saved configuration is restored.'] });
+            }}>Discard changes</button>
             <button
               className="ai-settings-save-button"
               type="submit"
-              disabled={saving}
+              disabled={saving || Boolean(testingProfile)}
             >
               <Save size={16} />
               <span>{saving ? "Saving..." : "Save settings"}</span>
             </button>
+            </div>
           </div>
         </section>
 
@@ -1359,7 +1399,7 @@ function AIRuntimeSettings() {
           profileLabel={PROFILE_LABELS.jobs}
           formState={formState.jobs}
           settingsPayload={settingsPayload}
-          saving={saving}
+          saving={saving || Boolean(testingProfile)}
           testing={testingProfile === "jobs"}
           isSecretVisible={secretVisibility.jobs}
           toggleSecretVisibility={toggleSecretVisibility}
@@ -1373,7 +1413,7 @@ function AIRuntimeSettings() {
           profileLabel={PROFILE_LABELS.companies}
           formState={formState.companies}
           settingsPayload={settingsPayload}
-          saving={saving}
+          saving={saving || Boolean(testingProfile)}
           testing={testingProfile === "companies"}
           isSecretVisible={secretVisibility.companies}
           toggleSecretVisibility={toggleSecretVisibility}
@@ -1382,7 +1422,7 @@ function AIRuntimeSettings() {
           onTestProfile={handleTestProfile}
         />
 
-        <section className="ai-settings-panel glass-panel">
+        <section id="settings-jev" tabIndex={-1} className="ai-settings-panel glass-panel">
           <div className="ai-settings-section-heading">
             <div>
               <h2>Jev System One</h2>
@@ -1918,7 +1958,7 @@ function AIRuntimeSettings() {
           </div>
         </section>
 
-        <section className="ai-settings-panel glass-panel">
+        <section id="settings-throughput" tabIndex={-1} className="ai-settings-panel glass-panel">
           <div className="ai-settings-section-heading">
             <div>
               <h2>AI Enrichment Throughput</h2>
@@ -2054,11 +2094,24 @@ export default function AISettingsPage({
   initialSection = "ai-runtime",
   onOpenCrawlTasks,
 }) {
-  const [activeSection, setActiveSection] = useState(initialSection);
-
+  const [route, setRoute] = useState(() => parseSettingsRoute(window.location.hash, initialSection));
+  const activeSection = route.section;
+  const [visited, setVisited] = useState(() => new Set([activeSection]));
   useEffect(() => {
-    setActiveSection(initialSection);
+    const change = () => {
+      const next = parseSettingsRoute(window.location.hash, initialSection);
+      setRoute(next);
+      setVisited(current => new Set([...current, next.section]));
+    };
+    window.addEventListener('hashchange', change);
+    return () => window.removeEventListener('hashchange', change);
   }, [initialSection]);
+  function switchSection(section) {
+    const next = { ...route, section, profile: null };
+    setRoute(next);
+    setVisited(current => new Set([...current, section]));
+    window.location.hash = buildSettingsRoute(next);
+  }
 
   return (
     <div className="settings-page-shell">
@@ -2067,7 +2120,7 @@ export default function AISettingsPage({
           type="button"
           className={activeSection === "ai-runtime" ? "active" : ""}
           aria-current={activeSection === "ai-runtime" ? "page" : undefined}
-          onClick={() => setActiveSection("ai-runtime")}
+          onClick={() => switchSection("ai-runtime")}
         >
           <BrainCircuit size={17} /> AI Runtime
         </button>
@@ -2075,16 +2128,15 @@ export default function AISettingsPage({
           type="button"
           className={activeSection === "scraper-pacing" ? "active" : ""}
           aria-current={activeSection === "scraper-pacing" ? "page" : undefined}
-          onClick={() => setActiveSection("scraper-pacing")}
+          onClick={() => switchSection("scraper-pacing")}
         >
           <Settings2 size={17} /> Scraper Pacing
         </button>
       </nav>
-      {activeSection === "scraper-pacing" ? (
-        <ScraperPacingSettings onOpenCrawlTasks={onOpenCrawlTasks} />
-      ) : (
-        <AIRuntimeSettings />
-      )}
+      {route.returnToAI && <a className="settings-return-link" href={route.returnRun ? `#ai?run=${encodeURIComponent(route.returnRun)}` : '#ai'}>Return to AI Enrichment</a>}
+      <p className="ai-settings-draft-note">Switching Settings sections keeps your unsaved edits here. Save before leaving Settings or reloading.</p>
+      {visited.has('ai-runtime') && <div hidden={activeSection !== 'ai-runtime'}><AIRuntimeSettings profileFocus={activeSection === 'ai-runtime' ? route.profile : null} /></div>}
+      {visited.has('scraper-pacing') && <div hidden={activeSection !== 'scraper-pacing'}><ScraperPacingSettings onOpenCrawlTasks={onOpenCrawlTasks} /></div>}
     </div>
   );
 }

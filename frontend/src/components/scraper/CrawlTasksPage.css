@@ -40,7 +40,7 @@
 
 .crawl-tasks-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr);
+    grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.15fr);
     gap: var(--space-4);
     align-items: start;
 }
@@ -541,3 +541,14 @@
         grid-template-columns: minmax(0, 1fr);
     }
 }
+
+.crawl-task-events { padding-left: 1.5rem; }
+.crawl-task-events li { padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); }
+.crawl-task-events p { color: var(--color-text-secondary); font-size: var(--text-sm); }
+.crawl-task-events pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
+.crawl-tasks-detail button:focus-visible,
+.crawl-task-row:focus-visible { outline: 2px solid var(--color-accent, #8b9cff); outline-offset: 3px; }
+
+.crawl-tasks-page > [aria-label="Jev repeated incident triage"] { padding: var(--space-4); }
+.crawl-tasks-detail-block > label { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); flex-wrap: wrap; }
+.crawl-tasks-detail-block > label input { width: 7rem; padding: var(--space-2); }

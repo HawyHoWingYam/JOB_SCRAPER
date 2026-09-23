@@ -785,3 +785,57 @@ describe("CrawlTasksPage normalized Task Details", () => {
     expect(clearIntervalSpy).toHaveBeenCalledWith(cancellationInterval);
   });
 });
+
+describe('Crawl Tasks navigation continuity', () => {
+  it('opens Scheduler event links in app and returns with the same list context', async () => {
+    window.history.replaceState(null, '', '#crawl-tasks?task=linked-task&view=events&status=failed&source=jobsdb&page=2');
+    apiFetchJson.mockImplementation(async (url) => {
+      if (String(url).includes('/events?')) return { events: [{ id: 1, sequence_no: 7, event_type: 'crawl_failed', payload: { reason: 'Source unavailable' }, created_at: '2026-09-23T00:00:00Z' }], total: 1 };
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: detailId(url) });
+      return listPayload([]);
+    });
+    render(<CrawlTasksPage />);
+    expect(await screen.findByText('crawl failed')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('failed');
+    expect(apiFetchJson).toHaveBeenCalledWith(expect.stringContaining('page=2'), expect.anything());
+    await userEvent.click(screen.getByRole('button', { name: 'Back to task details' }));
+    expect(await screen.findByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
+    expect(window.location.hash).toContain('task=linked-task');
+    expect(window.location.hash).toContain('status=failed');
+    expect(window.location.hash).toContain('page=2');
+    expect(window.location.hash).not.toContain('view=events');
+  });
+
+  it('recovers an event request failure without leaving the selected task', async () => {
+    window.history.replaceState(null, '', '#crawl-tasks?task=linked-task&view=events');
+    let failures = 1;
+    apiFetchJson.mockImplementation(async (url) => {
+      if (String(url).includes('/events?')) {
+        if (failures-- > 0) throw new Error('Events temporarily unavailable');
+        return { events: [], total: 0 };
+      }
+      if (isDetailRequest(url)) return normalizedTaskDetail({ id: detailId(url) });
+      return listPayload([]);
+    });
+    render(<CrawlTasksPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Events temporarily unavailable');
+    await userEvent.click(screen.getByRole('button', { name: 'Retry events' }));
+    expect(await screen.findByText('No audit events have been recorded for this task.')).toBeInTheDocument();
+    expect(window.location.hash).toContain('task=linked-task');
+  });
+});
+
+it('shows an accepted recovery attempt and prevents duplicate resume while pending', async () => {
+  const detail = normalizedTaskDetail({ status: 'manual_action_required', actions: [] });
+  detail.manual_action_guidance = {
+    source_site: 'jobsdb', message: 'Complete the challenge.', resume_supported: true,
+    resume_strategies: ['fresh_profile'], stage: 'listing',
+  };
+  detail.recovery_attempt = {
+    request_event_sequence: 12, requested_at: '2026-09-23T08:00:00Z', strategy: 'fresh_profile', outcome: 'pending',
+  };
+  apiFetchJson.mockImplementation(async (url) => isDetailRequest(url) ? detail : listPayload());
+  render(<CrawlTasksPage />);
+  expect(await screen.findByTestId('crawl-task-recovery-attempt')).toHaveTextContent('Resume #12');
+  expect(screen.getByRole('button', { name: 'Resume with Fresh Profile' })).toBeDisabled();
+});

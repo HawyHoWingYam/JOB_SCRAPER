@@ -31,6 +31,7 @@ import { buildControlRoute, newDraftId } from "../../features/taskControl/shared
 import { createWizardDraft, writeDraft } from "../../features/taskControl/wizard/wizardDraft";
 import ConfirmActionDialog from "../../features/taskControl/shared/ConfirmActionDialog";
 import CrawlTaskDetails from "./CrawlTaskDetails";
+import CrawlTaskEvents from "./CrawlTaskEvents";
 import "./CrawlTasksPage.css";
 
 const API_BASE = apiPath("");
@@ -503,8 +504,9 @@ function extractErrorMessage(error, fallbackMessage) {
 
 export default function CrawlTasksPage() {
   const initialRoute = typeof window === "undefined" ? { taskId: null } : parseCrawlTaskRoute(window.location.hash);
-  const [filters, setFilters] = useState(DEFAULT_FILTERS);
-  const [page, setPage] = useState(1);
+  const [filters, setFilters] = useState(initialRoute.filters || DEFAULT_FILTERS);
+  const [page, setPage] = useState(initialRoute.page || 1);
+  const [detailView, setDetailView] = useState(initialRoute.view);
   const [tasks, setTasks] = useState([]);
   const [pagination, setPagination] = useState({
     total: 0,
@@ -531,6 +533,7 @@ export default function CrawlTasksPage() {
   });
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const latestLoadRef = useRef(0);
+  const latestDetailRef = useRef(0);
   const dialogTriggerRef = useRef(null);
   const pageCount = Math.max(
     1,
@@ -552,35 +555,38 @@ export default function CrawlTasksPage() {
 
   const loadSelectedTaskDetail = useCallback(async ({ signal } = {}) => {
     if (!selectedTaskId) {
+      latestDetailRef.current += 1;
       setSelectedTaskDetail(null);
       setSelectedTaskDetailError(null);
       setCrawlQuality(null);
       return;
     }
+    const requestVersion = ++latestDetailRef.current;
+    const isCurrent = () => !signal?.aborted && requestVersion === latestDetailRef.current;
     setSelectedTaskDetail((current) => current?.run.id === selectedTaskId ? current : null);
     setSelectedTaskDetailLoading(true);
     try {
       const value = await getCrawlTaskDetail(selectedTaskId, { signal });
-      if (!signal?.aborted) {
+      if (isCurrent()) {
         setSelectedTaskDetail(value);
         setSelectedTaskDetailError(null);
       }
       try {
         const quality = await getCrawlQuality(selectedTaskId, { signal });
-        if (!signal?.aborted) {
+        if (isCurrent()) {
           setCrawlQuality(quality);
           setCrawlQualityError('');
         }
       } catch (qualityError) {
-        if (!signal?.aborted) {
+        if (isCurrent()) {
           setCrawlQuality(null);
           setCrawlQualityError(extractErrorMessage(qualityError, 'Crawl quality is unavailable'));
         }
       }
     } catch (detailError) {
-      if (!signal?.aborted) setSelectedTaskDetailError(extractErrorMessage(detailError, "Failed to load normalized Task Details"));
+      if (isCurrent()) setSelectedTaskDetailError(extractErrorMessage(detailError, "Failed to load normalized Task Details"));
     } finally {
-      if (!signal?.aborted) setSelectedTaskDetailLoading(false);
+      if (isCurrent()) setSelectedTaskDetailLoading(false);
     }
   }, [selectedTaskId]);
 
@@ -669,7 +675,7 @@ export default function CrawlTasksPage() {
     const controller = new AbortController();
     void loadSelectedTaskDetail({ signal: controller.signal });
     const intervalId = selectedTaskId ? window.setInterval(() => {
-      void loadSelectedTaskDetail();
+      void loadSelectedTaskDetail({ signal: controller.signal });
     }, selectedTaskDetail?.run.status === "cancelling" ? CANCELLATION_REFRESH_MS : AUTO_REFRESH_MS) : null;
     return () => {
       controller.abort();
@@ -680,30 +686,39 @@ export default function CrawlTasksPage() {
   useEffect(() => {
     const onHashChange = () => {
       const next = parseCrawlTaskRoute(window.location.hash);
-      if (next.kind === "tasks") setSelectedTaskId(next.taskId);
+      if (next.kind === "tasks") {
+        setSelectedTaskId(next.taskId);
+        setDetailView(next.view);
+        setFilters((current) => JSON.stringify(current) === JSON.stringify(next.filters) ? current : next.filters);
+        setPage(next.page);
+        setActionState({ pending: null, error: null, notice: null });
+      }
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  const handleFilterChange = useCallback(
-    (field) => (event) => {
-      const value = event.target.value;
-      setFilters((current) => ({
-        ...current,
-        [field]: value,
-      }));
-      setPage(1);
-      setActionState({ pending: null, error: null, notice: null });
-    },
-    [],
-  );
-
-  const handleSelectTask = useCallback((crawlJobId) => {
-    setSelectedTaskId(crawlJobId);
-    window.location.hash = buildCrawlTaskRoute(crawlJobId);
+  const navigateTasks = useCallback((taskId, view, nextFilters = filters, nextPage = page) => {
+    if (taskId !== selectedTaskId) {
+      latestDetailRef.current += 1;
+      setSelectedTaskDetail(null);
+      setSelectedTaskDetailError(null);
+      setCrawlQuality(null);
+      setCrawlQualityError('');
+    }
+    setSelectedTaskId(taskId);
+    setDetailView(view);
+    setFilters(nextFilters);
+    setPage(nextPage);
+    window.location.hash = buildCrawlTaskRoute(taskId, view, { filters: nextFilters, page: nextPage });
     setActionState({ pending: null, error: null, notice: null });
-  }, []);
+  }, [filters, page, selectedTaskId]);
+
+  const handleFilterChange = (field) => (event) => {
+    navigateTasks(selectedTaskId, detailView, { ...filters, [field]: event.target.value }, 1);
+  };
+
+  const handleSelectTask = (crawlJobId) => navigateTasks(crawlJobId, null);
 
   const handleContinueCappedListing = useCallback(() => {
     createCappedListingDraft(selectedTaskDetail);
@@ -754,17 +769,7 @@ export default function CrawlTasksPage() {
     [loadSelectedTaskDetail, loadTasks, selectedTaskId],
   );
 
-  const handleOpenEvents = useCallback(() => {
-    if (!selectedTaskId || typeof window === "undefined") {
-      return;
-    }
-
-    window.open(
-      apiPath(`/crawl-jobs/${selectedTaskId}/events`),
-      "_blank",
-      "noopener,noreferrer",
-    );
-  }, [selectedTaskId]);
+  const handleOpenEvents = () => navigateTasks(selectedTaskId, 'events');
 
   const handleNormalizedAction = useCallback((action, trigger) => {
     if (!selectedTaskId) return;
@@ -857,21 +862,13 @@ export default function CrawlTasksPage() {
         <button
           type="button"
           className="crawl-tasks-refresh"
-          onClick={() => void loadTasks({ reason: "manual_refresh" })}
+          onClick={() => { void loadTasks({ reason: "manual_refresh" }); void loadSelectedTaskDetail(); }}
           disabled={isLoading}
         >
           <RefreshCcw size={16} aria-hidden="true" />
           <span>{isLoading ? "Refreshing..." : "Refresh"}</span>
         </button>
       </header>
-
-      <IncidentTriageAdvisory
-        value={incidentTriage}
-        pending={incidentTriagePending}
-        error={incidentTriageError}
-        onPreview={handleIncidentTriagePreview}
-        onEvaluate={handleIncidentTriageEvaluate}
-      />
 
       <div
         className="crawl-tasks-filters"
@@ -949,7 +946,7 @@ export default function CrawlTasksPage() {
 
       {error && (
         <div className="crawl-tasks-banner crawl-tasks-banner-error">
-          {error}
+          {tasks.length > 0 ? "Refresh failed; previously loaded tasks remain visible. " : ""}{error}
         </div>
       )}
 
@@ -965,7 +962,7 @@ export default function CrawlTasksPage() {
               </div>
             </div>
             <div className="crawl-tasks-page-copy">
-              {isLoading ? "Refreshing task list" : "Auto refresh every 1 min"}
+              {isLoading ? "Refreshing task list" : hasCancellingTask ? "Cancellation refresh every 1 sec" : "Auto refresh every 1 min"}
             </div>
           </div>
 
@@ -973,7 +970,7 @@ export default function CrawlTasksPage() {
             <div className="crawl-tasks-empty">
               {isLoading
                 ? "Loading crawl tasks..."
-                : "No crawl tasks loaded yet."}
+                : error ? "Task list unavailable. Use Refresh to try again." : "No tasks match these filters."}
             </div>
           ) : (
             <div
@@ -1032,7 +1029,7 @@ export default function CrawlTasksPage() {
           <div className="crawl-tasks-pagination">
             <button
               type="button"
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              onClick={() => navigateTasks(selectedTaskId, detailView, filters, Math.max(1, page - 1))}
               disabled={page <= 1 || isLoading}
             >
               <ChevronLeft size={16} aria-hidden="true" />
@@ -1042,7 +1039,7 @@ export default function CrawlTasksPage() {
             <button
               type="button"
               onClick={() =>
-                setPage((current) => Math.min(pageCount, current + 1))
+                navigateTasks(selectedTaskId, detailView, filters, Math.min(pageCount, page + 1))
               }
               disabled={page >= pageCount || isLoading}
             >
@@ -1053,9 +1050,12 @@ export default function CrawlTasksPage() {
         </section>
 
         <aside className="glass-panel crawl-tasks-detail">
-          {selectedTaskId ? (
+          {selectedTaskId && !isLoading && !tasks.some((task) => task.crawl_job_id === selectedTaskId) && <p className="crawl-tasks-banner crawl-tasks-banner-warning">This task is outside the current list page or filters. Its details are loaded directly.</p>}
+          {selectedTaskId && detailView === 'events' ? (
+            <CrawlTaskEvents key={selectedTaskId} taskId={selectedTaskId} onBack={() => navigateTasks(selectedTaskId, null)} />
+          ) : selectedTaskId ? (
             <CrawlTaskDetails
-              detail={selectedTaskDetail}
+              detail={selectedTaskDetail?.run.id === selectedTaskId ? selectedTaskDetail : null}
               loading={selectedTaskDetailLoading}
               error={selectedTaskDetailError}
               actionState={actionState}
@@ -1076,6 +1076,14 @@ export default function CrawlTasksPage() {
           )}
         </aside>
       </div>
+      <IncidentTriageAdvisory
+        value={incidentTriage}
+        pending={incidentTriagePending}
+        error={incidentTriageError}
+        onPreview={handleIncidentTriagePreview}
+        onEvaluate={handleIncidentTriageEvaluate}
+      />
+
       {cancelDialogOpen && (
         <ConfirmActionDialog
           title="Cancel this crawl?"

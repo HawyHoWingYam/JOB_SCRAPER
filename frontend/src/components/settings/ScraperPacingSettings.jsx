@@ -94,6 +94,7 @@ function toRequestValues(form) {
 }
 
 export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
+  const [loadRevision, setLoadRevision] = useState(0);
   const [cards, setCards] = useState({});
   const [activeDetailTaskCount, setActiveDetailTaskCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -101,6 +102,8 @@ export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
     loadScraperPacingSettings()
       .then((payload) => {
         if (cancelled) return;
@@ -126,7 +129,15 @@ export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loadRevision]);
+
+  const hasUnsavedChanges = Object.values(cards).some(isDirty);
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+    const warn = event => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [hasUnsavedChanges]);
 
   const validationBySource = useMemo(
     () =>
@@ -149,6 +160,7 @@ export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
   }
 
   async function runAction(source, action) {
+    if (action === 'reset' && isDirty(cards[source]) && !window.confirm('Reset this source to defaults? This replaces its unsaved edits and saves the defaults for future tasks.')) return;
     setCards((current) => ({
       ...current,
       [source]: { ...current[source], pending: action, feedback: null, feedbackTone: null },
@@ -172,7 +184,7 @@ export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
         [source]: {
           ...current[source],
           pending: null,
-          feedback: error.message || "Request failed.",
+          feedback: `${error.message || "Request failed."} Your unsaved changes are retained.`,
           feedbackTone: "error",
         },
       }));
@@ -186,6 +198,7 @@ export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
     return (
       <div className="ai-settings-message ai-settings-message-error glass-panel" role="alert">
         {loadError}
+        <button type="button" onClick={() => setLoadRevision(value => value + 1)}>Retry loading pacing</button>
       </div>
     );
   }
@@ -267,6 +280,7 @@ export default function ScraperPacingSettings({ onOpenCrawlTasks }) {
               ) : null}
 
               <div className="scraper-pacing-actions">
+                <button type="button" disabled={pending || !dirty} onClick={() => setCards(current => ({ ...current, [source]: { ...current[source], form: { ...current[source].saved }, feedback: 'Unsaved changes discarded.', feedbackTone: 'success' } }))}>Discard {label} changes</button>
                 <button type="button" onClick={() => runAction(source, "reset")} disabled={pending}>
                   <RotateCcw size={15} /> Reset defaults
                 </button>
