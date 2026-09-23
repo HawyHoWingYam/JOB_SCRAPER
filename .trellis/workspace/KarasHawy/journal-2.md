@@ -332,3 +332,37 @@ Committed the authorized repository checkpoint; completed Jev production adoptio
 ### Next Steps
 
 - None - task complete
+
+
+## Session 65: UI usability and data-preserving service replacement
+
+**Date**: 2026-09-23
+**Task**: UI usability and data-preserving service replacement
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed English laptop UI improvements and recovery-state regressions; frontend lint/build, 232 unit tests and 22 E2E tests pass; rebuilt backend 689 passed/59 skipped. Replaced old Docker app stack using rehearsed retention cutover: 15,537 jobs, 3,460 companies and all 20 retained tables verified by counts/hashes before and after startup. Regenerated all embeddings, finalization passed, live 10-page/two-viewport audit clean. Idle semantic search 5.66s and hybrid 15.93s, both 200/full corpus; related jobs passed. Full restricted old-DB backup preserved under ~/.local/share/job-scraper/backups/2026-09-23-uiux. Runtime history/settings reset, .env retained. No manual QA or GitHub issue closure claimed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6d686d00` | (see git log) |
+| `406400ec` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
