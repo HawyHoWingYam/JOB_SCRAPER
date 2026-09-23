@@ -4,11 +4,11 @@ from collections import Counter
 from dataclasses import dataclass
 import json
 import re
-from typing import Protocol, cast
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, load_only
+from sqlalchemy.orm import Session
 
 from app.ai.llm_client import get_llm_client
 from app.job_intelligence.current_taxonomies.contracts import (
@@ -24,27 +24,15 @@ from app.job_intelligence.current_taxonomies.skill_curation import (
     load_skill_curation_rules,
     resolve_skill_curation,
 )
-from app.job_intelligence.current_taxonomies.company_projection import (
-    project_current_company_industry,
-)
-from app.job_intelligence.current_taxonomies.company_mapping_manifest import (
-    CompanyIndustryMappingManifest,
-    CompanyIndustryMappingResolver,
-    load_company_industry_mapping_manifest,
-)
-from app.models.company import Company
 from app.models.current_taxonomy import (
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillMention,
     CurrentSkillCandidate,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
 )
-from app.models.job import Job
 from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.classification_batch_runtime import (
     ClassificationCandidate,
-    ClassificationCandidateSelection,
 )
 from app.utils.time import utc_now
 
@@ -270,18 +258,113 @@ class SkillClassificationAdapter:
         if decision.status != "create":
             raise ValueError("Skill candidate placement is uncertain")
 
-        skill_code = self._create_skill(db, row, decision)
-        self._resolve_mentions(db, row, resolution="match_existing", skill_code=skill_code)
-        row.resolved_skill_code = skill_code
+        raise ValueError("New Skill requires operator confirmation")
+
+    def reconcile_deterministic_candidates(self, db: Session) -> int:
+        """Apply exact matches and local dispositions without invoking the LLM."""
+
+        # Build the lookup once per reconciliation sweep. Re-querying taxonomy
+        # nodes and aliases for every historical candidate turns startup into
+        # an O(candidates × taxonomy) database loop.
+        exact = _exact_skill_codes(db)
+
+        rows = tuple(
+            db.scalars(
+                select(CurrentSkillCandidate).where(
+                    CurrentSkillCandidate.resolved_skill_code.is_(None),
+                    CurrentSkillCandidate.distinct_job_count > 0,
+                )
+            )
+        )
+        resolved = 0
+        for row in rows:
+            existing_code = self._resolve_existing_code(db, row, exact=exact)
+            if existing_code:
+                self.apply_operator_decision(
+                    db,
+                    row.id,
+                    action="match_existing",
+                    skill_code=existing_code,
+                )
+                resolved += 1
+                continue
+            disposition = resolve_skill_curation(row.canonical_raw_name)
+            if disposition is None:
+                continue
+            self.apply_operator_decision(
+                db,
+                row.id,
+                action=disposition.kind,
+                generic_tag=disposition.generic_tag,
+                rejection_reason=disposition.rejection_reason,
+            )
+            resolved += 1
+        return resolved
+
+    def apply_operator_decision(
+        self,
+        db: Session,
+        candidate_id: UUID,
+        *,
+        action: str,
+        skill_code: str | None = None,
+        decision: SkillPlacementDecision | None = None,
+        generic_tag: str | None = None,
+        rejection_reason: str | None = None,
+    ) -> str | None:
+        row = db.scalar(
+            select(CurrentSkillCandidate)
+            .where(CurrentSkillCandidate.id == candidate_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise ValueError("Skill candidate was not found")
+        if row.resolved_skill_code:
+            return row.resolved_skill_code
+        normalized_action = action.strip().lower()
+        if normalized_action == "match_existing":
+            if not skill_code:
+                raise ValueError("An existing Skill code is required")
+            self._require_existing_skill(db, skill_code)
+            resolved_code = skill_code
+            self._resolve_mentions(db, row, resolution="match_existing", skill_code=resolved_code)
+            row.resolved_skill_code = resolved_code
+        elif normalized_action == "create":
+            if decision is None:
+                raise ValueError("A Skill placement decision is required")
+            resolved_code = self._create_skill(db, row, decision)
+            self._resolve_mentions(db, row, resolution="match_existing", skill_code=resolved_code)
+            row.resolved_skill_code = resolved_code
+        elif normalized_action == "generic":
+            resolved_code = None
+            self._resolve_mentions(
+                db, row, resolution="generic_tag", generic_tag=generic_tag or row.canonical_raw_name
+            )
+        elif normalized_action == "reject":
+            resolved_code = None
+            self._resolve_mentions(
+                db, row, resolution="rejected", rejection_reason=rejection_reason or "operator_rejected"
+            )
+        else:
+            raise ValueError("Unsupported Skill Candidate decision")
         self._finish_candidate(row)
         self._reproject_jobs(db, row.id)
+        return resolved_code
+
+    @staticmethod
+    def _require_existing_skill(db: Session, skill_code: str) -> None:
+        row = db.get(CurrentTaxonomyNodeRecord, ("skill", skill_code))
+        if row is None or not row.is_active or not row.is_assignable:
+            raise ValueError("Skill code is unknown or not assignable")
 
     def _resolve_existing_code(
         self,
         db: Session,
         candidate: CurrentSkillCandidate,
+        *,
+        exact: dict[str, str] | None = None,
     ) -> str | None:
-        exact = _exact_skill_codes(db)
+        exact = exact if exact is not None else _exact_skill_codes(db)
         rules = load_skill_curation_rules()
         alias_lookup = {
             normalize_exact_skill_key(key): normalize_exact_skill_key(value)
@@ -480,241 +563,6 @@ class SkillClassificationAdapter:
             )
 
 
-class CompanyIndustryClassificationAdapter:
-    domain = "company_industry"
-
-    def __init__(
-        self,
-        *,
-        manifest: CompanyIndustryMappingManifest | None = None,
-    ) -> None:
-        self.manifest = manifest
-
-    def select_candidates(
-        self,
-        db: Session,
-        *,
-        filters: dict[str, object],
-        limit: int,
-    ) -> ClassificationCandidateSelection:
-        query = (
-            select(Company)
-            .options(
-                load_only(
-                    Company.id,
-                    Company.name,
-                    Company.source_site,
-                    Company.created_at,
-                    Company.is_deleted,
-                )
-            )
-            .outerjoin(
-                CurrentCompanyIndustryAssignment,
-                CurrentCompanyIndustryAssignment.company_id == Company.id,
-            )
-            .where(
-                Company.is_deleted.is_(False),
-                CurrentCompanyIndustryAssignment.company_id.is_(None),
-            )
-        )
-        source_sites = _string_filter(filters.get("source_sites"))
-        if source_sites:
-            query = query.where(Company.source_site.in_(source_sites))
-        rows = tuple(
-            db.scalars(query.order_by(Company.created_at, Company.id).limit(limit))
-        )
-        return self._classify_companies(db, rows)
-
-    def filter_retry_candidates(
-        self,
-        db: Session,
-        candidates: tuple[ClassificationCandidate, ...],
-    ) -> tuple[ClassificationCandidate, ...]:
-        candidate_ids: list[UUID] = []
-        for candidate in candidates:
-            try:
-                candidate_ids.append(UUID(candidate.subject_id))
-            except ValueError:
-                continue
-        if not candidate_ids:
-            return ()
-        companies = tuple(
-            db.scalars(
-                select(Company)
-                .options(
-                    load_only(
-                        Company.id,
-                        Company.name,
-                        Company.source_site,
-                        Company.is_deleted,
-                    )
-                )
-                .where(Company.id.in_(candidate_ids), Company.is_deleted.is_(False))
-            )
-        )
-        retryable_ids = {
-            candidate.subject_id
-            for candidate in self._classify_companies(db, companies).candidates
-        }
-        return tuple(
-            candidate
-            for candidate in candidates
-            if candidate.subject_id in retryable_ids
-        )
-
-    async def process_candidate(
-        self,
-        db: Session,
-        candidate: ClassificationCandidate,
-    ) -> None:
-        payload = candidate.payload or {}
-        if payload.get("mapping_readiness") == "unsupported":
-            raise ValueError(
-                str(payload.get("mapping_error") or "Company mapping evidence is unsupported")
-            )
-        company_id = UUID(candidate.subject_id)
-        company = db.scalar(
-            select(Company)
-            .options(load_only(Company.id, Company.is_deleted))
-            .where(Company.id == company_id)
-        )
-        if company is None or company.is_deleted:
-            raise ValueError("Company is unavailable for industry classification")
-        jobs = tuple(
-            db.scalars(
-                select(Job)
-                .options(
-                    load_only(
-                        Job.id,
-                        Job.company_id,
-                        Job.source_site,
-                        Job.source_job_id,
-                        Job.raw_data,
-                        Job.created_at,
-                        Job.is_deleted,
-                    )
-                )
-                .where(Job.company_id == company_id, Job.is_deleted.is_(False))
-                .order_by(Job.created_at.desc(), Job.id.desc())
-            )
-        )
-        resolver = CompanyIndustryMappingResolver(
-            db,
-            self.manifest or load_company_industry_mapping_manifest(),
-        )
-        unsupported_reason: str | None = None
-        for job in jobs:
-            resolution = resolver.resolve(cast(str, job.source_site), job.raw_data)
-            if resolution.kind == "unsupported":
-                unsupported_reason = unsupported_reason or resolution.reason
-                continue
-            if resolution.kind != "mapped":
-                continue
-            result = project_current_company_industry(db, company_id, job)
-            if result is not None and result.state == "assigned":
-                return
-        raise ValueError(
-            unsupported_reason or "Company has no mapped source-industry evidence"
-        )
-
-    def _classify_companies(
-        self,
-        db: Session,
-        companies: tuple[Company, ...],
-    ) -> ClassificationCandidateSelection:
-        company_ids = tuple(cast(UUID, company.id) for company in companies)
-        jobs_by_company: dict[UUID, list[Job]] = {company_id: [] for company_id in company_ids}
-        if company_ids:
-            jobs = db.scalars(
-                select(Job)
-                .options(
-                    load_only(
-                        Job.id,
-                        Job.company_id,
-                        Job.source_site,
-                        Job.source_job_id,
-                        Job.raw_data,
-                        Job.created_at,
-                        Job.is_deleted,
-                    )
-                )
-                .where(Job.company_id.in_(company_ids), Job.is_deleted.is_(False))
-                .order_by(Job.created_at.desc(), Job.id.desc())
-            )
-            for job in jobs:
-                jobs_by_company.setdefault(cast(UUID, job.company_id), []).append(job)
-
-        resolver = CompanyIndustryMappingResolver(
-            db,
-            self.manifest or load_company_industry_mapping_manifest(),
-        )
-        candidates: list[ClassificationCandidate] = []
-        mapped_count = 0
-        unmapped_count = 0
-        excluded_count = 0
-        for company in companies:
-            company_id = cast(UUID, company.id)
-            resolutions = tuple(
-                (
-                    job,
-                    resolver.resolve(cast(str, job.source_site), job.raw_data),
-                )
-                for job in jobs_by_company.get(company_id, ())
-            )
-            mapped = next(
-                ((job, result) for job, result in resolutions if result.kind == "mapped"),
-                None,
-            )
-            if mapped is not None:
-                job, result = mapped
-                mapped_count += 1
-                candidates.append(
-                    ClassificationCandidate(
-                        subject_id=str(company.id),
-                        subject_label=cast(str, company.name),
-                        payload={
-                            "source_site": cast(str, company.source_site),
-                            "mapping_readiness": "mapped",
-                            "source_job_id": cast(str, job.source_job_id),
-                            "source_label": result.source_label,
-                            "target_codes": list(result.target_codes),
-                        },
-                    )
-                )
-                continue
-            unsupported = next(
-                (result for _, result in resolutions if result.kind == "unsupported"),
-                None,
-            )
-            if unsupported is None and resolutions:
-                excluded_count += 1
-                continue
-            unmapped_count += 1
-            error = (
-                unsupported.reason
-                if unsupported is not None
-                else "Company has no Source Industry Label evidence"
-            )
-            candidates.append(
-                ClassificationCandidate(
-                    subject_id=str(company.id),
-                    subject_label=cast(str, company.name),
-                    payload={
-                        "source_site": cast(str, company.source_site),
-                        "mapping_readiness": "unsupported",
-                        "mapping_error": error,
-                    },
-                )
-            )
-        return ClassificationCandidateSelection(
-            selected_item_count=len(companies),
-            candidates=tuple(candidates),
-            mapped_item_count=mapped_count,
-            unmapped_item_count=unmapped_count,
-            excluded_item_count=excluded_count,
-        )
-
-
 def _exact_skill_codes(db: Session) -> dict[str, str]:
     exact: dict[str, str] = {}
     nodes = tuple(
@@ -754,20 +602,7 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
-def _string_filter(value: object) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple)):
-        return ()
-    return tuple(
-        dict.fromkeys(
-            str(item).strip().lower()
-            for item in value
-            if str(item).strip()
-        )
-    )
-
-
 __all__ = [
-    "CompanyIndustryClassificationAdapter",
     "LLMSkillPlacementClassifier",
     "SkillClassificationAdapter",
     "SkillPlacementClassifier",

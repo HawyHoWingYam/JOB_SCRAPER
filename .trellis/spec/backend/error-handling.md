@@ -190,6 +190,13 @@ The host manual-action helper is cross-platform. It resolves `chromium`,
 `chrome`, and `msedge` through host-native application/PATH candidates, then
 falls back to the installed Playwright Chromium executable for the `chromium`
 channel. `JOBSDB_HEADED_BROWSER_EXECUTABLE_PATH` overrides discovery when set.
+The host bootstrap command is a Python 3 command (`python3` on macOS/Linux); its
+host-only requirements must keep SQLAlchemy at `>=2.0.44,<2.1` and
+`psycopg2-binary>=2.9.11` so Python 3.14 can import the helper runtime.
+When the host helper inherits the Compose database URL, it translates the
+container-only `postgres-db:5432` endpoint to the published host endpoint
+`127.0.0.1:5433`; `MANUAL_ACTION_HELPER_DATABASE_URL` is the explicit override
+for a different host database.
 When the API worker runs in Docker, a profile under
 `/app/.host_browser_profiles/...` is translated to the bind-mounted
 `backend/.host_browser_profiles/...` path only for the local browser process;
@@ -201,6 +208,16 @@ Normal headless JobsDB execution never calls the helper. For a supported WAF
 challenge, the operator explicitly uses the helper to open a separate headed
 verification browser, completes the challenge, and chooses
 `reuse_open_browser` for that recovery attempt.
+
+JobsDB detail transport is stable across new runs and resumes:
+`jobsdb_standalone_crawl._detail_scraper_context(...)` always constructs
+`JobsDBBrowserDetailScraper`. `crawl_mode` controls only fresh-browser
+visibility (`headless` launches an invisible worker-owned browser; `headed`
+launches a visible one), while `resume_strategy="reuse_open_browser"` is the
+only path that attaches to the operator's verification browser. Never select
+the legacy HTTP detail scraper or change transports merely because
+`is_resume=true`; doing so makes checkpoint recovery behave differently from
+the reviewed run.
 
 Routine CTGoodJobs listing and detail execution follows the same headless-first
 boundary. Headed remains an explicit debug/manual-recovery mode; a WAF/IP/human
@@ -237,6 +254,8 @@ verification signal never triggers a hidden headless-to-headed retry.
 | Temporary profile is outside the configured `tasks/` or `operations/` root, contains traversal, or resolves through a symlinked owner | `temporary_profile_not_owned`; do not inspect or delete it |
 | Fixed profile does not equal the configured profile root | `fixed_profile_not_configured`; do not remove singleton markers |
 | CTGoodJobs stale ProcessSingleton on the first fresh-profile resume launch | One proven-dead reset/retry; a second failure returns structured manual action |
+| JobsDB new run or Fresh Profile Resume in `headless` mode | Use `JobsDBBrowserDetailScraper`; launch worker-owned Playwright with `headless=true`; do not call the Host Helper |
+| JobsDB headless Resume with `reuse_open_browser` | Use `JobsDBBrowserDetailScraper`; attach to the explicitly opened verification browser over CDP |
 | Latest resume event has no later outcome | Show accepted/waiting feedback and disable both Resume actions |
 | Later manual-action event resolves the attempt | Show its stage/classification/message and permit another explicit action |
 
@@ -296,6 +315,9 @@ verification signal never triggers a hidden headless-to-headed retry.
 - `backend/tests/test_jobsdb_browser_detail_scraper.py` proves the configured and
   resolved CDP host reaches `connect_over_cdp`, structured success fields are
   visible in formatted logs, and attach failure stays resumable.
+- `backend/tests/test_listing_runtime.py` proves every JobsDB detail combination
+  (new/Resume, headless/headed, Fresh Profile/Reuse Open Browser) enters the same
+  mode-aware `JobsDBBrowserDetailScraper` transport.
 - `frontend/src/components/scraper/recoveryAttemptUtils.test.js` and
   `CrawlTasksPage.test.jsx` cover attempt ordering, durable returned outcome,
   local request pending state, and disabled repeated Resume actions while the
@@ -562,6 +584,16 @@ launcher instance, heartbeat/stop/exit timestamps, exit code, and execution
 status. The generation is passed as `--execution-generation` and
 `CRAWL_JOB_EXECUTION_GENERATION`.
 
+Direct-launch execution ownership is also a liveness contract. The launcher
+polls the durable heartbeat while supervising its local process. A heartbeat
+older than `crawl_execution_heartbeat_stale_seconds` is terminal only after the
+launcher verifies PID, process create time, stored command, Crawl Job ID, and
+execution generation. A matching live process is stopped as a process tree; an
+absent or identity-mismatched process is recorded stale without signalling the
+PID. Access-denied or otherwise unverifiable identity remains active and is
+retried with diagnostics. Startup performs the same stale reconciliation before
+active execution rows can shield Crawl Jobs from interruption recovery.
+
 ### 3. Contracts
 
 - Cancel is permanent and idempotent. `cancelled` tasks cannot Resume.
@@ -580,6 +612,35 @@ status. The generation is passed as `--execution-generation` and
   acknowledged without relaunching.
 - Late worker transitions to running/completed/failed/manual-action cannot
   overwrite `cancelling` or `cancelled`.
+- A non-cancelling execution heartbeat timeout records `crawl.failed`, marks the
+  execution `terminated` or `stale`, and fails the Crawl Job only after owned
+  process exit is confirmed. Existing completed, failed, manual-action,
+  cancelling, and cancelled Crawl Jobs are never overwritten.
+- Stale execution failure preserves committed listing events, metrics, and
+  staging rows and releases only unresolved detail rows owned by the failed run.
+- A deterministic detail persistence/programming failure is run-fatal. The
+  executor records the first affected target as failed once, stops before later
+  targets, and atomically records `crawl.failed` while releasing only owned
+  still-`running` frozen rows to `pending` with outcome `failed_retryable`.
+  Modeled target-content failures such as `InvalidIngestPayloadError` retain
+  their source-specific continue or manual-action behavior.
+- CTgoodjobs detail persistence has one Source-owned fact boundary:
+  `jobContent.jobLocations[]` remains ordered Job evidence and its joined
+  display value is stored on `Job.location` (`TEXT`), never copied into
+  `Company.location`. The CTgoodjobs company mapper omits `location`, so an
+  existing Company location is preserved.
+- CTgoodjobs continues only after modeled item-content rejection such as
+  `InvalidIngestPayloadError`, after that item's isolated transaction has
+  rolled back and its listing is marked failed. `DetailPersistenceError`,
+  SQL/database availability failures, rollback failures, cancellation,
+  manual action, and unknown Python exceptions stop before the next target.
+- During a current-schema cutover window, CTgoodjobs checks an oversized Job
+  location against the actually deployed `jobs.location` type before any
+  Company or Job flush. A finite deployed limit produces item-scoped
+  `persistence_value_too_long` evidence containing only `field`, `limit`, and
+  `value_length`; it never logs the full value. A deployed `TEXT` column has no
+  limit and permits normal publication. Missing-column or introspection errors
+  are unknown infrastructure errors and remain run-fatal.
 - Keep committed/staged output. Cancelled listing metrics are partial and not
   naturally complete. Only detail rows owned by the task and still `running`
   return to `pending`; settled rows remain unchanged.
@@ -600,6 +661,11 @@ status. The generation is passed as `--execution-generation` and
 | Popen or PID registration fails | Stop any created process; mark execution launch failed; settle CrawlJob as failed or cancelled |
 | Scheduled task requests Cancel | Reject without state or event changes |
 | Late worker reports failure/completion | Preserve cancelling/cancelled state; metrics may still merge |
+| Detail persistence interface/programming error | Fail after the first target; release only unresolved owned rows and preserve settled output |
+| CTgoodjobs modeled invalid item payload | Roll back and mark only that listing failed; record progress and continue |
+| CTgoodjobs Job has a multi-location value longer than 255 characters | Preserve the full ordered raw evidence and full joined `Job.location`; do not write Company.location |
+| CTgoodjobs oversized Job location while deployed column is still finite | Record safe `persistence_value_too_long`, fail only the item, and continue later snapshot targets |
+| CTgoodjobs storage introspection fails or the deployed location column is absent | Stop the run as an unknown persistence/infrastructure failure |
 
 ### 5. Good / Base / Bad Cases
 
@@ -627,6 +693,9 @@ status. The generation is passed as `--execution-generation` and
   CTGoodJobs, and OfferToday.
 - Cancellation-service tests assert listing partialness, settled-output
   preservation, owned-running detail recovery, and idempotent events.
+- Cross-source detail tests assert JobsDB and CTGoodJobs use the current ingest
+  projection interface, stop after the first unexpected persistence failure,
+  and preserve modeled target-content behavior.
 - Snapshot/frontend tests assert Cancelling filtering/polling, disabled repeated
   Cancel, no terminal Cancel, and no Resume for cancelled tasks.
 

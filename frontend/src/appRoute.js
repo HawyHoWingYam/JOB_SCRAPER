@@ -17,10 +17,7 @@ const JOB_ROUTE_FILTER_KEYS = {
 const MAX_JOB_ROUTE_IDS = 20;
 const STABLE_CODE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
 const DEFAULT_CLASSIFICATION_TARGET = 'skill';
-const VALID_CLASSIFICATION_TARGETS = new Set([
-  DEFAULT_CLASSIFICATION_TARGET,
-  'company_industry',
-]);
+const VALID_CLASSIFICATION_TARGETS = new Set([DEFAULT_CLASSIFICATION_TARGET]);
 
 function normalizeStableCodes(values) {
   const normalized = [];

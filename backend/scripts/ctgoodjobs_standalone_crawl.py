@@ -13,6 +13,8 @@ import time
 from typing import Any, Sequence
 from uuid import uuid4
 
+from sqlalchemy import inspect as inspect_database
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("ctgoodjobs-crawl")
 
@@ -25,6 +27,7 @@ from app.crawl_control.contracts import (  # noqa: E402
     CTgoodjobsQueryTargetParametersV1,
 )
 from app.crawl_control.detail_runtime import DetailRuntimePlan  # noqa: E402
+from app.crawl_control.errors import DetailPersistenceError  # noqa: E402
 from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.repositories.company_repository import CompanyRepository  # noqa: E402
@@ -343,25 +346,84 @@ def _detail_target_listing_ids(target: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _build_ctgoodjobs_company_data(
+    ingest_service: IngestWorkerService,
+    canonical_job: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep CTgoodjobs Job-location evidence out of Company persistence."""
+
+    company_data = ingest_service._build_company_data(canonical_job)
+    company_data.pop("location", None)
+    return company_data
+
+
+def _validate_ctgoodjobs_storage_contract(
+    db,
+    canonical_job: dict[str, Any],
+) -> None:
+    """Reject a known item value before a deployed finite column can fail."""
+
+    location = canonical_job.get("location")
+    if not isinstance(location, str) or len(location) <= 255:
+        return
+
+    columns = inspect_database(db.get_bind()).get_columns("jobs")
+    location_column = next(
+        (column for column in columns if column.get("name") == "location"),
+        None,
+    )
+    if location_column is None:
+        raise RuntimeError("deployed jobs table has no location column")
+    deployed_limit = getattr(location_column.get("type"), "length", None)
+    if (
+        isinstance(deployed_limit, int)
+        and not isinstance(deployed_limit, bool)
+        and len(location) > deployed_limit
+    ):
+        raise InvalidIngestPayloadError(
+            "persistence_value_too_long",
+            "Persistence value exceeds deployed storage contract: "
+            f"field=location limit={deployed_limit} "
+            f"value_length={len(location)}",
+        )
+
+
 async def _persist_ctgoodjobs_job(*, canonical_job: dict[str, Any]):
     db = SessionLocal()
     try:
         ingest_service = IngestWorkerService()
         company_repository = CompanyRepository()
         job_repository = JobRepository()
-        company_data = ingest_service._build_company_data(canonical_job)
-        company, _ = company_repository.upsert_company(db, company_data, auto_commit=False)
-        ingest_service.project_company_industry(db, company, canonical_job)
-        job_data = ingest_service._build_job_data(canonical_job, company.id)
-        saved_job, _ = job_repository.upsert_source_job(
-            db,
-            job_data,
-            skip_existing=False,
-            auto_commit=False,
-        )
-        ingest_service.project_source_attributes(db, saved_job, canonical_job)
-        db.commit()
-        return saved_job.id
+        try:
+            _validate_ctgoodjobs_storage_contract(db, canonical_job)
+            company_data = _build_ctgoodjobs_company_data(
+                ingest_service,
+                canonical_job,
+            )
+            company, _ = company_repository.upsert_company(
+                db,
+                company_data,
+                auto_commit=False,
+            )
+            job_data = ingest_service._build_job_data(canonical_job, company.id)
+            saved_job, _ = job_repository.upsert_source_job(
+                db,
+                job_data,
+                skip_existing=False,
+                auto_commit=False,
+            )
+            ingest_service.project_source_attributes(db, saved_job, canonical_job)
+            db.commit()
+            return saved_job.id
+        except InvalidIngestPayloadError:
+            db.rollback()
+            raise
+        except Exception as exc:
+            db.rollback()
+            raise DetailPersistenceError(
+                source_site=CTGOODJOBS_SOURCE_SITE,
+                source_job_id=str(canonical_job.get("source_job_id") or "unknown"),
+            ) from exc
     finally:
         db.close()
 
@@ -1036,6 +1098,15 @@ async def _run_detail_phase(
                 target=target,
                 item_started_at=item_started_at,
             )
+        except DetailPersistenceError as exc:
+            last_content_anomaly_reason = None
+            record_failure(
+                exc=exc,
+                index=index,
+                target=target,
+                item_started_at=item_started_at,
+            )
+            raise
         except Exception as exc:
             last_content_anomaly_reason = None
             record_failure(
@@ -1044,6 +1115,7 @@ async def _run_detail_phase(
                 target=target,
                 item_started_at=item_started_at,
             )
+            raise
 
         crawl_runtime.write_progress_event(
             crawl_job_id=args.crawl_job_id,
@@ -1144,6 +1216,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
         args,
         listing_phase_completed=False,
     )
+    active_phase = "listing" if args.crawl_phase in {"listing", "full"} else "detail"
 
     try:
         args.cancellation_token.raise_if_cancelled()
@@ -1174,6 +1247,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 "manual_action_required": 0,
             }
             if args.crawl_phase in {"full", "detail"}:
+                active_phase = "detail"
                 logger.info(
                     build_scrape_log_event(
                         "SCRAPE_DETAIL_SCOPE_RESOLVED",
@@ -1304,20 +1378,29 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 error_type=type(exc).__name__,
             )
         )
-        crawl_runtime.mark_failed(
-            crawl_job_id=args.crawl_job_id,
-            source_site=CTGOODJOBS_SOURCE_SITE,
-            error_message=str(exc),
-            payload=(
-                _build_browser_request_payload(args)
-                if args.crawl_phase == "listing"
-                else {
-                    "crawl_phase": args.crawl_phase,
-                    "crawl_mode": args.crawl_mode,
-                    "category_ids": list(args.category_ids),
-                }
-            ),
+        failure_payload = (
+            _build_browser_request_payload(args)
+            if args.crawl_phase == "listing"
+            else {
+                "crawl_phase": args.crawl_phase,
+                "crawl_mode": args.crawl_mode,
+                "category_ids": list(args.category_ids),
+            }
         )
+        if active_phase == "detail":
+            crawl_runtime.mark_detail_run_failed(
+                crawl_job_id=args.crawl_job_id,
+                source_site=CTGOODJOBS_SOURCE_SITE,
+                error_message=str(exc),
+                payload=failure_payload,
+            )
+        else:
+            crawl_runtime.mark_failed(
+                crawl_job_id=args.crawl_job_id,
+                source_site=CTGOODJOBS_SOURCE_SITE,
+                error_message=str(exc),
+                payload=failure_payload,
+            )
         return 1
 
 

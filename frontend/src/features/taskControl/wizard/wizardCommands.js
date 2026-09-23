@@ -1,7 +1,4 @@
-import {
-  LISTING_TECHNICAL_RUN_PAGE_CAP,
-  offerTodayEstimatedMaxPages,
-} from './wizardPolicy';
+import { LISTING_TECHNICAL_RUN_PAGE_CAP } from './wizardPolicy';
 
 function positiveInteger(value, label) {
   const parsed = Number(value);
@@ -50,16 +47,6 @@ function listingSettings(draft) {
   };
   if (settings.run_page_cap > LISTING_TECHNICAL_RUN_PAGE_CAP) {
     throw new Error('Run Page Cap exceeds the technical storage limit');
-  }
-  const offerTodayEstimate = offerTodayEstimatedMaxPages(settings.page_depth);
-  if (
-    draft.source_site === 'offertoday'
-    && (
-      offerTodayEstimate === null
-      || settings.run_page_cap < offerTodayEstimate
-    )
-  ) {
-    throw new Error('OfferToday Run Page Cap must cover 36 keywords × Page Depth');
   }
   return settings;
 }

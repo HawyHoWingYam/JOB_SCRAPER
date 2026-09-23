@@ -26,33 +26,6 @@ def _required_text(value: object, *, field: str) -> str:
     return normalized
 
 
-def transform_company_industry_taxonomy(
-    seed: Mapping[str, Any],
-) -> CurrentTaxonomySnapshot:
-    nodes = tuple(
-        CurrentTaxonomyNode(
-            taxonomy="company_industry",
-            code=_required_text(item.get("code"), field="node.code"),
-            parent_code=(
-                _required_text(item.get("parent_code"), field="node.parent_code")
-                if item.get("parent_code") is not None
-                else None
-            ),
-            level=_required_text(item.get("level"), field="node.level"),
-            labels={
-                str(language): _required_text(label, field=f"node.labels.{language}")
-                for language, label in dict(item.get("labels") or {}).items()
-            },
-            order=int(item["source_order"]),
-            is_assignable=str(item.get("level")) == "subclass",
-        )
-        for item in _objects(seed.get("nodes"), field="nodes")
-    )
-    return _validated_snapshot(
-        CurrentTaxonomySnapshot(taxonomy="company_industry", nodes=nodes)
-    )
-
-
 def transform_skill_taxonomy(seed: Mapping[str, Any]) -> CurrentTaxonomySnapshot:
     nodes: list[CurrentTaxonomyNode] = []
     aliases: list[CurrentTaxonomyAlias] = []

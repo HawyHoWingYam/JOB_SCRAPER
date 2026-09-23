@@ -1,0 +1,29 @@
+{
+  "id": "jev-skill-review",
+  "name": "jev-skill-review",
+  "title": "Jev phase 2: evidence-backed Skill Candidate review",
+  "description": "Evidence-backed Skill Candidate review",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": "2026-09-23",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-23-research-jev-use-cases",
+  "relatedFiles": [],
+  "notes": "Not proceeding in this roadmap. Settings/budget completed, but the conjunctive Phase 1B gate did not: its release report is inconclusive without independent English and Traditional-Chinese real references. No Skill review product changes or automatic writes were implemented; a future attempt requires a new explicitly authorized rollout task.",
+  "meta": {
+    "github_issue": 65,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/65"
+  }
+}

@@ -1,5 +1,4 @@
 import React, { useMemo, useState } from 'react';
-import { OFFERTODAY_QUERY_TARGET_COUNT } from './wizardPolicy';
 
 export default function SourceScopeTree({
   sourceSite,
@@ -59,7 +58,7 @@ export default function SourceScopeTree({
       </div>
       {scope?.mode === 'selected' && (
         <>
-          {singleSelect && <p>OfferToday runs one major category through all {OFFERTODAY_QUERY_TARGET_COUNT} keyword targets.</p>}
+          {singleSelect && <p>OfferToday automatically includes the current child categories and the enabled keyword pack for this major category.</p>}
           <label className="control-field">
             Search categories
             <input value={search} onChange={(event) => setSearch(event.target.value)} />

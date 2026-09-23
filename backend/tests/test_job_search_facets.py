@@ -15,7 +15,6 @@ from app.database import get_db
 from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
 from app.models import Company, Job
 from app.models.current_taxonomy import (
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
@@ -56,7 +55,6 @@ def _facet_session():
             JobEmploymentType.__table__,
             CurrentTaxonomyNodeRecord.__table__,
             CurrentTaxonomyAliasRecord.__table__,
-            CurrentCompanyIndustryAssignment.__table__,
             CurrentJobSkillAssignment.__table__,
         ],
     )
@@ -314,122 +312,6 @@ def test_source_classification_facet_uses_retained_paths_and_distinct_job_counts
         assert options["jobsdb:6287"].path == (
             "Information Technology / Developers and Programmers"
         )
-    finally:
-        db.close()
-        engine.dispose()
-
-
-def test_company_industry_facet_counts_jobs_once_per_ancestor():
-    db, engine = _facet_session()
-    try:
-        company = Company(
-            company_id="facet-industry-company",
-            source_site="jobsdb",
-            source_company_id="facet-industry-company",
-            name="Industry Company",
-        )
-        first_job = Job(
-            job_id="facet-industry-first",
-            source_site="jobsdb",
-            source_job_id="facet-industry-first",
-            company=company,
-            title="Publishing role",
-        )
-        second_job = Job(
-            job_id="facet-industry-second",
-            source_site="jobsdb",
-            source_job_id="facet-industry-second",
-            company=company,
-            title="Media role",
-        )
-        db.add_all([first_job, second_job])
-        db.flush()
-        section_code = "J"
-        publishing_code = "58"
-        media_code = "59"
-        db.add_all(
-            [
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="company_industry",
-                    code=section_code,
-                    parent_code=None,
-                    level="section",
-                    labels={"en": "Information and communications"},
-                    sort_order=1,
-                    is_assignable=False,
-                    is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="company_industry",
-                    code=publishing_code,
-                    parent_code=section_code,
-                    level="division",
-                    labels={"en": "Publishing activities"},
-                    sort_order=1,
-                    is_assignable=True,
-                    is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="company_industry",
-                    code=media_code,
-                    parent_code=section_code,
-                    level="division",
-                    labels={"en": "Media activities"},
-                    sort_order=2,
-                    is_assignable=True,
-                    is_active=True,
-                ),
-            ]
-        )
-        db.flush()
-        db.add_all(
-            [
-                CurrentCompanyIndustryAssignment(
-                    company_id=company.id,
-                    taxonomy="company_industry",
-                    taxonomy_code=publishing_code,
-                    method="fixture",
-                    provenance={},
-                    evidence_hash="3" * 64,
-                    breadcrumb={},
-                    is_primary=True,
-                    primary_basis="fixture",
-                ),
-                CurrentCompanyIndustryAssignment(
-                    company_id=company.id,
-                    taxonomy="company_industry",
-                    taxonomy_code=media_code,
-                    method="fixture",
-                    provenance={},
-                    evidence_hash="4" * 64,
-                    breadcrumb={},
-                    is_primary=False,
-                    primary_basis=None,
-                ),
-            ]
-        )
-        db.commit()
-
-        scope = JobSearchScopeSchema(
-            layers=[
-                JobSearchLayerSchema(
-                    client_id="root",
-                    structured_filters=JobSearchFiltersSchema(
-                        company_industry_node_ids=[publishing_code],
-                    ),
-                )
-            ]
-        )
-
-        options = {
-            option.id: option
-            for option in JobSearchFacets(db).build(scope).company_industries
-        }
-
-        assert options[section_code].count == 2
-        assert options[publishing_code].count == 2
-        assert options[media_code].count == 2
-        assert options[publishing_code].parent_id == section_code
     finally:
         db.close()
         engine.dispose()

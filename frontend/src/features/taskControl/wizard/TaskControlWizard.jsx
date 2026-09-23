@@ -40,10 +40,6 @@ import {
   wizardReducer,
 } from './wizardReducer';
 import SourceScopeTree from './SourceScopeTree';
-import {
-  OFFERTODAY_QUERY_TARGET_COUNT,
-  offerTodayEstimatedMaxPages,
-} from './wizardPolicy';
 import './TaskControlWizard.css';
 
 const SOURCE_LABELS = { jobsdb: 'JobsDB', ctgoodjobs: 'CTgoodjobs', offertoday: 'OfferToday' };
@@ -86,12 +82,6 @@ function ExecutionStep({ draft, dispatch }) {
   const setSchedule = (value) => dispatch({ type: 'scheduleChanged', value });
   const automationFlow = draft.flow === 'automation';
   const isOfferTodayListing = draft.source_site === 'offertoday' && draft.intent === 'listing';
-  const pageDepth = Number(draft.execution.page_depth);
-  const runPageCap = Number(draft.execution.run_page_cap);
-  const offerTodayEstimate = offerTodayEstimatedMaxPages(pageDepth);
-  const offerTodayBudgetValid = offerTodayEstimate !== null
-    && Number.isSafeInteger(runPageCap)
-    && runPageCap >= offerTodayEstimate;
   return (
     <div className="execution-stack">
       {draft.intent === 'listing' ? (
@@ -102,9 +92,7 @@ function ExecutionStep({ draft, dispatch }) {
             <label className="control-field">Run Page Cap<input type="number" min="1" value={draft.execution.run_page_cap || ''} onChange={(event) => setExecution({ run_page_cap: event.target.value })} /></label>
           </div>
           {isOfferTodayListing ? (
-            <p className={offerTodayBudgetValid ? undefined : 'control-error'}>
-              {OFFERTODAY_QUERY_TARGET_COUNT} keywords × {Number.isSafeInteger(pageDepth) && pageDepth > 0 ? pageDepth : 'Page Depth'} = <strong>{offerTodayEstimate ?? '—'}</strong> estimated maximum pages. Run Page Cap {offerTodayBudgetValid ? 'covers' : 'must cover'} the full sweep.
-            </p>
+            <p>Server review resolves the current root, active child categories, and enabled keyword pack. It shows the exact native, keyword, and total page maximum before dispatch.</p>
           ) : (
             <p>Server review resolves Query Target count and verifies <strong>targets × depth</strong> against the operator cap and system ceiling.</p>
           )}
@@ -152,6 +140,21 @@ function ExecutionStep({ draft, dispatch }) {
 function ReviewProjection({ state, route }) {
   const review = state.review.value;
   const plan = state.plan.value;
+  const offerTodayBreakdown = (resolvedScope, pageDepth) => {
+    const targets = Array.isArray(resolvedScope?.query_targets)
+      ? resolvedScope.query_targets
+      : [];
+    const keywordTargets = targets.filter(
+      (target) => target?.parameters?.target_kind === 'keyword',
+    ).length;
+    const nativeTargets = targets.length - keywordTargets;
+    return {
+      nativeTargets,
+      keywordTargets,
+      nativePages: nativeTargets * pageDepth,
+      keywordPages: keywordTargets * pageDepth,
+    };
+  };
   if (route.flow === 'automation' && review) {
     const workload = review.listingWorkload;
     const detail = review.detailPreview;
@@ -159,7 +162,7 @@ function ReviewProjection({ state, route }) {
       <div className="review-stack">
         {review.before && <section className="control-subpanel"><h3>Edit before / after</h3><p>Before: {review.before.configuration.name}</p><p>After: {state.draft.schedule.name}</p></section>}
         <section className="control-subpanel"><h3>Server-owned scope</h3><dl className="review-facts"><div><dt>Authored mode</dt><dd>{review.authoredScope.mode}</dd></div><div><dt>Resolved Query Targets</dt><dd>{review.resolvedScope.query_target_count}</dd></div><div><dt>Review fingerprint</dt><dd><code>{review.inputFingerprint.slice(0, 16)}</code></dd></div></dl></section>
-        {workload && <section className="control-subpanel"><h3>Listing workload</h3><p>{workload.query_target_count} targets × {workload.page_depth} depth = <strong>{workload.estimated_max_pages}</strong> estimated maximum pages.</p><p>Run Page Cap {workload.run_page_cap}; system ceiling {workload.system_run_page_cap}.</p></section>}
+        {workload && <section className="control-subpanel"><h3>Listing workload</h3><p>{workload.query_target_count} targets × {workload.page_depth} depth = <strong>{workload.estimated_max_pages}</strong> estimated maximum pages.</p>{state.draft.source_site === 'offertoday' && (() => { const counts = offerTodayBreakdown(review.resolvedScope, workload.page_depth); return <p>Native: {counts.nativeTargets} targets / {counts.nativePages} pages. Keywords: {counts.keywordTargets} targets / {counts.keywordPages} pages.</p>; })()}<p>Run Page Cap {workload.run_page_cap}; system ceiling {workload.system_run_page_cap}.</p></section>}
         {detail && <section className="control-subpanel"><h3>Detail preview (not frozen)</h3><p>{detail.eligible_now_count} eligible now; {detail.selected_now_count} would be selected by the current cap.</p><p>Future scheduled membership is frozen only when the Automation becomes due. Absolute safety cap: {detail.absolute_safety_cap}.</p></section>}
         <section className="control-subpanel"><h3>Schedule and readiness</h3><p>{review.scheduleSummary.human_summary}</p><p>Next: {formatControlDateTime(review.scheduleSummary.next_run_at, review.scheduleSummary.timezone)}</p><p>Status: <strong>{review.readiness.status}</strong></p>{review.readiness.blockingErrors.map((error) => <p key={error.code} className="control-error">{error.code}: {error.message}</p>)}</section>
         {review.warnings.map((warning) => <p role="status" className="control-warning" key={warning.code}>{warning.code}: {warning.message}</p>)}
@@ -169,10 +172,14 @@ function ReviewProjection({ state, route }) {
   if (plan) {
     const listing = plan.content.listing_settings;
     const detail = plan.content.detail_settings;
+    const counts = listing && plan.content.source_site === 'offertoday'
+      ? offerTodayBreakdown(plan.content.resolved_scope, listing.page_depth)
+      : null;
     return (
       <div className="review-stack">
         <section className="control-subpanel"><h3>Immutable Dispatch Plan</h3><dl className="review-facts"><div><dt>Plan</dt><dd>{plan.planId}</dd></div><div><dt>Fingerprint</dt><dd><code>{plan.planFingerprint.slice(0, 16)}</code></dd></div><div><dt>Expires</dt><dd>{formatControlDateTime(plan.expiresAt)}</dd></div><div><dt>Readiness</dt><dd>{plan.readiness.status}</dd></div></dl></section>
         {listing && <p>{plan.content.resolved_scope.query_target_count} Query Targets × {listing.page_depth} Page Depth; Run Page Cap {listing.run_page_cap}.</p>}
+        {counts && <p>Native: {counts.nativeTargets} targets / {counts.nativePages} pages. Keywords: {counts.keywordTargets} targets / {counts.keywordPages} pages. Total: {counts.nativePages + counts.keywordPages} pages.</p>}
         {detail && <p>Frozen detail snapshot: {plan.detailTargetCount} canonical targets. Limit: {detail.limit.kind}{detail.limit.detail_run_cap ? ` ${detail.limit.detail_run_cap}` : ''}. Recovery Segment is not operator authority.</p>}
         {plan.readiness.blockingErrors.map((error) => <p key={error.code} className="control-error">{error.code}: {error.message}</p>)}
       </div>

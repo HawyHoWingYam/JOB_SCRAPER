@@ -1,7 +1,6 @@
 import {
   OFFERTODAY_DEFAULT_PAGE_DEPTH,
   OFFERTODAY_DEFAULT_RUN_PAGE_CAP,
-  offerTodayEstimatedMaxPages,
 } from './wizardPolicy';
 
 export const STEP_ORDER = ['intent', 'scope', 'execution', 'review'];
@@ -144,14 +143,7 @@ export function isStepComplete(draft, step = draft.step) {
       return Number.isSafeInteger(pageDepth)
         && Number.isSafeInteger(runPageCap)
         && pageDepth > 0
-        && runPageCap > 0
-        && (
-          draft.source_site !== 'offertoday'
-          || (
-            offerTodayEstimatedMaxPages(pageDepth) !== null
-            && runPageCap >= offerTodayEstimatedMaxPages(pageDepth)
-          )
-        );
+        && runPageCap > 0;
     }
     if (!draft.execution.backlog_kind || !draft.execution.limit_kind) return false;
     if (draft.execution.backlog_kind === 'listing_batch' && !draft.execution.source_listing_crawl_job_id) return false;

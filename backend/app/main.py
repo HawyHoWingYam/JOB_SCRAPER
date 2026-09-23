@@ -29,12 +29,20 @@ from app.services.source_classification_registry import (
     build_source_classification_adapters,
     synchronize_source_classification_adapters,
 )
+from app.services.offertoday_keyword_catalog import OfferTodayKeywordCatalog
+from app.services.offertoday_taxonomy_resolver import OfferTodayTaxonomyResolver
+from app.services.skill_taxonomy_bootstrap import (
+    reconcile_deterministic_skill_candidates,
+    synchronize_initial_skill_taxonomy,
+)
 
 configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
 
 
 def run_api_startup_recovery() -> dict[str, int]:
+    execution_launcher = CrawlJobExecutionLauncher()
+    stale_executions_recovered = execution_launcher.recover_stale_executions()
     startup_db = SessionLocal()
     try:
         summary = StartupRecoveryService(startup_db).recover_interrupted_operations(
@@ -46,7 +54,8 @@ def run_api_startup_recovery() -> dict[str, int]:
         startup_db.commit()
         summary[
             "crawl_cancellations_supervised"
-        ] = CrawlJobExecutionLauncher().recover_pending_cancellations()
+        ] = execution_launcher.recover_pending_cancellations()
+        summary["stale_crawl_executions_recovered"] = stale_executions_recovered
         return summary
     finally:
         startup_db.close()
@@ -55,12 +64,45 @@ def run_api_startup_recovery() -> dict[str, int]:
 def synchronize_source_classifications_on_startup() -> dict[str, object]:
     startup_db = SessionLocal()
     try:
+        adapters = build_source_classification_adapters()
         results = synchronize_source_classification_adapters(
             startup_db,
-            build_source_classification_adapters().values(),
+            (
+                adapter
+                for source_site, adapter in adapters.items()
+                if source_site != "offertoday"
+            ),
         )
+        try:
+            taxonomy = OfferTodayTaxonomyResolver(
+                startup_db,
+                adapter=adapters["offertoday"],
+            ).refresh_or_last_verified(refresh=True)
+            results["offertoday"] = {
+                "freshness": taxonomy.freshness,
+                "fingerprint": taxonomy.fingerprint,
+            }
+            OfferTodayKeywordCatalog(startup_db).bootstrap_initial_it_pack()
+        except Exception as exc:
+            results["offertoday"] = type(exc).__name__
         startup_db.commit()
         return results
+    finally:
+        startup_db.close()
+
+
+def synchronize_skill_taxonomy_on_startup() -> dict[str, int | bool]:
+    startup_db = SessionLocal()
+    try:
+        result = synchronize_initial_skill_taxonomy(startup_db)
+        # Reconciliation is an upgrade/restart concern as well as an initial
+        # bootstrap concern. Existing taxonomies can gain new manifest skills,
+        # and historical mentions must be rechecked on every startup.
+        result["deterministically_reconciled"] = reconcile_deterministic_skill_candidates(
+            startup_db
+        )
+        startup_db.commit()
+        return result
     finally:
         startup_db.close()
 
@@ -85,6 +127,14 @@ async def lifespan(app: FastAPI):
         logger.info("Source classification sync summary: %s", classification_summary)
     except Exception:
         logger.exception("Source classification startup sync failed")
+
+    try:
+        skill_taxonomy_summary = await asyncio.to_thread(
+            synchronize_skill_taxonomy_on_startup
+        )
+        logger.info("Skill taxonomy startup summary: %s", skill_taxonomy_summary)
+    except Exception:
+        logger.exception("Skill taxonomy startup sync failed")
 
     try:
         yield

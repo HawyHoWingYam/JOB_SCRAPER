@@ -18,6 +18,7 @@ import scrapy
 from scrapy.http import Response
 
 from app.crawl_control.contracts import (
+    OfferTodayAdaptiveQueryTargetParametersV1,
     OfferTodayKeywordQueryTargetParametersV1,
     OfferTodayQueryTargetParametersV1,
 )
@@ -132,6 +133,7 @@ class OfferTodaySpider(scrapy.Spider):
                 if not isinstance(
                     parameters,
                     (
+                        OfferTodayAdaptiveQueryTargetParametersV1,
                         OfferTodayQueryTargetParametersV1,
                         OfferTodayKeywordQueryTargetParametersV1,
                     ),

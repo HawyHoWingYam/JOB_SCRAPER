@@ -15,6 +15,9 @@ const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
 const ClassificationBatchesPage = lazy(
   () => import('./components/classification/ClassificationBatchesPage'),
 );
+const OfferTodayKeywordPacksPage = lazy(
+  () => import('./components/offertoday/OfferTodayKeywordPacksPage'),
+);
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
@@ -102,6 +105,7 @@ function App() {
                 onNavigateTarget={navigateToClassification}
               />
             )}
+            {activeView === 'offertoday-keywords' && <OfferTodayKeywordPacksPage />}
             {activeView === 'settings' && (
               <AISettingsPage
                 initialSection={settingsSection}

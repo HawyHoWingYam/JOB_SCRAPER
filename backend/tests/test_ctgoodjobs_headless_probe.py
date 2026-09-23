@@ -6,6 +6,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.sources.contracts import build_ctgoodjobs_canonical_job
+from app.sources.ctgoodjobs.parsers import parse_detail_page
 from scripts import ctgoodjobs_headless_probe as probe
 
 
@@ -26,7 +28,11 @@ def _listing_html(job_id: str = "123456") -> str:
     )
 
 
-def _detail_html(job_id: str = "123456") -> str:
+def _detail_html(
+    job_id: str = "123456",
+    *,
+    job_locations: list[dict[str, str]] | None = None,
+) -> str:
     job_content = {
         "jobId": job_id,
         "jobTitle": "Software Engineer",
@@ -36,7 +42,7 @@ def _detail_html(job_id: str = "123456") -> str:
         "startPostDate": "2026-07-01",
         "endPostDate": "2026-08-01",
         "jobDescription": "<p>Build reliable systems.</p>",
-        "jobLocations": [{"name": "Hong Kong"}],
+        "jobLocations": job_locations or [{"name": "Hong Kong"}],
         "workTypes": [{"name": "Full-time"}],
     }
     flight_payload = json.dumps({"jobContent": job_content}, separators=(",", ":"))
@@ -203,6 +209,29 @@ def test_valid_detail_records_coverage_without_raw_body() -> None:
     assert observation["parser_result"]["description_present"] is True
     assert len(observation["body_sha256"]) == 64
     assert "html" not in json.dumps(observation).lower()
+
+
+def test_long_ordered_job_locations_survive_parser_and_canonical_contract() -> None:
+    job_locations = [
+        {"name": f"District {index} with a deliberately descriptive location name"}
+        for index in range(1, 9)
+    ]
+    expected = ", ".join(item["name"] for item in job_locations)
+    assert len(expected) > 255
+
+    parsed = parse_detail_page(
+        _detail_html(job_locations=job_locations),
+        source_classification_id="ct-it",
+        source_classification_name="Information Technology",
+        source_classification_slug="information-technology",
+        url="https://jobs.ctgoodjobs.hk/job/123456",
+    )
+    canonical = build_ctgoodjobs_canonical_job(parsed).to_dict()
+
+    assert parsed["location"] == expected
+    assert parsed["source_job_locations"] == job_locations
+    assert canonical["location"] == expected
+    assert canonical["raw_data"]["source_job_locations"] == job_locations
 
 
 def test_artifact_round_trip_and_hash_tamper_detection(tmp_path: Path) -> None:

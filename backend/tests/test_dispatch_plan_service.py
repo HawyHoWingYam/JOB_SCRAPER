@@ -56,7 +56,9 @@ from app.models.crawl_job import CrawlJob, CrawlJobEvent
 from app.models.crawl_job_execution import CrawlJobExecution
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.crawl_run import CrawlRun
+from app.models.company import Company
 from app.models.event_outbox import EventOutbox
+from app.models.job import Job
 from app.models.schedule import (
     ScheduleExecution,
     ScrapeSchedule,
@@ -85,6 +87,8 @@ def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
 
 def _dispatch_test_tables():
     return (
+        Company.__table__,
+        Job.__table__,
         ScrapeSchedule.__table__,
         CrawlJob.__table__,
         CrawlJobEvent.__table__,
@@ -1658,6 +1662,115 @@ def test_launcher_registration_failure_terminates_process(dispatch_db):
     assert terminated == [process]
     assert execution.status == "launch_failed"
     assert crawl_job.status == "failed"
+
+
+def test_stale_execution_settlement_fails_job_and_preserves_listing_output(
+    dispatch_db,
+):
+    _engine, factory, db, _revision = dispatch_db
+    crawl_job = CrawlJob(
+        source_site="offertoday",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "listing"},
+        metrics={"listings_staged": 3101},
+    )
+    db.add(crawl_job)
+    db.flush()
+    listing = CrawlJobListing(
+        crawl_job_id=crawl_job.id,
+        source_site="offertoday",
+        source_job_id="preserved-job",
+        source_url="https://www.offertoday.com/job/preserved-job",
+        detail_status="pending",
+        listing_payload={},
+    )
+    execution = CrawlJobExecution(
+        crawl_job_id=crawl_job.id,
+        generation=uuid4(),
+        launcher_instance_id="launcher",
+        status="running",
+        pid=4321,
+        process_create_time=123.0,
+        command=["python", "worker.py"],
+        heartbeat_at=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+    )
+    db.add_all([listing, execution])
+    db.commit()
+
+    launcher = CrawlJobExecutionLauncher(session_factory=factory)
+    launcher._local_exit_code = lambda _generation: None
+    assert launcher._settle_stale_execution(
+        {
+            "crawl_job_id": crawl_job.id,
+            "generation": str(execution.generation),
+            "heartbeat_age_seconds": 121.0,
+        },
+        execution_status="stale",
+    )
+
+    db.expire_all()
+    db.refresh(crawl_job)
+    db.refresh(execution)
+    assert crawl_job.status == "failed"
+    assert crawl_job.metrics == {"listings_staged": 3101}
+    assert execution.status == "stale"
+    assert db.query(CrawlJobListing).filter_by(id=listing.id).one().detail_status == "pending"
+    failure = (
+        db.query(CrawlJobEvent)
+        .filter_by(crawl_job_id=crawl_job.id, event_type="crawl.failed")
+        .one()
+    )
+    assert failure.payload["reason"] == "execution_heartbeat_timeout"
+    assert failure.payload["heartbeat_stale_seconds"] == 120
+
+
+def test_startup_stale_execution_recovery_is_idempotent(dispatch_db):
+    _engine, factory, db, _revision = dispatch_db
+    crawl_job = CrawlJob(
+        source_site="offertoday",
+        trigger_type="manual",
+        status="running",
+        request_payload={"crawl_phase": "listing"},
+    )
+    db.add(crawl_job)
+    db.flush()
+    execution = CrawlJobExecution(
+        crawl_job_id=crawl_job.id,
+        generation=uuid4(),
+        launcher_instance_id="old-launcher",
+        status="running",
+        pid=4321,
+        process_create_time=123.0,
+        command=[
+            "python",
+            "worker.py",
+            "--crawl-job-id",
+            str(crawl_job.id),
+            "--execution-generation",
+            "placeholder",
+        ],
+        heartbeat_at=datetime(2026, 7, 20, 10, 0, tzinfo=UTC),
+    )
+    db.add(execution)
+    db.flush()
+    execution.command[-1] = str(execution.generation)
+    db.commit()
+
+    launcher = CrawlJobExecutionLauncher(
+        session_factory=factory,
+        process_factory=lambda _pid: (_ for _ in ()).throw(
+            __import__("psutil").NoSuchProcess(pid=4321)
+        ),
+    )
+
+    assert launcher.recover_stale_executions() == 1
+    assert launcher.recover_stale_executions() == 0
+    db.expire_all()
+    assert db.query(CrawlJobEvent).filter_by(
+        crawl_job_id=crawl_job.id,
+        event_type="crawl.failed",
+    ).count() == 1
 
 
 def test_resume_cannot_rewrite_request_payload(dispatch_db):

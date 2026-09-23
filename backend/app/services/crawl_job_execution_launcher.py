@@ -15,6 +15,7 @@ import psutil  # type: ignore[import-untyped]
 from app.crawl_cancellation import ACTIVE_EXECUTION_STATUSES
 from app.crawl_control.dispatch_plan_service import DispatchPlanService
 from app.crawl_modes import normalize_source_site
+from app.config import settings
 from app.database import SessionLocal
 from app.repositories.crawl_job_execution_repository import (
     CrawlJobExecutionRepository,
@@ -302,6 +303,51 @@ class CrawlJobExecutionLauncher:
             )
         return len(generations) + len(jobs_without_execution)
 
+    def recover_stale_executions(self) -> int:
+        db = self._session_factory()
+        try:
+            snapshots = [
+                self._execution_repository.snapshot(execution)
+                for execution in self._execution_repository.list_active(db)
+            ]
+        finally:
+            db.close()
+
+        recovered = 0
+        for snapshot in snapshots:
+            heartbeat_age = snapshot.get("heartbeat_age_seconds")
+            if heartbeat_age is not None and float(heartbeat_age) < float(
+                settings.crawl_execution_heartbeat_stale_seconds
+            ):
+                continue
+            try:
+                owned_process = self._validated_process(snapshot)
+            except ProcessIdentityUnavailable:
+                logger.warning(
+                    "Startup cannot verify stale crawl execution identity "
+                    "generation=%s pid=%s",
+                    snapshot.get("generation"),
+                    snapshot.get("pid"),
+                )
+                continue
+            execution_status = "stale"
+            if owned_process is not None:
+                if not self._terminate_process_tree(owned_process):
+                    logger.error(
+                        "Startup could not stop stale crawl execution "
+                        "generation=%s pid=%s",
+                        snapshot.get("generation"),
+                        snapshot.get("pid"),
+                    )
+                    continue
+                execution_status = "terminated"
+            if self._settle_stale_execution(
+                snapshot,
+                execution_status=execution_status,
+            ):
+                recovered += 1
+        return recovered
+
     def supervise_cancellation(self, generation: str) -> None:
         with self._lock:
             if generation in self._supervised:
@@ -392,17 +438,60 @@ class CrawlJobExecutionLauncher:
             process = self._local_processes.get(generation)
         if process is None:
             return
-        exit_code = process.wait()
-        snapshot = self._execution_snapshot(generation)
-        if snapshot is not None:
-            self._record_exit(snapshot, status="exited", exit_code=exit_code)
-            if self._crawl_job_status(snapshot["crawl_job_id"]) == "cancelling":
-                self._cancellation_service.acknowledge_cancelled(
-                    crawl_job_id=snapshot["crawl_job_id"],
-                    execution_generation=generation,
-                )
-        with self._lock:
-            self._local_processes.pop(generation, None)
+        try:
+            while True:
+                exit_code = process.poll()
+                snapshot = self._execution_snapshot(generation)
+                if snapshot is None:
+                    return
+                if exit_code is not None:
+                    self._record_exit(snapshot, status="exited", exit_code=exit_code)
+                    if self._crawl_job_status(snapshot["crawl_job_id"]) == "cancelling":
+                        self._cancellation_service.acknowledge_cancelled(
+                            crawl_job_id=snapshot["crawl_job_id"],
+                            execution_generation=generation,
+                        )
+                    return
+                if snapshot.get("status") not in ACTIVE_EXECUTION_STATUSES:
+                    return
+                heartbeat_age = snapshot.get("heartbeat_age_seconds")
+                if heartbeat_age is None or float(heartbeat_age) >= float(
+                    settings.crawl_execution_heartbeat_stale_seconds
+                ):
+                    try:
+                        owned_process = self._validated_process(snapshot)
+                    except ProcessIdentityUnavailable:
+                        logger.warning(
+                            "Stale crawl process identity is temporarily unverifiable "
+                            "generation=%s pid=%s",
+                            generation,
+                            snapshot.get("pid"),
+                        )
+                        self._sleep(settings.crawl_execution_watchdog_interval_seconds)
+                        continue
+                    if owned_process is None:
+                        self._settle_stale_execution(
+                            snapshot,
+                            execution_status="stale",
+                        )
+                        return
+                    if not self._terminate_process_tree(owned_process):
+                        logger.error(
+                            "Stale crawl process tree still alive generation=%s pid=%s",
+                            generation,
+                            snapshot.get("pid"),
+                        )
+                        self._sleep(settings.crawl_execution_watchdog_interval_seconds)
+                        continue
+                    self._settle_stale_execution(
+                        snapshot,
+                        execution_status="terminated",
+                    )
+                    return
+                self._sleep(settings.crawl_execution_watchdog_interval_seconds)
+        finally:
+            with self._lock:
+                self._local_processes.pop(generation, None)
 
     def _execution_snapshot(self, generation: str) -> dict[str, Any] | None:
         db = self._session_factory()
@@ -476,6 +565,86 @@ class CrawlJobExecutionLauncher:
                     execution, status=status, exit_code=exit_code
                 )
                 db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def _settle_stale_execution(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        execution_status: str,
+    ) -> bool:
+        db = self._session_factory()
+        try:
+            crawl_job = self._crawl_job_repository.get_crawl_job_by_id_for_update(
+                db, snapshot["crawl_job_id"]
+            )
+            execution = self._execution_repository.get_by_generation(
+                db, snapshot["generation"], for_update=True
+            )
+            if crawl_job is None or execution is None:
+                db.rollback()
+                return False
+            if execution.status not in ACTIVE_EXECUTION_STATUSES:
+                db.commit()
+                return False
+            if crawl_job.status in {"cancelling", "cancelled"}:
+                db.commit()
+                return False
+            if crawl_job.status in {"completed", "failed", "manual_action_required"}:
+                self._execution_repository.mark_exit(
+                    execution,
+                    status=execution_status,
+                    exit_code=self._local_exit_code(str(execution.generation)),
+                )
+                db.commit()
+                return True
+
+            timestamp = utc_now()
+            heartbeat_age = snapshot.get("heartbeat_age_seconds")
+            message = (
+                "Crawler execution stopped after its heartbeat exceeded the "
+                "configured timeout."
+            )
+            recovered_records = self._cancellation_service.release_running_detail_rows(
+                db,
+                crawl_job_id=crawl_job.id,
+                dispatch_plan_id=getattr(crawl_job, "dispatch_plan_id", None),
+                timestamp=timestamp,
+            )
+            self._execution_repository.mark_exit(
+                execution,
+                status=execution_status,
+                exit_code=self._local_exit_code(str(execution.generation)),
+            )
+            self._crawl_job_repository.record_runtime_event(
+                db,
+                crawl_job_id=crawl_job.id,
+                status="failed",
+                event_type="crawl.failed",
+                payload={
+                    "crawl_job_id": str(crawl_job.id),
+                    "source_site": crawl_job.source_site,
+                    "status": "failed",
+                    "reason": "execution_heartbeat_timeout",
+                    "message": message,
+                    "execution_generation": str(execution.generation),
+                    "heartbeat_age_seconds": heartbeat_age,
+                    "heartbeat_stale_seconds": (
+                        settings.crawl_execution_heartbeat_stale_seconds
+                    ),
+                    "released_detail_rows": len(recovered_records),
+                },
+                emitted_by="crawl-execution-watchdog",
+                completed_at=timestamp,
+                error_message=message,
+                auto_commit=False,
+            )
+            db.commit()
+            return True
         except Exception:
             db.rollback()
             raise

@@ -48,11 +48,10 @@ readJobBrowserSession(sessionStorage) -> normalizedScope | null
   the current committed scope. Pagination requests `include_facets=false`, do
   not refresh facets, and retain the latest successful options.
 - Each facet removes its own dimension from every layer, preserves text and all
-  other dimensions, and counts distinct Jobs. Company Industry projects
-  distinct Jobs to active ancestors.
-- Source, Employment Type, and Company Industry return complete
-  active governed catalogs. Source Classification returns only source-qualified
-  paths represented by retained searchable Jobs.
+  other dimensions, and counts distinct Jobs.
+- Source and Employment Type return complete active governed catalogs. Source
+  Classification returns only source-qualified paths represented by retained
+  searchable Jobs. Company Industry is not a current filter or facet.
 - Semantic and hybrid facets use `build_semantic_candidate_scope(scope)`, the
   same candidate scope used by result retrieval. The original scope remains
   `applied_scope` for display and restoration.
@@ -66,7 +65,8 @@ readJobBrowserSession(sessionStorage) -> normalizedScope | null
 - Use `backend/scripts/benchmark_job_search.py` for the read-only warm latency
   gate. It records corpus/result totals, at least three samples and medians for
   Jobs and facets, and exits non-zero when explicit budgets are missed.
-- Parent selection covers descendants and removes redundant descendant IDs.
+- Hierarchical Source Classification selection covers descendants and removes
+  redundant descendant IDs.
   Zero-count options are disabled unless already selected, in which case they
   remain removable.
 - Persist only a normalized successful applied scope in versioned
@@ -103,16 +103,16 @@ readJobBrowserSession(sessionStorage) -> normalizedScope | null
   launch a facet refresh for an unchanged scope.
 - **Bad:** fetch `/jobs/filters` and taxonomy routes independently, then combine
   those options with Jobs from a different applied request.
-- **Bad:** sum child counts to derive a parent count; a multi-assigned Job can be
-  counted twice.
+- **Bad:** restore a Company Industry selector from legacy Company text or stale
+  fixture fields.
 
 ### 6. Tests Required
 
-- `test_job_search_facets.py`: complete catalogs, self-dimension exclusion,
-  other-dimension intersection, distinct Job/ancestor counts,
+- `test_job_search_facets.py`: complete current catalogs, self-dimension
+  exclusion, other-dimension intersection, distinct Job counts,
   `include_facets=false`, date boundaries, layered experience overlap, and
   semantic candidate facet scope.
-- `filterFacetUtils.test.js` and `FilterPanel.test.jsx`: parent coverage,
+- `filterFacetUtils.test.js` and `FilterPanel.test.jsx`: Source Classification parent coverage,
   redundant-child removal, search, counts, selected-zero removal, and stable
   code payloads.
 - `jobBrowserScopeUtils.test.js` and `jobBrowserSessionStorage.test.js`: in-place

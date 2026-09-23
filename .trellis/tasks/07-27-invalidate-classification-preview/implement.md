@@ -9,7 +9,9 @@
 - [x] Make Start submit only the stored Preview inputs.
 - [x] Run `cd frontend && npm test -- --run src/components/classification/ClassificationBatchesPage.test.jsx`.
 - [x] Run `cd frontend && npm run lint && npm run build` as separate verification steps if required by shell policy.
-- [ ] Manual QA #37 with Source and limit changes; attach UI/network evidence showing Start cannot consume unconfirmed inputs.
+- [x] Closure evidence for #37 uses the component race/invalidation assertions
+  plus the 2026-09-23 full frontend/E2E regression. Separate human browser QA
+  was explicitly waived by the user.
 
 ## Rollback point
 

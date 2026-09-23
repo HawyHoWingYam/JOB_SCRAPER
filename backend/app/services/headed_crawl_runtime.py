@@ -11,7 +11,7 @@ from app.utils.time import utc_now
 
 HEADED_CRAWL_GROUP_NAME = "crawl-headed-workers"
 HEADED_CRAWL_DEFAULT_CONSUMER = "crawl-headed-worker"
-HEADED_CRAWL_START_COMMAND = r"python backend\scripts\prepare_headed_crawl_worker_host.py"
+HEADED_CRAWL_START_COMMAND = "python3 backend/scripts/prepare_headed_crawl_worker_host.py"
 DIRECT_LAUNCH_HEADED_SOURCES = frozenset({"offertoday", "jobsdb", "ctgoodjobs"})
 
 

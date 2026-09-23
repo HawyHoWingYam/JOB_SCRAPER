@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.models.job import Job
 from app.schemas.job import JobDetailSchema, JobSchema
+from app.services.jev_online_skill_store import JevOnlineSkillStore
 
 
 _JOB_DETAIL_SCALAR_FIELDS = (
@@ -18,6 +19,36 @@ _JOB_DETAIL_SCALAR_FIELDS = (
     "expiry_date",
     "is_expired",
 )
+
+
+def _latest_jev_skill_payload(db: Session, job_id) -> dict[str, object] | None:
+    record = JevOnlineSkillStore(db).latest_for_job(job_id)
+    if record is None:
+        return None
+    receipt = record.receipt if isinstance(record.receipt, dict) else {}
+    usage = receipt.get("usage") if isinstance(receipt.get("usage"), dict) else {}
+    raw_cost = usage.get("cost")
+    cost = (
+        float(raw_cost)
+        if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool)
+        else None
+    )
+    return {
+        "classification_id": record.id,
+        "run_id": record.jev_run_id,
+        "status": record.status,
+        "error_code": record.error_code,
+        "model": receipt.get("model")
+        if isinstance(receipt.get("model"), str)
+        else None,
+        "request_id": (
+            receipt.get("request_id")
+            if isinstance(receipt.get("request_id"), str)
+            else None
+        ),
+        "cost_usd": cost,
+        "completed_at": record.completed_at,
+    }
 
 
 def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
@@ -48,17 +79,11 @@ def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
 
     payload = JobSchema.model_validate(job).model_dump(mode="python")
     payload.update(
-        {
-            field: getattr(job, field, None)
-            for field in _JOB_DETAIL_SCALAR_FIELDS
-        }
+        {field: getattr(job, field, None) for field in _JOB_DETAIL_SCALAR_FIELDS}
     )
     payload.update(
         {
             "company_name": job.company.name if job.company is not None else None,
-            "company_industry": (
-                job.company.industry if job.company is not None else None
-            ),
             "company_ai_description": (
                 job.company.ai_description if job.company is not None else None
             ),
@@ -69,6 +94,7 @@ def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
             "manual_editable": is_manual,
             "enrichment_eligibility": eligibility,
             "job_intelligence_freshness": freshness,
+            "jev_skill_classification": _latest_jev_skill_payload(db, job.id),
         }
     )
     payload.update(

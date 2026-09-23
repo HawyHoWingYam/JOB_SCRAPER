@@ -141,10 +141,20 @@ class DispatchPlanService:
                 if trigger_kind not in {None, "one_off"}:
                     raise ValueError("One-off run trigger kind is invalid")
                 listing_settings = request.listing_settings
-                preview = self.scope_service.preview(
-                    request.scope,
-                    listing_settings=listing_settings,
-                )
+                if (
+                    request.scope.source_site == "offertoday"
+                    and listing_settings is not None
+                ):
+                    preview = self.scope_service.preview(
+                        request.scope,
+                        listing_settings=listing_settings,
+                        refresh_offertoday_taxonomy=True,
+                    )
+                else:
+                    preview = self.scope_service.preview(
+                        request.scope,
+                        listing_settings=listing_settings,
+                    )
                 content = DispatchPlanContentV1(
                     source_site=request.scope.source_site,
                     crawl_phase=(

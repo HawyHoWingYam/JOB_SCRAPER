@@ -10,7 +10,9 @@
 - [x] Run backend Ruff (passed) and Mypy (executed; repository baseline has 257 existing errors across 20 modules, with none reported in the new curation module).
 - [x] Review transaction boundaries: no partial Skill, Mention, Candidate, or Job projection write may survive an exception.
 - [x] Update the automated-classification/current-taxonomy specs with the multilingual terminal-disposition contract.
-- [ ] Manual QA #36 and attach evidence showing the three terms are terminal and absent from failed-only Retry.
+- [x] Closure evidence for #36 uses the focused automated assertions plus the
+  2026-09-23 full backend/frontend/E2E regression. Separate human browser QA was
+  explicitly waived by the user.
 
 ## Rollback point
 

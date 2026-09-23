@@ -65,12 +65,12 @@ under `#scheduler/*`. The current `#scheduler` board remains reachable.
 Run focused `src/features/taskControl` tests, scoped ESLint, and a production
 frontend build. Leave complete-suite integration to the parent UI gate.
 
-## Scenario: OfferToday listing sweep authoring
+## Scenario: Historical OfferToday fixed-sweep authoring
 
 ### 1. Scope / Trigger
 
-Use this scenario only for OfferToday listing One-off and Automation drafts.
-JobsDB and CTgoodjobs retain their existing scope and execution controls.
+This scenario documents legacy UI expectations only. New authoring follows the
+adaptive scenario below; JobsDB and CTgoodjobs retain existing controls.
 
 ### 2. Signatures
 
@@ -150,3 +150,63 @@ else if (draft.scope.mode === 'all') return allScope;
 ```
 
 Source-specific validation must run before a generic early return.
+
+## Scenario: Adaptive OfferToday listing authoring
+
+### 1. Scope / Trigger
+
+Use this for current OfferToday One-off and Automation listing drafts and the
+global keyword-management page.
+
+### 2. Signatures
+
+```text
+#offertoday-keywords
+GET/POST /api/offertoday-keyword-packs/**
+```
+
+### 3. Contracts
+
+- Scope remains one top-level radio selection. Copy explains that current
+  children and the enabled root keyword pack are resolved by the server.
+- React validates positive safe Page Depth/Run Page Cap only; it never assumes
+  36 targets and never compiles Query Targets.
+- Server review/Dispatch Plan is authoritative and displays native target/page,
+  keyword target/page, total page, freshness, warning, and cap evidence.
+- Keyword management is a dedicated read-only/filterable page. All mutations
+  use CSV download, upload preview, and explicit confirmation; no inline row
+  mutation exists.
+
+### 4. Validation & Error Matrix
+
+| State | UI result |
+|---|---|
+| No/excess top-level selections | Scope incomplete |
+| Positive limits before review | Continue to server review |
+| Server reports cap exceeded | Review blocked; preserve draft values |
+| Invalid CSV | Show row errors; no confirm |
+| Stale/replayed preview | Show error and require new preview |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** current server review reports 12 native and 127 keyword targets with
+  separate page totals and blocks an insufficient cap.
+- **Base:** a root with no keywords reports native work and zero keyword work.
+- **Bad:** JSX embeds A-Z/0-9, multiplies a local constant, or edits keyword rows.
+
+### 6. Tests Required
+
+- Wizard reducer/command/UI tests cover one-root selection, positive bounds,
+  server-owned workload copy, and blocked review.
+- Keyword page tests cover routing, filtering, download, preview errors,
+  confirmation, stale preview, loading/empty/error, and absence of row controls.
+
+### 7. Wrong vs Correct
+
+```javascript
+// Wrong
+const pages = 36 * pageDepth;
+
+// Correct
+const pages = serverReview.listing_workload.estimated_max_pages;
+```

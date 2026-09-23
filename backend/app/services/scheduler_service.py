@@ -26,6 +26,7 @@ from app.services.source_sites import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
+JEV_MAINTENANCE_JOB_ID = "system:jev-skill-maintenance"
 
 
 def _build_runtime_scheduler() -> AsyncIOScheduler:
@@ -52,12 +53,19 @@ async def run_scheduled_crawl_job(
     )
 
 
+async def run_scheduled_jev_skill_maintenance():
+    """Serializable APScheduler entrypoint for durable Skill maintenance."""
+    return await SchedulerService.get_instance()._run_jev_skill_maintenance()
+
+
 class SchedulerService:
     """Service for managing scheduled scraping tasks."""
 
     _instance: Optional["SchedulerService"] = None
 
-    def __init__(self, *, owner: str = "scheduler-worker", worker_name: str | None = None):
+    def __init__(
+        self, *, owner: str = "scheduler-worker", worker_name: str | None = None
+    ):
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.repository = ScheduleRepository()
         self.dispatch_service = CrawlJobDispatchService()
@@ -90,7 +98,11 @@ class SchedulerService:
 
     async def initialize(self):
         """Initialize the scheduler and start reconcile/heartbeat loops."""
-        if self._initialized and self.scheduler and getattr(self.scheduler, "running", False):
+        if (
+            self._initialized
+            and self.scheduler
+            and getattr(self.scheduler, "running", False)
+        ):
             return
 
         logger.info(
@@ -107,6 +119,7 @@ class SchedulerService:
         self._started_at = utc_now()
 
         await self.reconcile_schedules()
+        self._register_jev_maintenance_job()
         self._write_runtime_heartbeat(status="running")
 
         if self._heartbeat_task is None or self._heartbeat_task.done():
@@ -126,7 +139,9 @@ class SchedulerService:
         except Exception:
             logger.exception("Scheduler heartbeat loop failed")
             self._last_error = "scheduler_heartbeat_loop_failed"
-            self._write_runtime_heartbeat(status="degraded", last_error=self._last_error)
+            self._write_runtime_heartbeat(
+                status="degraded", last_error=self._last_error
+            )
 
     async def _reconcile_loop(self) -> None:
         try:
@@ -138,7 +153,9 @@ class SchedulerService:
         except Exception:
             logger.exception("Scheduler reconcile loop failed")
             self._last_error = "scheduler_reconcile_loop_failed"
-            self._write_runtime_heartbeat(status="degraded", last_error=self._last_error)
+            self._write_runtime_heartbeat(
+                status="degraded", last_error=self._last_error
+            )
 
     async def _load_active_schedules(self):
         """Load all active schedules from database without live registry dependency."""
@@ -175,7 +192,9 @@ class SchedulerService:
         try:
             trigger = CronTrigger.from_crontab(
                 schedule.cron_expression,
-                timezone=ZoneInfo(getattr(schedule, "timezone", None) or "Asia/Hong_Kong"),
+                timezone=ZoneInfo(
+                    getattr(schedule, "timezone", None) or "Asia/Hong_Kong"
+                ),
             )
             job = self.scheduler.add_job(
                 run_scheduled_crawl_job,
@@ -185,13 +204,29 @@ class SchedulerService:
                 replace_existing=True,
             )
             if db is not None:
-                schedule.next_run_at = _normalize_next_run_at(getattr(job, "next_run_time", None))
+                schedule.next_run_at = _normalize_next_run_at(
+                    getattr(job, "next_run_time", None)
+                )
                 db.add(schedule)
             logger.info("Registered scheduler job: %s", schedule.name)
             return True
         except Exception:
             logger.exception("Failed to add job %s", schedule.name)
             return False
+
+    def _register_jev_maintenance_job(self) -> None:
+        if self.scheduler is None:
+            return
+        self.scheduler.add_job(
+            run_scheduled_jev_skill_maintenance,
+            trigger="interval",
+            seconds=settings.jev_maintenance_poll_interval_seconds,
+            id=JEV_MAINTENANCE_JOB_ID,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=utc_now(),
+        )
 
     async def reconcile_schedules(self) -> None:
         """Rebuild APScheduler state from `scrape_schedules`."""
@@ -214,10 +249,14 @@ class SchedulerService:
                     db.add(schedule)
 
             for job in list(self.scheduler.get_jobs()):
+                if str(job.id) == JEV_MAINTENANCE_JOB_ID:
+                    continue
                 if str(job.id) not in active_job_ids:
                     self.scheduler.remove_job(job.id)
                     try:
-                        stale_schedule = self.repository.get_schedule_by_id(db, UUID(str(job.id)))
+                        stale_schedule = self.repository.get_schedule_by_id(
+                            db, UUID(str(job.id))
+                        )
                     except ValueError:
                         stale_schedule = None
                     if stale_schedule is not None:
@@ -234,12 +273,65 @@ class SchedulerService:
         except Exception as exc:
             self._last_reconcile_at = reconcile_started_at
             self._last_error = str(exc)
-            self._write_runtime_heartbeat(status="degraded", last_error=self._last_error)
+            self._write_runtime_heartbeat(
+                status="degraded", last_error=self._last_error
+            )
             raise
         finally:
             db.close()
 
-    def _write_runtime_heartbeat(self, *, status: str, last_error: str | None = None) -> None:
+    async def _run_jev_skill_maintenance(self):
+        """Resume pending maintenance or perform one free scheduled eligibility check."""
+        from app.services.jev_evaluator_factory import build_jev_evaluator
+        from app.services.jev_run_service import JevRunConfigurationError, JevRunService
+        from app.services.jev_skill_maintenance import JevSkillMaintenanceService
+
+        db = SessionLocal()
+        evaluator = None
+        batch = None
+        try:
+            service = JevSkillMaintenanceService(db)
+            batch = service.pending()
+            if batch is None:
+                eligibility, batch = service.start(trigger="scheduled")
+                db.commit()
+                if batch is None:
+                    logger.debug(
+                        "Jev Skill maintenance not dispatched: %s",
+                        eligibility.reason,
+                    )
+                    return None
+            else:
+                db.commit()
+            run = JevRunService(db).get(batch.jev_run_id)
+            evaluator = build_jev_evaluator(db, run)
+            batch = await service.execute(batch.id, evaluator=evaluator)
+            db.commit()
+            return batch
+        except JevRunConfigurationError:
+            db.rollback()
+            if batch is not None:
+                service = JevSkillMaintenanceService(db)
+                service.mark_unavailable(
+                    batch.id,
+                    error_code="configuration_error",
+                )
+                db.commit()
+            logger.exception("Scheduled Jev Skill maintenance configuration failed")
+            return None
+        except Exception:
+            db.rollback()
+            logger.exception("Scheduled Jev Skill maintenance failed")
+            return None
+        finally:
+            close = getattr(evaluator, "aclose", None)
+            if close is not None:
+                await close()
+            db.close()
+
+    def _write_runtime_heartbeat(
+        self, *, status: str, last_error: str | None = None
+    ) -> None:
         db = SessionLocal()
         try:
             heartbeat = (
@@ -317,15 +409,23 @@ class SchedulerService:
             # Paused blocks cron dispatch only. An explicit manual "Run saved
             # configuration" remains allowed; archive/review states do not.
 
-            source_site = normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
+            source_site = normalize_source_site(
+                getattr(schedule, "source_site", "jobsdb")
+            )
             if not is_supported_source_site(source_site):
-                logger.error("Unsupported source_site '%s' for schedule %s", source_site, schedule_id)
+                logger.error(
+                    "Unsupported source_site '%s' for schedule %s",
+                    source_site,
+                    schedule_id,
+                )
                 return None
 
             dispatch_result = self.dispatch_service.dispatch_schedule_crawl_job(
                 db,
                 schedule=schedule,
-                requested_by="scheduler-worker" if trigger_type == "schedule" else "api",
+                requested_by="scheduler-worker"
+                if trigger_type == "schedule"
+                else "api",
                 trigger_type=trigger_type,
             )
             logger.info(
@@ -337,7 +437,9 @@ class SchedulerService:
             return dispatch_result.crawl_job
         except Exception:
             db.rollback()
-            logger.exception("Failed to dispatch crawl job for schedule %s", schedule_id)
+            logger.exception(
+                "Failed to dispatch crawl job for schedule %s", schedule_id
+            )
             return None
         finally:
             db.close()
@@ -363,7 +465,9 @@ class SchedulerService:
 
     def add_schedule(self, schedule: ScrapeSchedule):
         """Add a new schedule to the scheduler."""
-        if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
+        if not is_supported_source_site(
+            normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
+        ):
             return
         if schedule.lifecycle_state == "active":
             self._add_job(schedule)
@@ -380,7 +484,9 @@ class SchedulerService:
     def update_schedule(self, schedule: ScrapeSchedule):
         """Update a schedule in the scheduler."""
         self.remove_schedule(schedule.id)
-        if not is_supported_source_site(normalize_source_site(getattr(schedule, "source_site", "jobsdb"))):
+        if not is_supported_source_site(
+            normalize_source_site(getattr(schedule, "source_site", "jobsdb"))
+        ):
             return
         if schedule.lifecycle_state == "active":
             self._add_job(schedule)

@@ -33,8 +33,6 @@ RETAINED_TABLE_NAMES = (
     "job_source_classification_path_nodes",
     "job_source_employment_labels",
     "job_employment_types",
-    "current_source_taxonomy_mappings",
-    "current_company_industry_assignments",
     "current_job_skill_assignments",
     "current_skill_candidates",
     "current_job_skill_mentions",
@@ -439,7 +437,6 @@ def _retain_source_row(table_name: str, row: Mapping[str, Any]) -> bool:
     if table_name in {
         "current_taxonomy_nodes",
         "current_taxonomy_aliases",
-        "current_source_taxonomy_mappings",
     }:
         return row.get("taxonomy") != "job"
     if table_name in _AUDIT_TABLE_NAMES:

@@ -1,0 +1,30 @@
+{
+  "id": "jev-crawl-quality-evaluation",
+  "name": "jev-crawl-quality-evaluation",
+  "title": "Jev phase 3B: crawl-content quality evaluation",
+  "description": "Evaluate bounded Jev crawl-content quality flags offline without product writes or crawl recovery side effects.",
+  "status": "completed",
+  "dev_type": "feature",
+  "scope": "backend offline evaluation",
+  "package": "backend",
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": "2026-09-23",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-23-research-jev-use-cases",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue_number": 67,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/67",
+    "github_issue": 67
+  }
+}

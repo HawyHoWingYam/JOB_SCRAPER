@@ -49,8 +49,14 @@ schema-history table participates in runtime reads.
 - A classification ID is `<source>:<opaque-token>` and never comes from its
   mutable display label.
 - Synchronization creates newly observed classifications immediately, updates
-  labels/query metadata, reactivates returning rows, and marks missing
-  top-level rows inactive only when the observation is complete.
+  labels/query metadata, and reactivates returning rows. A complete OfferToday
+  sync also inactivates missing children so adaptive future plans follow the
+  live tree; other sources continue to inactivate missing top-level rows only.
+  Incremental observation never inactivates omitted rows. Incremental Job
+  evidence preserves existing crawl query metadata such as CTGoodJobs
+  `url_path`; only complete adapter catalog synchronization may authoritatively
+  replace that metadata. Path evidence may merge explicit metadata but must
+  never erase executable fields by supplying an empty map.
 - Crawl authoring uses only active top-level rows. Child classifications may be
   preserved as source evidence, but are not crawl-authoring choices.
 - `mode="all"` resolves every active top-level row; `mode="selected"` resolves

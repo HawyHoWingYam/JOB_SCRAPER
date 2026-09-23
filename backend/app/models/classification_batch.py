@@ -27,7 +27,7 @@ class ClassificationBatchRun(Base):
     __tablename__ = "classification_batch_runs"
     __table_args__ = (
         CheckConstraint(
-            "domain IN ('company_industry', 'skill')",
+            "domain = 'skill'",
             name="ck_classification_batch_run_domain",
         ),
         CheckConstraint("total_items >= 0", name="ck_classification_batch_run_total"),

@@ -155,7 +155,6 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
     """Parse the job detail API response into a dict."""
     data = _optional_object(response_data, "data")
     identity = resolve_offertoday_listing_identity(data)
-    industry = _optional_object(data, "industry")
     employ_type = _optional_object(data, "employType")
     address = _optional_object(data, "addressVO")
     benefits = _optional_sequence(data, "benefits")
@@ -190,7 +189,6 @@ def parse_offertoday_detail_response(response_data: dict[str, Any]) -> dict[str,
         "company_name": str(data.get("companyName") or "").strip(),
         "company_brand": str(data.get("brandName") or "").strip(),
         "company_logo": str(data.get("brandLogo") or "").strip(),
-        "company_industry": str(industry.get("name") or "").strip(),
         "company_size": str(data.get("sizeDesc") or "").strip(),
         "company_type": str(data.get("typeDesc") or "").strip(),
         "location": str(data.get("locationDesc") or "").strip(),

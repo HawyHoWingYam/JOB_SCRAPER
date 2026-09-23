@@ -91,7 +91,7 @@ def test_manual_detail_dispatch_locks_pacing_and_builds_current_plan(db):
     result = _dispatch(service, db)
     detail_settings = result.crawl_job.plan_request.detail_settings
     assert detail_settings is not None
-    assert detail_settings.crawl_mode == "headed"
+    assert detail_settings.crawl_mode == "headless"
     assert detail_settings.backlog_scope.kind == "source_backlog"
     assert detail_settings.limit.detail_run_cap == 100
     assert repository.queries == [

@@ -57,7 +57,6 @@ class JobSearchFiltersSchema(BaseModel):
     employment_type: Optional[str] = None
     source_classification_ids: Optional[List[str]] = None
     employment_type_codes: Optional[List[EmploymentTypeCode]] = None
-    industry: Optional[str] = None
     posted_date_from: Optional[date] = None
     posted_date_to: Optional[date] = None
     experience_years_from: Optional[int] = Field(default=None, ge=0)
@@ -66,7 +65,6 @@ class JobSearchFiltersSchema(BaseModel):
     skill_ids: Optional[List[str]] = None
     technology_ids: Optional[List[str]] = None
     skill_category_ids: Optional[List[str]] = None
-    company_industry_node_ids: Optional[List[str]] = None
     salary_min: Optional[int] = Field(default=None, ge=0)
     salary_max: Optional[int] = Field(default=None, ge=0)
 
@@ -140,14 +138,6 @@ class JobSearchFiltersSchema(BaseModel):
         self.employment_type_codes = codes
         return self
 
-    @model_validator(mode="after")
-    def _reject_legacy_company_industry_filter(self):
-        legacy_industry = str(self.industry or "").strip()
-        if legacy_industry:
-            raise ValueError("industry is retired; use company_industry_node_ids")
-        self.industry = None
-        return self
-
 
 class JobSearchLayerSchema(BaseModel):
     client_id: str
@@ -165,6 +155,7 @@ class JobSearchRequestSchema(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
     include_facets: bool = True
+    jev_rerank_evaluation_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
 
 
 class JobSearchFacetsRequestSchema(BaseModel):
@@ -195,7 +186,6 @@ class JobSearchFacetsSchema(BaseModel):
     source_classifications: List[JobSearchFacetOptionSchema] = Field(
         default_factory=list
     )
-    company_industries: List[JobSearchFacetOptionSchema] = Field(default_factory=list)
 
 
 class JobSearchErrorSchema(BaseModel):

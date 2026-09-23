@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-import app.api.classification_batches as classification_batch_api
+import app.main as app_main
 from app.api.classification_batches import router as classification_batch_router
 from app.models.classification_batch import (
     ClassificationBatchRun,
@@ -27,14 +27,16 @@ from app.services.ai_runtime_settings_service import (
 )
 from app.services.classification_batch_runtime import (
     ClassificationBatchError,
-    ClassificationBatchPreview,
     ClassificationBatchRuntime,
     ClassificationCandidate,
-    ClassificationCandidateSelection,
 )
 from app.services.classification_domain_adapters import (
     SkillClassificationAdapter,
     SkillPlacementDecision,
+)
+from app.services.skill_taxonomy_bootstrap import (
+    reconcile_deterministic_skill_candidates,
+    synchronize_initial_skill_taxonomy,
 )
 @dataclass
 class _FakeAdapter:
@@ -65,35 +67,6 @@ class _FakeAdapter:
         del db
         if candidate.subject_id == "two":
             raise ValueError("placement uncertain")
-
-
-@dataclass
-class _ReadinessAdapter(_FakeAdapter):
-    domain: str = "company_industry"
-    mapped: int = 1
-
-    def select_candidates(
-        self,
-        db: Session,
-        *,
-        filters: dict[str, object],
-        limit: int,
-    ) -> ClassificationCandidateSelection:
-        del db, filters, limit
-        candidates = (
-            ClassificationCandidate(subject_id="mapped", payload={"readiness": "mapped"}),
-            ClassificationCandidate(
-                subject_id="unsupported",
-                payload={"readiness": "unsupported"},
-            ),
-        )
-        return ClassificationCandidateSelection(
-            selected_item_count=3,
-            candidates=candidates,
-            mapped_item_count=self.mapped,
-            unmapped_item_count=2 - self.mapped,
-            excluded_item_count=1,
-        )
 
 
 @pytest.fixture
@@ -163,39 +136,6 @@ def test_stop_cancels_a_pending_batch_without_processing_items(db: Session):
     } == {"cancelled"}
 
 
-def test_company_preview_reports_readiness_and_start_freezes_only_non_exclusions(
-    db: Session,
-):
-    runtime = ClassificationBatchRuntime(
-        db,
-        {"company_industry": _ReadinessAdapter()},
-    )
-
-    preview = runtime.preview("company_industry", filters={}, limit=3)
-    run = runtime.start("company_industry", filters={}, limit=3)
-
-    assert preview.selected_item_count == 3
-    assert preview.mapped_item_count == 1
-    assert preview.unmapped_item_count == 1
-    assert preview.excluded_item_count == 1
-    assert [item.subject_id for item in preview.items] == ["mapped", "unsupported"]
-    assert run.total_items == 2
-
-
-def test_company_start_rejects_zero_mapped_candidates_without_creating_a_run(
-    db: Session,
-):
-    runtime = ClassificationBatchRuntime(
-        db,
-        {"company_industry": _ReadinessAdapter(mapped=0)},
-    )
-
-    with pytest.raises(ClassificationBatchError, match="usable mapped evidence"):
-        runtime.start("company_industry", filters={}, limit=3)
-
-    assert db.scalar(select(func.count()).select_from(ClassificationBatchRun)) == 0
-
-
 @pytest.mark.asyncio
 async def test_stop_on_a_running_batch_finishes_cooperatively(db: Session):
     runtime = ClassificationBatchRuntime(db, {"skill": _FakeAdapter()})
@@ -211,13 +151,15 @@ async def test_stop_on_a_running_batch_finishes_cooperatively(db: Session):
     assert finished.cancelled_items == 3
 
 
-def test_skill_auto_create_threshold_defaults_to_five_and_is_configurable():
+def test_skill_auto_create_threshold_defaults_to_ten_and_is_configurable():
     engine = create_engine("sqlite:///:memory:")
     AppRuntimeSettings.__table__.create(engine)
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     try:
         settings = AIRuntimeSettingsService(db)
-        assert settings.get_skill_auto_create_distinct_job_threshold() == 5
+        assert settings.get_skill_auto_create_distinct_job_threshold() == 10
+        assert settings.get_skill_candidate_recommendation_limit() == 5
+        assert settings.get_skill_candidate_evidence_limit() == 5
 
         settings.update_settings({"skill_auto_create_distinct_job_threshold": 8})
         assert settings.get_skill_auto_create_distinct_job_threshold() == 8
@@ -225,11 +167,111 @@ def test_skill_auto_create_threshold_defaults_to_five_and_is_configurable():
             "skill_auto_create_distinct_job_threshold"
         ] == 8
 
+        settings.update_settings({
+            "skill_candidate_recommendation_limit": 7,
+            "skill_candidate_evidence_limit": 6,
+        })
+        assert settings.get_skill_candidate_recommendation_limit() == 7
+        assert settings.get_skill_candidate_evidence_limit() == 6
+
         with pytest.raises(RuntimeSettingsValidationError):
             settings.update_settings({"skill_auto_create_distinct_job_threshold": 0})
+        with pytest.raises(RuntimeSettingsValidationError):
+            settings.update_settings({"skill_candidate_recommendation_limit": 0})
     finally:
         db.close()
         engine.dispose()
+
+
+def test_skill_taxonomy_startup_reconciles_even_when_taxonomy_already_exists(monkeypatch):
+    """Historical deterministic candidates must not depend on the seed flag."""
+
+    class _Session:
+        def __init__(self):
+            self.committed = False
+            self.closed = False
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            self.closed = True
+
+    session = _Session()
+    calls: list[object] = []
+    monkeypatch.setattr(app_main, "SessionLocal", lambda: session)
+    monkeypatch.setattr(
+        app_main,
+        "synchronize_initial_skill_taxonomy",
+        lambda db: {"seeded": False, "nodes": 0, "aliases": 0},
+    )
+    monkeypatch.setattr(
+        app_main,
+        "reconcile_deterministic_skill_candidates",
+        lambda db: calls.append(db) or 2,
+    )
+
+    result = app_main.synchronize_skill_taxonomy_on_startup()
+
+    assert result["deterministically_reconciled"] == 2
+    assert calls == [session]
+    assert session.committed is True
+    assert session.closed is True
+
+
+def test_skill_taxonomy_manifest_covers_cpp_as_a_governed_backend_skill():
+    db = _skill_db()
+    try:
+        summary = synchronize_initial_skill_taxonomy(db)
+        cpp = db.get(CurrentTaxonomyNodeRecord, ("skill", "backend.c-plus-plus.c-plus-plus"))
+        technology = db.get(CurrentTaxonomyNodeRecord, ("skill", "backend.c-plus-plus"))
+        assert summary["seeded"] is True
+        assert cpp is not None and cpp.is_assignable is True
+        assert technology is not None and technology.level == "technology"
+        assert cpp.parent_code == technology.code
+    finally:
+        _close_skill_db(db)
+
+
+def test_deterministic_reconciliation_resolves_historical_exact_skill_idempotently():
+    db = _skill_db()
+    try:
+        db.add(
+            CurrentTaxonomyNodeRecord(
+                taxonomy="skill",
+                code="database.sql.sql",
+                parent_code="database.sql",
+                level="skill",
+                labels={"en": "SQL"},
+                sort_order=0,
+                is_assignable=True,
+                is_active=True,
+            )
+        )
+        db.add(
+            CurrentTaxonomyNodeRecord(
+                taxonomy="skill",
+                code="database.sql",
+                parent_code=None,
+                level="technology",
+                labels={"en": "SQL"},
+                sort_order=0,
+                is_assignable=False,
+                is_active=True,
+            )
+        )
+        db.flush()
+        candidate = _add_skill_candidate(
+            db, name="SQL", normalized_key="sql", distinct_jobs=10
+        )
+
+        assert reconcile_deterministic_skill_candidates(db) == 1
+        db.commit()
+        db.refresh(candidate)
+        assert candidate.resolved_skill_code == "database.sql.sql"
+        assert reconcile_deterministic_skill_candidates(db) == 0
+    finally:
+        _close_skill_db(db)
 
 
 class _PlacementClassifier:
@@ -306,7 +348,7 @@ def test_skill_adapter_selects_only_candidates_at_the_current_distinct_job_thres
             db, name="Below", normalized_key="below", distinct_jobs=4
         )
         eligible = _add_skill_candidate(
-            db, name="Eligible", normalized_key="eligible", distinct_jobs=5
+            db, name="Eligible", normalized_key="eligible", distinct_jobs=10
         )
         adapter = SkillClassificationAdapter(
             placement_classifier=_PlacementClassifier(
@@ -368,7 +410,7 @@ async def test_skill_adapter_reuses_an_existing_alias_and_reprojects_jobs():
         )
         db.commit()
         candidate = _add_skill_candidate(
-            db, name="Py", normalized_key="py", distinct_jobs=5
+            db, name="Py", normalized_key="py", distinct_jobs=10
         )
         adapter = SkillClassificationAdapter(
             placement_classifier=_PlacementClassifier(
@@ -397,7 +439,7 @@ async def test_skill_adapter_reuses_an_existing_alias_and_reprojects_jobs():
         }
         assert db.scalar(
             select(func.count()).select_from(CurrentJobSkillAssignment)
-        ) == 5
+        ) == 10
     finally:
         _close_skill_db(db)
 
@@ -432,7 +474,7 @@ async def test_skill_adapter_creates_only_under_a_confirmed_existing_technology(
         )
         db.commit()
         candidate = _add_skill_candidate(
-            db, name="DuckDB", normalized_key="duckdb", distinct_jobs=5
+            db, name="DuckDB", normalized_key="duckdb", distinct_jobs=10
         )
         adapter = SkillClassificationAdapter(
             placement_classifier=_PlacementClassifier(
@@ -445,18 +487,17 @@ async def test_skill_adapter_creates_only_under_a_confirmed_existing_technology(
             )
         )
 
-        await adapter.process_candidate(
-            db,
-            ClassificationCandidate(subject_id=str(candidate.id), payload={}),
-        )
+        with pytest.raises(ValueError, match="operator confirmation"):
+            await adapter.process_candidate(
+                db,
+                ClassificationCandidate(subject_id=str(candidate.id), payload={}),
+            )
         db.commit()
 
         created = db.get(CurrentTaxonomyNodeRecord, ("skill", "data.warehouse.duckdb"))
-        assert created is not None
-        assert created.parent_code == "data.warehouse"
-        assert created.is_assignable is True
+        assert created is None
         db.refresh(candidate)
-        assert candidate.resolved_skill_code == "data.warehouse.duckdb"
+        assert candidate.resolved_skill_code is None
     finally:
         _close_skill_db(db)
 
@@ -466,7 +507,7 @@ async def test_skill_adapter_leaves_uncertain_placement_failed_without_fallback(
     db = _skill_db()
     try:
         candidate = _add_skill_candidate(
-            db, name="MysteryDB", normalized_key="mysterydb", distinct_jobs=5
+            db, name="MysteryDB", normalized_key="mysterydb", distinct_jobs=10
         )
         adapter = SkillClassificationAdapter(
             placement_classifier=_PlacementClassifier(
@@ -494,7 +535,7 @@ async def test_skill_adapter_classifies_a_known_generic_term_without_creating_sk
             db,
             name="Project Management",
             normalized_key="project management",
-            distinct_jobs=5,
+            distinct_jobs=10,
         )
         adapter = SkillClassificationAdapter(
             placement_classifier=_PlacementClassifier(
@@ -546,7 +587,7 @@ async def test_skill_adapter_resolves_localized_generic_aliases_without_llm(
             db,
             name=raw_name,
             normalized_key=raw_name,
-            distinct_jobs=5,
+            distinct_jobs=10,
         )
         classifier = _PlacementClassifier(SkillPlacementDecision(status="uncertain"))
         adapter = SkillClassificationAdapter(placement_classifier=classifier)
@@ -590,7 +631,7 @@ async def test_retry_excludes_a_skill_candidate_resolved_after_the_source_run_fa
             db,
             name="項目管理",
             normalized_key="項目管理",
-            distinct_jobs=5,
+            distinct_jobs=10,
         )
         source_run = ClassificationBatchRun(
             domain="skill",
@@ -655,41 +696,3 @@ def test_classification_batch_api_exposes_one_shared_lifecycle_for_all_domains()
     }
     assert all("governance" not in path for path in paths)
     assert all("/reviews" not in path for path in paths)
-
-
-def test_company_preview_api_serializes_mapping_readiness_counts(
-    db: Session,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    class _PreviewRuntime:
-        def preview(self, domain, *, filters, limit):
-            assert (domain, filters, limit) == ("company_industry", {}, 3)
-            return ClassificationBatchPreview(
-                domain=domain,
-                selected_item_count=3,
-                items=(),
-                mapped_item_count=1,
-                unmapped_item_count=1,
-                excluded_item_count=1,
-            )
-
-    monkeypatch.setattr(
-        classification_batch_api,
-        "_runtime",
-        lambda _db: _PreviewRuntime(),
-    )
-
-    payload = classification_batch_api.preview_classification_batch(
-        "company_industry",
-        classification_batch_api.ClassificationBatchRequest(filters={}, limit=3),
-        db,
-    )
-
-    assert payload == {
-        "domain": "company_industry",
-        "selected_item_count": 3,
-        "mapped_item_count": 1,
-        "unmapped_item_count": 1,
-        "excluded_item_count": 1,
-        "items": [],
-    }

@@ -110,6 +110,7 @@ class SourceClassificationRegistry:
         for item in sorted(observations, key=lambda value: value.depth):
             row = existing.get(item.classification_id)
             if row is None:
+                query_metadata = dict(item.query_metadata)
                 row = SourceClassification(
                     source_site=source_site,
                     classification_id=item.classification_id,
@@ -118,7 +119,7 @@ class SourceClassificationRegistry:
                     depth=item.depth,
                     is_top_level=item.depth == 0,
                     is_active=True,
-                    query_metadata=dict(item.query_metadata),
+                    query_metadata=query_metadata,
                     first_observed_at=now,
                     last_observed_at=now,
                 )
@@ -127,11 +128,17 @@ class SourceClassificationRegistry:
                 created_identities.add(item.classification_id)
                 created += 1
                 continue
+            query_metadata = dict(item.query_metadata)
+            if not complete:
+                query_metadata = {
+                    **dict(row.query_metadata or {}),
+                    **query_metadata,
+                }
             changed = (
                 row.native_id != item.native_id
                 or row.label != item.label
                 or row.depth != item.depth
-                or row.query_metadata != dict(item.query_metadata)
+                or row.query_metadata != query_metadata
             )
             if not row.is_active:
                 row.is_active = True
@@ -140,7 +147,7 @@ class SourceClassificationRegistry:
             row.label = item.label
             row.depth = item.depth
             row.is_top_level = item.depth == 0
-            row.query_metadata = dict(item.query_metadata)
+            row.query_metadata = query_metadata
             row.last_observed_at = now
             if changed:
                 updated += 1
@@ -163,7 +170,7 @@ class SourceClassificationRegistry:
             observed_ids = {item.classification_id for item in observations}
             for row in existing.values():
                 if (
-                    row.is_top_level
+                    (row.is_top_level or source_site == "offertoday")
                     and row.is_active
                     and row.classification_id not in observed_ids
                 ):
@@ -263,7 +270,7 @@ def build_source_classification_adapters() -> dict[str, SourceClassificationAdap
     adapters = (
         JobsDBSourceClassificationAdapter(),
         CTgoodjobsSourceClassificationAdapter(),
-        OfferTodaySourceClassificationAdapter(),
+        OfferTodaySourceClassificationAdapter(live_discovery=True),
     )
     return {adapter.source_site: adapter for adapter in adapters}
 

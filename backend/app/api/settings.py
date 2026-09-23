@@ -22,6 +22,10 @@ from app.services.ai_runtime_settings_service import (
     ProfileRuntimeNotReadyError,
     RuntimeSettingsValidationError,
 )
+from app.services.jev_runtime_settings_service import (
+    JevRuntimeSettingsService,
+    JevSettingsValidationError,
+)
 from app.schemas.scraper_pacing import (
     ScraperPacingSettingsListResponse,
     ScraperPacingSettingsResponse,
@@ -90,6 +94,42 @@ def reset_scraper_pacing_settings(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+class JevSettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: Optional[bool] = None
+    endpoint: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    allowance_microdollars: Optional[int] = None
+    input_microdollars_per_million_tokens: Optional[int] = None
+    output_microdollars_per_million_tokens: Optional[int] = None
+    max_request_reservation_microdollars: Optional[int] = None
+    sample_limit: Optional[int] = None
+    question_batch_limit: Optional[int] = None
+    concurrency: Optional[int] = None
+    retry_limit: Optional[int] = None
+    timeout_seconds: Optional[int] = None
+    evidence_threshold: Optional[str] = None
+    recommendation_threshold: Optional[str] = None
+    duplicate_enabled: Optional[bool] = None
+    duplicate_candidate_limit: Optional[int] = None
+    duplicate_corpus_limit: Optional[int] = None
+    crawl_quality_enabled: Optional[bool] = None
+    crawl_quality_batch_limit: Optional[int] = None
+    search_rerank_enabled: Optional[bool] = None
+    search_rerank_candidate_limit: Optional[int] = None
+    incident_triage_enabled: Optional[bool] = None
+    incident_triage_event_limit: Optional[int] = None
+    maintenance_enabled: Optional[bool] = None
+    maintenance_model: Optional[str] = None
+    maintenance_allowance_microdollars: Optional[int] = None
+    maintenance_interval_days: Optional[int] = None
+    maintenance_min_candidates: Optional[int] = None
+    maintenance_batch_size: Optional[int] = None
+    maintenance_threshold: Optional[str] = None
+
+
 class AISettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -98,6 +138,8 @@ class AISettingsUpdateRequest(BaseModel):
     ai_enrichment_run_concurrency: Optional[int] = None
     company_ai_enrichment_run_concurrency: Optional[int] = None
     skill_auto_create_distinct_job_threshold: Optional[int] = None
+    skill_candidate_recommendation_limit: Optional[int] = None
+    skill_candidate_evidence_limit: Optional[int] = None
     anthropic_api_key: Optional[str] = None
     anthropic_model: Optional[str] = None
     anthropic_base_url: Optional[str] = None
@@ -118,6 +160,7 @@ class AISettingsUpdateRequest(BaseModel):
     company_custom_api_format: Optional[str] = None
     zhipu_api_key: Optional[str] = None
     company_zhipu_api_key: Optional[str] = None
+    jev: Optional[JevSettingsUpdateRequest] = None
 
 
 class DraftProfilePayload(BaseModel):
@@ -154,7 +197,10 @@ def _format_validation_errors(exc: RuntimeSettingsValidationError) -> list[dict]
     ]
 
 
-def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
+def _build_ai_settings_response(
+    service: AIRuntimeSettingsService,
+    jev_service: JevRuntimeSettingsService,
+) -> dict:
     job_status = refresh_llm_status()
     company_status = refresh_llm_status("companies")
     return {
@@ -163,6 +209,7 @@ def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
         "runtime_status": job_status,
         "company_runtime_status": company_status,
         "provider_catalog": build_ai_provider_catalog(),
+        "jev": jev_service.serialize(),
     }
 
 
@@ -270,9 +317,11 @@ async def probe_profile_configuration(
 @router.get("/ai")
 async def get_ai_settings(db: Session = Depends(get_db)):
     service = AIRuntimeSettingsService(db)
+    jev_service = JevRuntimeSettingsService(db)
     service.get_or_create()
+    jev_service.get_or_create()
     db.commit()
-    return _build_ai_settings_response(service)
+    return _build_ai_settings_response(service, jev_service)
 
 
 @router.put("/ai")
@@ -281,14 +330,26 @@ async def update_ai_settings(
     db: Session = Depends(get_db),
 ):
     service = AIRuntimeSettingsService(db)
+    jev_service = JevRuntimeSettingsService(db)
     try:
-        service.update_settings(request.model_dump(exclude_unset=True))
+        values = request.model_dump(exclude_unset=True)
+        jev_values = values.pop("jev", None)
+        if values:
+            service.update_settings(values)
+        else:
+            service.get_or_create()
+        if jev_values is not None:
+            jev_service.update(jev_values)
+        else:
+            jev_service.get_or_create()
         db.commit()
-    except RuntimeSettingsValidationError as exc:
+    except (RuntimeSettingsValidationError, JevSettingsValidationError) as exc:
         db.rollback()
-        raise HTTPException(status_code=422, detail=_format_validation_errors(exc)) from exc
+        raise HTTPException(
+            status_code=422, detail=_format_validation_errors(exc)
+        ) from exc
 
-    return _build_ai_settings_response(service)
+    return _build_ai_settings_response(service, jev_service)
 
 
 @router.post("/ai/test")
@@ -332,7 +393,9 @@ async def test_ai_settings_profile(
         return result
     except RuntimeSettingsValidationError as exc:
         db.rollback()
-        raise HTTPException(status_code=422, detail=_format_validation_errors(exc)) from exc
+        raise HTTPException(
+            status_code=422, detail=_format_validation_errors(exc)
+        ) from exc
     except Exception as exc:
         safe_error = _safe_ai_test_error_message(exc)
         fingerprint = None

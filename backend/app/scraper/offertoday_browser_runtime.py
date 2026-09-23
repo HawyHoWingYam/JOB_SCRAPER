@@ -60,6 +60,10 @@ _BROWSER_FETCH_REJECTION_MARKERS = (
     "typeerror: failed to fetch",
     "networkerror when attempting to fetch resource",
 )
+_BROWSER_FETCH_TIMEOUT_MARKERS = (
+    "aborterror",
+    "operation was aborted",
+)
 _FAILED_FETCH_URL_SETTLE_DELAYS_SECONDS = (0.0, 0.05, 0.1)
 _OFFERTODAY_DETAIL_URL_TEMPLATE = (
     f"{OFFERTODAY_BASE_URL}/wapi/geek/recommend/jobDetail?id=%s&encryptJobId=%s"
@@ -96,6 +100,7 @@ class OfferTodayBrowserRuntime:
         user_data_dir: str | None = None,
         executable_path: str | None = None,
         navigation_timeout_ms: int | None = None,
+        request_timeout_ms: int | None = None,
         cancellation_token=None,
     ) -> None:
         self.headed = headed
@@ -109,6 +114,13 @@ class OfferTodayBrowserRuntime:
             if navigation_timeout_ms is not None
             else settings.offertoday_headed_navigation_timeout_ms
         )
+        self.request_timeout_ms = int(
+            request_timeout_ms
+            if request_timeout_ms is not None
+            else settings.offertoday_browser_request_timeout_ms
+        )
+        if self.request_timeout_ms <= 0:
+            raise ValueError("OfferToday browser request timeout must be positive")
         self.cancellation_token = cancellation_token or NoopCrawlCancellationToken()
         self._playwright = None
         self._browser = None
@@ -167,6 +179,16 @@ class OfferTodayBrowserRuntime:
         self._owns_browser = False
         self._runtime_started = False
         self._context_id = None
+
+    async def restart_after_stalled_query(self) -> None:
+        """Open one fresh browser/source session for bounded stall recovery."""
+
+        await self.stop()
+        await self.start()
+
+    async def restart_after_browser_loss(self) -> None:
+        await self.stop()
+        await self.start()
 
     @property
     def browser_context_hash(self) -> str | None:
@@ -574,23 +596,44 @@ class OfferTodayBrowserRuntime:
         if payload is not None:
             fetch_options["body"] = json.dumps(payload, ensure_ascii=True)
         script = (
-            "async ({ url, options }) => {"
-            "  const response = await fetch(url, options);"
-            "  return {"
-            "    httpStatus: response.status,"
-            "    responseUrl: response.url,"
-            "    text: await response.text(),"
-            "  };"
+            "async ({ url, options, requestTimeoutMs }) => {"
+            "  const controller = new AbortController();"
+            "  const timer = setTimeout(() => controller.abort(), requestTimeoutMs);"
+            "  try {"
+            "    const response = await fetch(url, { ...options, signal: controller.signal });"
+            "    return {"
+            "      httpStatus: response.status,"
+            "      responseUrl: response.url,"
+            "      text: await response.text(),"
+            "    };"
+            "  } finally {"
+            "    clearTimeout(timer);"
+            "  }"
             "}"
         )
         try:
             self.cancellation_token.raise_if_cancelled()
             result = await self._page.evaluate(
                 script,
-                {"url": url, "options": fetch_options},
+                {
+                    "url": url,
+                    "options": fetch_options,
+                    "requestTimeoutMs": self.request_timeout_ms,
+                },
             )
         except Exception as exc:
             normalized_message = str(exc or "").lower()
+            if any(
+                marker in normalized_message
+                for marker in _BROWSER_FETCH_TIMEOUT_MARKERS
+            ):
+                raise OfferTodayTransportError(
+                    "OfferToday browser fetch timed out",
+                    http_status=None,
+                    response_url=str(getattr(self._page, "url", "") or url),
+                    payload=None,
+                    error_kind="network",
+                ) from exc
             if not any(
                 marker in normalized_message
                 for marker in _BROWSER_FETCH_REJECTION_MARKERS
@@ -612,7 +655,7 @@ class OfferTodayBrowserRuntime:
         http_status = result.get("httpStatus")
         response_url = result.get("responseUrl")
         response_text = result.get("text")
-        if type(http_status) is not int:
+        if not isinstance(http_status, int) or isinstance(http_status, bool):
             raise RuntimeError(
                 "OfferToday browser fetch returned an invalid HTTP status"
             )

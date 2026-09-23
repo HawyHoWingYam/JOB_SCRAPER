@@ -101,6 +101,10 @@ class CreateRunRequest(BaseModel):
         return self
 
 
+class JevSkillBackfillRequest(BaseModel):
+    limit: int = Field(default=50, ge=1, le=MAX_PENDING_RUN_LIMIT)
+
+
 def _derive_last_failed_job_titles(
     db: Session, run_ids: list[str]
 ) -> dict[str, Optional[str]]:
@@ -177,8 +181,7 @@ def _derive_excluded_details(
         )
         .join(
             JobSourceClassificationPathNode,
-            JobSourceClassificationPathNode.path_id
-            == JobSourceClassificationPath.id,
+            JobSourceClassificationPathNode.path_id == JobSourceClassificationPath.id,
         )
         .filter(
             JobSourceClassificationPath.job_id.in_(
@@ -207,12 +210,16 @@ def _derive_excluded_details(
             str(job_id),
             (None, None),
         )
-        normalized_source_id = authoritative_id or (
-            str(source_id).strip() if source_id is not None else None
-        ) or None
-        normalized_source_name = authoritative_name or (
-            str(source_name).strip() if source_name is not None else None
-        ) or None
+        normalized_source_id = (
+            authoritative_id
+            or (str(source_id).strip() if source_id is not None else None)
+            or None
+        )
+        normalized_source_name = (
+            authoritative_name
+            or (str(source_name).strip() if source_name is not None else None)
+            or None
+        )
         reason = str(error_message or "job_enrichment_not_supported")
         key = (str(run_id), normalized_source_id, normalized_source_name, reason)
         group = grouped.setdefault(
@@ -587,9 +594,7 @@ async def get_pending_filter_options(db: Session = Depends(get_db)):
                 "source_site": source,
                 "classification_paths": sorted(
                     source_state["classification_paths"].values(),
-                    key=lambda path: tuple(
-                        str(node["id"]) for node in path["nodes"]
-                    ),
+                    key=lambda path: tuple(str(node["id"]) for node in path["nodes"]),
                 ),
                 "classifications": [
                     {
@@ -637,6 +642,38 @@ async def preview_pending_enrichment(
         "filters": _normalized_pending_payload(request),
         "all_pending_acknowledgement_required": not filters.has_constraints,
     }
+
+
+@router.post("/jev-skill-backfill/preview")
+async def preview_jev_skill_backfill(
+    request: JevSkillBackfillRequest,
+    db: Session = Depends(get_db),
+):
+    """Preview historical Jev Skill work without reserving Jobs or calling Jev."""
+    from app.services.jev_skill_backfill import JevSkillBackfillPlanner
+
+    return JevSkillBackfillPlanner(db).inspect(limit=request.limit).to_payload()
+
+
+@router.post("/jev-skill-backfill/runs")
+async def create_jev_skill_backfill_run(
+    request: JevSkillBackfillRequest,
+    db: Session = Depends(get_db),
+):
+    """Create a bounded historical Jev Skill run on the existing worker queue."""
+    service = EnrichmentRunService(db)
+    try:
+        run = service.create_jev_skill_backfill_run(limit=request.limit)
+    except ActiveEnrichmentRunError as exc:
+        raise _active_run_conflict(exc) from exc
+    if run is None:
+        return {"status": "empty", "run": None}
+    requested = _publish_run_request(db, service=service, run_id=run.id)
+    db.refresh(run)
+    payload = _serialize_single_run(run, db)
+    payload["execution_dispatched"] = requested
+    payload["execution_result"] = _run_execution_result(run, requested)
+    return payload
 
 
 @router.post("/runs")
@@ -743,6 +780,26 @@ async def retry_failed_enrichment_run(
     service = EnrichmentRunService(db)
     try:
         run = service.create_retry_run_from_failed_items(run_id)
+    except ActiveEnrichmentRunError as exc:
+        raise _active_run_conflict(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    _publish_run_request(db, service=service, run_id=run.id)
+    db.refresh(run)
+    return _serialize_single_run(run, db)
+
+
+@router.post("/runs/{run_id}/resume-cancelled-backfill")
+async def resume_cancelled_jev_skill_backfill(
+    run_id: str,
+    db: Session = Depends(get_db),
+):
+    """Queue the untouched cancelled items as a new Jev Skill backfill run."""
+    service = EnrichmentRunService(db)
+    try:
+        run = service.create_resume_run_from_cancelled_backfill(run_id)
     except ActiveEnrichmentRunError as exc:
         raise _active_run_conflict(exc) from exc
     except ValueError as exc:

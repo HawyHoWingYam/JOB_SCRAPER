@@ -1,0 +1,16 @@
+{
+  "__version": 2,
+  "hashes": {
+    ".trellis/scripts/__init__.py": "1242be5b972094c2e141aecbe81a4efd478f6534e3d5e28306374e6a18fcf46c",
+    ".trellis/scripts/common/git_context.py": "fa30ced454f1a91ffc9f8b2abeb32225e3447cbdc90bad783797374eba07265d",
+    ".trellis/scripts/common/task_queue.py": "0be61f713462b1fe4574927c82fc4704e678afe72dcb9813543aedf2f9e9e0c5",
+    ".trellis/scripts/common/log.py": "471df6895cfac80f995edebbf9974f6b7440634b7a688f28b8331c868bc0f3cf",
+    ".trellis/scripts/common/types.py": "9962081cc2608fb9d1deb32c6880e336f62cdca6b338e7ae813304701e155ee9",
+    ".trellis/scripts/common/packages_context.py": "efe158d7c99c2268851d0216fbb08de22836e418a8dbeb73575b8cc249eed7b7",
+    ".trellis/scripts/get_developer.py": "84c27076323c3e0f2c9c8ed16e8aa865e225d902a187c37e20ee1a46e7142d8f",
+    ".trellis/agents/implement.md": "66e25ad046c94869442834bc3cdfbd5a9a7412d3ff54561d64d2886552c27e87",
+    ".trellis/agents/check.md": "edb4f57361407249a53bf5998ebf91c40d2b969e826a2c5e1b4e813a08bcb175",
+    "AGENTS.md": "6cacfe99748b435d0660c2463c697bc323d53798aecf3492283ca8eac1b29682",
+    ".trellis/.gitignore": "3bc42434cbe61c937a1c26ea3c880b496bfad4e7d683750169e27ade509aa798"
+  }
+}

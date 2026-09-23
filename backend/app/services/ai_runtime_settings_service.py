@@ -20,9 +20,15 @@ from app.services.ai_provider_catalog import CUSTOM_API_FORMAT_OPTIONS
 from app.utils.time import utc_now
 
 RUNTIME_SCOPES = ("jobs", "companies")
-SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT = 5
+SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT = 10
 SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN = 1
 SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX = 1000
+SKILL_CANDIDATE_RECOMMENDATION_LIMIT_DEFAULT = 5
+SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MIN = 1
+SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MAX = 20
+SKILL_CANDIDATE_EVIDENCE_LIMIT_DEFAULT = 5
+SKILL_CANDIDATE_EVIDENCE_LIMIT_MIN = 1
+SKILL_CANDIDATE_EVIDENCE_LIMIT_MAX = 20
 PROFILE_TEST_STATUSES = ("untested", "passed", "failed")
 CUSTOM_API_FORMAT_VALUES = {
     str(option["value"]) for option in CUSTOM_API_FORMAT_OPTIONS
@@ -57,6 +63,8 @@ PERSISTED_FIELD_NAMES = (
     "ai_enrichment_run_concurrency",
     "company_ai_enrichment_run_concurrency",
     "skill_auto_create_distinct_job_threshold",
+    "skill_candidate_recommendation_limit",
+    "skill_candidate_evidence_limit",
     "anthropic_api_key",
     "anthropic_model",
     "anthropic_base_url",
@@ -463,6 +471,12 @@ class AIRuntimeSettingsService:
             "skill_auto_create_distinct_job_threshold": values[
                 "skill_auto_create_distinct_job_threshold"
             ],
+            "skill_candidate_recommendation_limit": values[
+                "skill_candidate_recommendation_limit"
+            ],
+            "skill_candidate_evidence_limit": values[
+                "skill_candidate_evidence_limit"
+            ],
             "anthropic": {
                 "model": values["anthropic_model"],
                 "base_url": values["anthropic_base_url"],
@@ -520,6 +534,8 @@ class AIRuntimeSettingsService:
             "skill_auto_create_distinct_job_threshold": (
                 self.get_skill_auto_create_distinct_job_threshold()
             ),
+            "skill_candidate_recommendation_limit": self.get_skill_candidate_recommendation_limit(),
+            "skill_candidate_evidence_limit": self.get_skill_candidate_evidence_limit(),
             "anthropic": {
                 "model": job_effective.anthropic_model,
                 "base_url": job_effective.anthropic_base_url,
@@ -599,6 +615,31 @@ class AIRuntimeSettingsService:
             min(value, SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX),
         )
 
+    def _get_bounded_skill_setting(self, field_name: str, default: int, minimum: int, maximum: int) -> int:
+        row = self.db.get(AppRuntimeSettings, 1)
+        candidate = getattr(row, field_name, None) if row is not None else None
+        try:
+            value = int(candidate if candidate is not None else default)
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, min(value, maximum))
+
+    def get_skill_candidate_recommendation_limit(self) -> int:
+        return self._get_bounded_skill_setting(
+            "skill_candidate_recommendation_limit",
+            SKILL_CANDIDATE_RECOMMENDATION_LIMIT_DEFAULT,
+            SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MIN,
+            SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MAX,
+        )
+
+    def get_skill_candidate_evidence_limit(self) -> int:
+        return self._get_bounded_skill_setting(
+            "skill_candidate_evidence_limit",
+            SKILL_CANDIDATE_EVIDENCE_LIMIT_DEFAULT,
+            SKILL_CANDIDATE_EVIDENCE_LIMIT_MIN,
+            SKILL_CANDIDATE_EVIDENCE_LIMIT_MAX,
+        )
+
     def build_config_fingerprint(self, scope: str, values: dict[str, Any]) -> Optional[str]:
         self._ensure_valid_scope(scope)
         effective = self._build_effective_settings(values, scope)
@@ -668,6 +709,8 @@ class AIRuntimeSettingsService:
                 "ai_enrichment_run_concurrency",
                 "company_ai_enrichment_run_concurrency",
                 "skill_auto_create_distinct_job_threshold",
+                "skill_candidate_recommendation_limit",
+                "skill_candidate_evidence_limit",
             }:
                 candidate[field_name] = value
                 continue
@@ -741,6 +784,24 @@ class AIRuntimeSettingsService:
                         "type": "value_error.skill_threshold",
                     }
                 )
+
+        for field_name, label, minimum, maximum in (
+            ("skill_candidate_recommendation_limit", "Recommendation count", SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MIN, SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MAX),
+            ("skill_candidate_evidence_limit", "Evidence count", SKILL_CANDIDATE_EVIDENCE_LIMIT_MIN, SKILL_CANDIDATE_EVIDENCE_LIMIT_MAX),
+        ):
+            raw_value = candidate.get(field_name)
+            if raw_value is None:
+                continue
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                value = None
+            if value is None or value < minimum or value > maximum:
+                errors.append({
+                    "loc": [field_name],
+                    "msg": f"{label} must be between {minimum} and {maximum}",
+                    "type": "value_error.skill_candidate_setting",
+                })
 
         for field_name in URL_FIELD_NAMES:
             if candidate.get(field_name) and not self._is_valid_url(candidate[field_name]):

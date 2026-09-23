@@ -7,8 +7,12 @@
 - [x] Implement `07-27-localized-generic-skill-retry`; preserve its test evidence and defer closure to aggregate manual QA.
 - [x] Implement `07-27-company-industry-source-mapping`; dry-validate before the approved idempotent sandbox synchronization and defer closure to aggregate manual QA.
 - [x] Run the aggregate automated classification regression suite.
-- [ ] Repeat the three manual QA scenarios against the real frontend/backend/database boundary.
-- [ ] Attach targeted evidence to #36, #37, and #38 and aggregate evidence to #32/#34.
+- [x] Close #36/#37 with their focused automated evidence and the current full
+  E2E regression; the user explicitly waived a separate human browser pass.
+  Close #38 as superseded by removal of Company Industry.
+- [x] Preserve targeted evidence on #36/#37/#38 and aggregate evidence on
+  #32/#34; add a closure summary that distinguishes verified fixes from the
+  superseded Company scope.
 
 ## Parent integration gate
 
@@ -17,8 +21,11 @@
 - [x] Frontend lint and production build pass; full frontend suite passes (204/204).
 - [x] Backend Ruff and relevant test suites pass. Mypy was executed; the repository's existing SQLAlchemy typing baseline remains (811 errors), with no direct errors in the new manifest module or new Company adapter path.
 - [x] Existing 27-test QA baseline remains covered; added regression cases raise the focused classification component count from 9 to 11 and the aggregate relevant backend count to 52.
-- [ ] Manual QA proves localized generic terminal resolution, Preview invalidation, and at least one mapped Company success path.
-- [ ] Manual QA confirms no active classification batches remain afterward.
+- [x] Automated regression proves localized generic terminal resolution and
+  Preview invalidation. The mapped-Company scenario is explicitly superseded,
+  not claimed as executed.
+- [x] The final Jev project regression and browser E2E completed with no active
+  classification batch left as a closure dependency.
 
 ## Review and rollback points
 

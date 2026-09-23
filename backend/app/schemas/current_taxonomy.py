@@ -20,24 +20,8 @@ class CurrentTaxonomyNodeSchema(_CurrentTaxonomySchema):
 
 
 class CurrentTaxonomyTreeSchema(_CurrentTaxonomySchema):
-    taxonomy: Literal["company_industry", "skill"]
+    taxonomy: Literal["skill"]
     nodes: list[CurrentTaxonomyNodeSchema]
-
-
-class CurrentCompanyIndustryAssignmentSchema(_CurrentTaxonomySchema):
-    id: int
-    company_id: UUID
-    taxonomy_code: str
-    method: str
-    breadcrumb: dict[str, Any]
-    is_primary: bool
-    primary_basis: str | None
-    provenance: dict[str, Any]
-
-
-class CurrentCompanyIndustryStateSchema(_CurrentTaxonomySchema):
-    company_id: UUID
-    assignments: list[CurrentCompanyIndustryAssignmentSchema]
 
 
 class CurrentJobSkillSchema(_CurrentTaxonomySchema):
@@ -66,8 +50,6 @@ class CurrentJobSkillStateSchema(_CurrentTaxonomySchema):
 
 
 __all__ = [
-    "CurrentCompanyIndustryAssignmentSchema",
-    "CurrentCompanyIndustryStateSchema",
     "CurrentJobSkillSchema",
     "CurrentJobSkillStateSchema",
     "CurrentSkillCandidateMentionSchema",

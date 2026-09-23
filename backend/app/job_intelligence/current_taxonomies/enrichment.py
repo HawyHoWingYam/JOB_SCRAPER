@@ -101,7 +101,30 @@ class CurrentSkillEnrichment:
         extracted_skills: Sequence[object],
         confidence: float | None,
         provenance: dict[str, object],
+        source: str = "ai-extraction",
     ) -> dict[str, object]:
+        source = str(source).strip()
+        if not source:
+            raise ValueError("Job Skill projection source is required")
+        exact_skills = self._exact_skill_codes()
+        for value in extracted_skills:
+            if not isinstance(value, dict):
+                continue
+            jev_route = str(value.get("jev_route") or "").strip().lower()
+            if jev_route and jev_route not in {
+                "match_existing",
+                "candidate",
+                "generic",
+                "rejected",
+            }:
+                raise ValueError(f"Unsupported Jev Skill route: {jev_route}")
+            if jev_route == "match_existing":
+                existing_key = normalize_exact_skill_key(value.get("existing_skill"))
+                if exact_skills.get(existing_key) is None:
+                    raise ValueError(
+                        "Jev matched inactive or unknown Skill: "
+                        f"{value.get('existing_skill')}"
+                    )
         now = utc_now()
         existing_mentions = tuple(
             self.db.scalars(
@@ -122,7 +145,6 @@ class CurrentSkillEnrichment:
             mention.updated_at = now
         self.db.flush()
 
-        exact_skills = self._exact_skill_codes()
         seen_keys: set[str] = set()
         matched_codes: list[str] = []
         mention_payloads: list[dict[str, object]] = []
@@ -134,14 +156,46 @@ class CurrentSkillEnrichment:
                 continue
             seen_keys.add(normalized_key)
             existing_key = normalize_exact_skill_key(payload.get("existing_skill"))
-            skill_code = exact_skills.get(existing_key) or exact_skills.get(normalized_key)
+            skill_code = exact_skills.get(existing_key) or exact_skills.get(
+                normalized_key
+            )
             local_disposition = resolve_skill_curation(raw_name)
             kind = str(payload.get("kind") or "technical").strip().lower()
             resolution = str(payload.get("resolution") or "").strip().lower()
+            jev_route = str(payload.get("jev_route") or "").strip().lower()
+            if jev_route and jev_route not in {
+                "match_existing",
+                "candidate",
+                "generic",
+                "rejected",
+            }:
+                raise ValueError(f"Unsupported Jev Skill route: {jev_route}")
             candidate_id = None
             generic_tag = None
             rejection_reason = None
-            if skill_code is not None and kind not in {"generic", "reject"}:
+            if jev_route == "match_existing" and skill_code is None:
+                raise ValueError(
+                    f"Jev matched inactive or unknown Skill: {payload.get('existing_skill')}"
+                )
+            if jev_route == "candidate":
+                mention_resolution = "candidate"
+                skill_code = None
+                candidate = self._upsert_candidate(
+                    normalized_key=normalized_key,
+                    raw_name=raw_name,
+                    now=now,
+                )
+                candidate_id = candidate.id
+                touched_candidate_ids.add(candidate.id)
+            elif jev_route == "generic":
+                mention_resolution = "generic_tag"
+                generic_tag = raw_name
+                skill_code = None
+            elif jev_route == "rejected":
+                mention_resolution = "rejected"
+                rejection_reason = str(payload.get("decision_reason") or "jev_rejected")
+                skill_code = None
+            elif skill_code is not None and kind not in {"generic", "reject"}:
                 mention_resolution = "match_existing"
                 matched_codes.append(skill_code)
             elif local_disposition is not None and local_disposition.kind == "generic":
@@ -190,7 +244,7 @@ class CurrentSkillEnrichment:
                 origin_candidate_id=None,
                 generic_tag=generic_tag,
                 rejection_reason=rejection_reason,
-                source="ai-extraction",
+                source=source,
                 confidence=confidence,
                 provenance=dict(provenance),
                 evidence_hash=evidence_hash,
@@ -216,7 +270,7 @@ class CurrentSkillEnrichment:
                 skills=tuple(
                     CurrentJobSkillInput(
                         skill_code=code,
-                        source="ai-extraction",
+                        source=source,
                         confidence=confidence,
                         provenance=dict(provenance),
                         mention_count=count,
@@ -333,6 +387,7 @@ class CurrentSkillEnrichment:
             }
             candidate.updated_at = now
         self.db.flush()
+
 
 __all__ = [
     "CurrentSkillEnrichment",

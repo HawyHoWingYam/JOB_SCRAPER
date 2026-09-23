@@ -3,8 +3,6 @@ from typing import Optional
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.current_taxonomy import CurrentCompanyIndustryStateSchema
-from app.schemas.job import JobIntelligenceDomainAvailabilitySchema
 from app.company_website import normalize_company_website
 
 
@@ -57,7 +55,4 @@ class CompanySchema(CompanyCreateSchema):
 
 
 class CompanyProductSchema(CompanySchema):
-    """Company response with scoped governed Industry state."""
-
-    company_industries: Optional[CurrentCompanyIndustryStateSchema]
-    company_industry_availability: JobIntelligenceDomainAvailabilitySchema
+    """Company response without the removed Company Industry projection."""

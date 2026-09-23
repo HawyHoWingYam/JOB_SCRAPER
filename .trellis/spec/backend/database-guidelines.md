@@ -52,11 +52,18 @@ python backend/scripts/sandbox_cutover.py clear-database \
   `manual_job_mutation_receipts`; Companies include `website` and
   `ai_description_updated_at`. `companies.extra_data` and `jobs.search_vector`
   are absent from current metadata.
+- `jobs.location` is `TEXT` because Source Job work-location evidence may be a
+  complete ordered multi-location display string. `companies.location`
+  remains `VARCHAR(255)` and must receive only Company-owned location facts.
 - Schema deployment order is `stop -> export -> clear -> deploy complete code
   set -> bootstrap -> import -> verify -> start`.
 - Tests that may create or clear PostgreSQL state parse their URL with
   `make_url` and require a database name ending in `_test` before the first
   engine open, DDL statement, or cleanup call.
+- New Jev production slices and the authoritative Jev browser fixture use
+  isolated PostgreSQL `_test` databases. Do not add SQLite compatibility shims
+  for new persistence behavior; PostgreSQL UUID, JSON, indexes, constraints and
+  locking are part of the contract.
 
 ### 4. Validation Matrix
 
@@ -72,6 +79,7 @@ python backend/scripts/sandbox_cutover.py clear-database \
 | Destructive confirmation missing | Refuse the clear operation |
 | Retained artifact is incomplete, reordered, malformed, or hash-invalid | Refuse before clearing the database |
 | PostgreSQL test database name does not end in `_test` | Fail before connection or mutation |
+| New Jev persistence test attempts SQLite | Replace it with an isolated PostgreSQL `_test` suite |
 | Old and new application processes overlap | Unsupported; keep services stopped |
 
 ### 5. Tests Required

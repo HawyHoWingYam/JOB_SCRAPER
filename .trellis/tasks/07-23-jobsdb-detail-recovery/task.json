@@ -1,0 +1,32 @@
+{
+  "id": "jobsdb-detail-recovery",
+  "name": "jobsdb-detail-recovery",
+  "title": "Fix JobsDB headless detail recovery and profile lock handling",
+  "description": "Make JobsDB detail crawls honor headless mode and provide safe, explicit recovery for stale browser profiles/manual challenges without losing completed targets.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-23-jobsdb-detail-headless",
+    "07-23-jobsdb-profile-recovery"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 17,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/17"
+  }
+}

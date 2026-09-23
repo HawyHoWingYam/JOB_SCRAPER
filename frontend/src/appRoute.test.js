@@ -56,13 +56,13 @@ describe('app hash routing', () => {
     });
   });
 
-  it('round-trips valid Classification targets and safely rejects invalid ones', () => {
+  it('round-trips the Skill target and safely rejects unsupported Classification targets', () => {
     expect(hashForClassificationRoute('skill')).toBe(
       '#classification?target=skill',
     );
     expect(
       parseClassificationRoute('#classification?target=company_industry'),
-    ).toEqual({ target: 'company_industry' });
+    ).toEqual({ target: 'skill' });
     expect(hashForClassificationRoute('unknown')).toBe(
       '#classification?target=skill',
     );

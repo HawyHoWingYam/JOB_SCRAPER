@@ -81,7 +81,6 @@ describe('AddJobPage manual persistence', () => {
     await user.click(screen.getByLabelText('New Company'));
     await user.type(screen.getByLabelText('Company Name *'), 'New Evidence Company');
     await user.type(screen.getByLabelText('Website'), 'example.com');
-    await user.type(screen.getByLabelText('Company Industry evidence'), 'Software Consulting');
     await user.type(screen.getByLabelText('Company Location'), 'Central');
     await user.type(screen.getByLabelText('Job Title *'), 'Designer');
 
@@ -96,7 +95,6 @@ describe('AddJobPage manual persistence', () => {
       mode: 'new',
       name: 'New Evidence Company',
       website: 'example.com',
-      industry: 'Software Consulting',
       location: 'Central',
     });
   });

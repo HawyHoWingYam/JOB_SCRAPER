@@ -258,3 +258,213 @@ def test_restart_recovery_supervises_active_and_acknowledges_pidless_jobs() -> N
     assert cancellation.calls == [
         {"crawl_job_id": "pidless-job", "reason": "operator cancelled"}
     ]
+
+
+def test_process_monitor_keeps_fresh_execution_running() -> None:
+    process = SimpleNamespace(poll=lambda: None)
+    launcher = _launcher(sleep=lambda _seconds: None)
+    launcher._local_processes["generation-id"] = process
+    snapshots = iter(
+        [
+            {
+                "generation": "generation-id",
+                "crawl_job_id": "job-id",
+                "status": "running",
+                "heartbeat_age_seconds": 10.0,
+            },
+            None,
+        ]
+    )
+    launcher._execution_snapshot = lambda _generation: next(snapshots)
+    settled: list[dict] = []
+    launcher._settle_stale_execution = lambda snapshot, **kwargs: settled.append(
+        {"snapshot": snapshot, **kwargs}
+    )
+
+    launcher._monitor_local_process("generation-id")
+
+    assert settled == []
+
+
+def test_process_monitor_terminates_owned_worker_after_stale_heartbeat() -> None:
+    process = SimpleNamespace(poll=lambda: None)
+    snapshot = {
+        "generation": "generation-id",
+        "crawl_job_id": "job-id",
+        "status": "running",
+        "pid": 99,
+        "heartbeat_age_seconds": 121.0,
+    }
+    launcher = _launcher(sleep=lambda _seconds: None)
+    launcher._local_processes["generation-id"] = process
+    launcher._execution_snapshot = lambda _generation: snapshot
+    launcher._validated_process = lambda _snapshot: process
+    terminated: list[object] = []
+    launcher._terminate_process_tree = lambda value: terminated.append(value) or True
+    settled: list[dict] = []
+    launcher._settle_stale_execution = lambda value, **kwargs: settled.append(
+        {"snapshot": value, **kwargs}
+    )
+
+    launcher._monitor_local_process("generation-id")
+
+    assert terminated == [process]
+    assert settled == [
+        {"snapshot": snapshot, "execution_status": "terminated"}
+    ]
+
+
+def test_process_monitor_does_not_signal_unrelated_reused_pid() -> None:
+    local_process = SimpleNamespace(poll=lambda: None)
+    snapshot = {
+        "generation": "generation-id",
+        "crawl_job_id": "job-id",
+        "status": "running",
+        "pid": 99,
+        "heartbeat_age_seconds": 121.0,
+    }
+    launcher = _launcher(sleep=lambda _seconds: None)
+    launcher._local_processes["generation-id"] = local_process
+    launcher._execution_snapshot = lambda _generation: snapshot
+    launcher._validated_process = lambda _snapshot: None
+    terminated: list[object] = []
+    launcher._terminate_process_tree = lambda value: terminated.append(value) or True
+    settled: list[dict] = []
+    launcher._settle_stale_execution = lambda value, **kwargs: settled.append(
+        {"snapshot": value, **kwargs}
+    )
+
+    launcher._monitor_local_process("generation-id")
+
+    assert terminated == []
+    assert settled == [{"snapshot": snapshot, "execution_status": "stale"}]
+
+
+def test_startup_recovery_settles_only_stale_active_executions() -> None:
+    fresh = SimpleNamespace(generation="fresh-generation")
+    stale = SimpleNamespace(generation="stale-generation")
+
+    class _ExecutionRepository:
+        @staticmethod
+        def list_active(_db):
+            return [fresh, stale]
+
+        @staticmethod
+        def snapshot(execution):
+            return {
+                "generation": execution.generation,
+                "crawl_job_id": f"{execution.generation}-job",
+                "heartbeat_age_seconds": (
+                    10.0 if execution is fresh else 121.0
+                ),
+                "pid": 99,
+            }
+
+    launcher = _launcher()
+    launcher._execution_repository = _ExecutionRepository()
+    launcher._validated_process = lambda _snapshot: None
+    settled: list[dict] = []
+    launcher._settle_stale_execution = lambda snapshot, **kwargs: settled.append(
+        {"snapshot": snapshot, **kwargs}
+    ) or True
+
+    assert launcher.recover_stale_executions() == 1
+    assert [item["snapshot"]["generation"] for item in settled] == [
+        "stale-generation"
+    ]
+
+
+def test_startup_recovery_keeps_unverifiable_stale_execution_active() -> None:
+    execution = SimpleNamespace(generation="stale-generation")
+
+    class _ExecutionRepository:
+        @staticmethod
+        def list_active(_db):
+            return [execution]
+
+        @staticmethod
+        def snapshot(_execution):
+            return {
+                "generation": "stale-generation",
+                "crawl_job_id": "job-id",
+                "heartbeat_age_seconds": 121.0,
+                "pid": 99,
+            }
+
+    launcher = _launcher()
+    launcher._execution_repository = _ExecutionRepository()
+    launcher._validated_process = lambda _snapshot: (_ for _ in ()).throw(
+        ProcessIdentityUnavailable("denied")
+    )
+    launcher._settle_stale_execution = lambda *_args, **_kwargs: pytest.fail(
+        "unverifiable execution must not settle"
+    )
+
+    assert launcher.recover_stale_executions() == 0
+
+
+@pytest.mark.parametrize(
+    "job_status",
+    ["completed", "failed", "manual_action_required"],
+)
+def test_stale_settlement_closes_execution_without_overwriting_terminal_job(
+    job_status,
+) -> None:
+    execution = SimpleNamespace(status="running", generation="generation-id")
+    crawl_job = SimpleNamespace(status=job_status)
+
+    class _CrawlRepository:
+        @staticmethod
+        def get_crawl_job_by_id_for_update(_db, _crawl_job_id):
+            return crawl_job
+
+    class _ExecutionRepository:
+        @staticmethod
+        def get_by_generation(_db, _generation, *, for_update=False):
+            assert for_update is True
+            return execution
+
+        @staticmethod
+        def mark_exit(value, *, status, exit_code):
+            value.status = status
+            value.exit_code = exit_code
+
+    launcher = _launcher()
+    launcher._crawl_job_repository = _CrawlRepository()
+    launcher._execution_repository = _ExecutionRepository()
+
+    assert (
+        launcher._settle_stale_execution(
+            {"crawl_job_id": "job-id", "generation": "generation-id"},
+            execution_status="stale",
+        )
+        is True
+    )
+    assert crawl_job.status == job_status
+    assert execution.status == "stale"
+
+
+@pytest.mark.parametrize("job_status", ["cancelling", "cancelled"])
+def test_stale_settlement_leaves_cancellation_to_cancel_supervisor(job_status) -> None:
+    execution = SimpleNamespace(status="stop_requested")
+    crawl_job = SimpleNamespace(status=job_status)
+
+    class _CrawlRepository:
+        @staticmethod
+        def get_crawl_job_by_id_for_update(_db, _crawl_job_id):
+            return crawl_job
+
+    class _ExecutionRepository:
+        @staticmethod
+        def get_by_generation(_db, _generation, *, for_update=False):
+            return execution
+
+    launcher = _launcher()
+    launcher._crawl_job_repository = _CrawlRepository()
+    launcher._execution_repository = _ExecutionRepository()
+
+    assert not launcher._settle_stale_execution(
+        {"crawl_job_id": "job-id", "generation": "generation-id"},
+        execution_status="stale",
+    )
+    assert execution.status == "stop_requested"

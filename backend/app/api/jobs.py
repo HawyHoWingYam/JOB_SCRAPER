@@ -7,7 +7,7 @@ from io import StringIO
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy.orm import Session, joinedload, object_session, selectinload
 from sqlalchemy import and_, false, func, not_, or_, select
 from typing import Annotated, Literal, Optional, List
@@ -25,6 +25,18 @@ from app.api.job_search_query import apply_parsed_clauses
 from app.config import settings
 from app.models import Job, Company
 from app.models.current_taxonomy import CurrentTaxonomyNodeRecord
+from app.models.jev import JevSearchRerankEvaluation
+from app.services.jev_budget import JevBudgetExhaustedError
+from app.services.jev_duplicate_association import (
+    DuplicateAssociationConflictError,
+    DuplicateAssociationError,
+    JevDuplicateAssociationService,
+)
+from app.services.jev_evaluator_factory import build_jev_evaluator
+from app.services.jev_run_service import JevRunConfigurationError, JevRunService
+from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
+from app.services.jev_search_rerank import JevSearchRerankService
+from app.search.deterministic_order import apply_deterministic_lexical_order
 from app.models.source_job_attributes import (
     EmploymentType,
     JobEmploymentType,
@@ -86,7 +98,6 @@ JOB_SEARCH_EXPORT_FIELDNAMES = [
     "original_job_url",
     "title",
     "company_name",
-    "company_industry",
     "location",
     "employment_type",
     "posted_date",
@@ -107,6 +118,13 @@ JOB_SEARCH_EXPORT_FIELDNAMES = [
     "company_ai_description",
     "description_text",
 ]
+
+
+class SearchRerankPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: JobSearchScopeSchema
+    retrieval_mode: Literal["lexical", "semantic", "hybrid"] = "lexical"
 
 
 def _source_attribute_load_options(*, include_labels: bool = False):
@@ -361,10 +379,6 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     skill_codes = _normalize_code_list(filters.skill_ids)
     technology_codes = _normalize_code_list(filters.technology_ids)
     skill_category_codes = _normalize_code_list(filters.skill_category_ids)
-    company_industry_node_ids = tuple(
-        dict.fromkeys(_normalize_code_list(filters.company_industry_node_ids))
-    )
-
     current_reader = CurrentTaxonomyReader(query.session)
     selected_skill_codes = (
         skill_codes or technology_codes or skill_category_codes
@@ -385,14 +399,6 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     if selected_skill_codes:
         try:
             query = query.filter(current_reader.job_skill_filter(selected_skill_codes))
-        except CurrentTaxonomyReadError as exc:
-            raise HTTPException(status_code=422, detail=exc.context) from exc
-
-    if company_industry_node_ids:
-        try:
-            query = query.filter(
-                current_reader.company_industry_filter(company_industry_node_ids)
-            )
         except CurrentTaxonomyReadError as exc:
             raise HTTPException(status_code=422, detail=exc.context) from exc
 
@@ -423,8 +429,6 @@ def _summarize_layer(layer: JobSearchLayerSchema) -> JobSearchLayerSummarySchema
         parts.append(
             f"Source: {SOURCE_SITE_LABELS.get(filters.source_site, filters.source_site)}"
         )
-    if filters.industry:
-        parts.append(f"Industry: {filters.industry}")
     if filters.employment_type_codes:
         parts.append("Employment Types: " + ", ".join(filters.employment_type_codes))
 
@@ -464,8 +468,6 @@ def _build_legacy_scope(
     employment_type: Optional[str],
     source_classification_ids: Optional[List[str]],
     employment_type_codes: Optional[List[str]],
-    company_industry_node_ids: Optional[List[str]],
-    industry: Optional[str],
     posted_date_from: Optional[date],
     posted_date_to: Optional[date],
     experience_years_from: Optional[int],
@@ -490,8 +492,6 @@ def _build_legacy_scope(
                     employment_type=employment_type,
                     source_classification_ids=source_classification_ids,
                     employment_type_codes=employment_type_codes,
-                    company_industry_node_ids=company_industry_node_ids,
-                    industry=industry,
                     posted_date_from=posted_date_from,
                     posted_date_to=posted_date_to,
                     experience_years_from=experience_years_from,
@@ -518,6 +518,7 @@ def _build_search_response(
     preserve_query_order: bool = False,
     include_facets: bool = False,
     facet_scope: Optional[JobSearchScopeSchema] = None,
+    facets_override: Optional[JobSearchFacetsSchema] = None,
 ):
     results, total = execute_search_page(
         query,
@@ -525,11 +526,11 @@ def _build_search_response(
         page_size=page_size,
         preserve_query_order=preserve_query_order,
     )
-    facets = (
-        JobSearchFacets(query.session).build(facet_scope or applied_scope)
-        if include_facets and (facet_scope is not None or applied_scope is not None)
-        else None
-    )
+    facets = facets_override
+    if facets is None and include_facets and (
+        facet_scope is not None or applied_scope is not None
+    ):
+        facets = JobSearchFacets(query.session).build(facet_scope or applied_scope)
     return _build_search_response_from_results(
         results,
         total=total,
@@ -552,9 +553,7 @@ def execute_search_page(
     offset = (page - 1) * page_size
     results_query = query
     if not preserve_query_order:
-        results_query = results_query.order_by(
-            func.coalesce(Job.posted_date, Job.created_at).desc()
-        )
+        results_query = apply_deterministic_lexical_order(results_query)
     windowed_rows = (
         results_query
         .add_columns(func.count().over().label("_search_total"))
@@ -662,7 +661,7 @@ def _strip_html_text(value: Optional[str]) -> str:
 
 
 def _build_export_rows(query):
-    results = query.order_by(Job.posted_date.desc().nullslast()).all()
+    results = apply_deterministic_lexical_order(query).all()
     return _build_export_rows_from_results(results, db=query.session)
 
 
@@ -687,7 +686,6 @@ def _build_export_rows_from_results(results, *, db: Session | None = None):
                 "original_job_url": _build_original_job_url(job),
                 "title": job.title or "",
                 "company_name": company.name if company else "",
-                "company_industry": company.industry if company else "",
                 "location": job.location or "",
                 "employment_type": job.employment_type or "",
                 "posted_date": job.posted_date.isoformat() if job.posted_date else "",
@@ -845,15 +843,6 @@ async def search_jobs(
         None,
         description="Filter by governed Employment Type codes",
     ),
-    company_industry_node_ids: Optional[List[str]] = Query(
-        None,
-        description="Filter by governed Company Industry node IDs",
-    ),
-    industry: Optional[str] = Query(
-        None,
-        description="Retired; use company_industry_node_ids",
-        deprecated=True,
-    ),
     posted_date_from: Optional[date] = Query(
         None, description="Filter by posted date from"
     ),
@@ -893,8 +882,6 @@ async def search_jobs(
             employment_type=employment_type,
             source_classification_ids=source_classification_ids,
             employment_type_codes=employment_type_codes,
-            company_industry_node_ids=company_industry_node_ids,
-            industry=industry,
             posted_date_from=posted_date_from,
             posted_date_to=posted_date_to,
             experience_years_from=experience_years_from,
@@ -921,15 +908,81 @@ async def search_jobs_post(
     layer_summaries = [_summarize_layer(layer) for layer in request.scope.layers]
 
     if request.retrieval_mode != "lexical":
+        if request.jev_rerank_evaluation_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Jev search reranking currently supports lexical search only",
+            )
         return await _search_via_retrieval_api(
             request,
             layer_summaries=layer_summaries,
         )
 
-    return RetrievalService(db).search(
-        request,
-        layer_summaries=layer_summaries,
+    try:
+        return RetrievalService(db).search(
+            request,
+            layer_summaries=layer_summaries,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/search/rerank/preview")
+def preview_search_rerank(
+    request: SearchRerankPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    search_request = JobSearchRequestSchema(
+        scope=request.scope,
+        retrieval_mode=request.retrieval_mode,
     )
+    _validate_scope_expressions(search_request)
+    try:
+        evaluation = JevSearchRerankService(db).preview(
+            scope=request.scope,
+            retrieval_mode=request.retrieval_mode,
+        )
+        db.commit()
+        return JevSearchRerankService(db).serialize(evaluation)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/search/rerank/evaluations/{evaluation_id}")
+async def evaluate_search_rerank(
+    evaluation_id: str,
+    db: Session = Depends(get_db),
+):
+    settings_row = JevRuntimeSettingsService(db).get_or_create()
+    if not settings_row.search_rerank_enabled:
+        raise HTTPException(status_code=409, detail="Jev search reranking is disabled")
+    service = JevSearchRerankService(db)
+    evaluator = None
+    try:
+        evaluation = service.start(evaluation_id)
+        if evaluation.jev_run_id is not None and evaluation.status not in {
+            "completed",
+            "completed_with_failures",
+        }:
+            run = JevRunService(db).get(evaluation.jev_run_id)
+            evaluator = build_jev_evaluator(db, run)
+            evaluation = await service.execute(evaluation.id, evaluator=evaluator)
+        db.commit()
+        return service.serialize(evaluation)
+    except KeyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Search rerank preview not found") from exc
+    except JevBudgetExhaustedError:
+        db.commit()
+        return service.serialize(db.get(JevSearchRerankEvaluation, evaluation_id))
+    except JevRunConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        close = getattr(evaluator, "aclose", None)
+        if close is not None:
+            await close()
 
 
 @router.post("/search/facets", response_model=JobSearchFacetsSchema)
@@ -948,13 +1001,30 @@ async def export_jobs_search_scope(
 ):
     _validate_scope_expressions(request)
     if request.retrieval_mode != "lexical":
+        if request.jev_rerank_evaluation_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Jev search reranking currently supports lexical search only",
+            )
         return await _export_via_retrieval_api(request)
 
     query = _build_query_from_scope(db, request.scope)
-    total = query.order_by(None).count()
-    _validate_export_row_limit(total)
 
-    rows = _build_export_rows(query)
+    if request.jev_rerank_evaluation_id:
+        try:
+            query = JevSearchRerankService(db).apply_order(
+                query,
+                evaluation_id=request.jev_rerank_evaluation_id,
+                scope=request.scope,
+                retrieval_mode=request.retrieval_mode,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _validate_export_row_limit(query.order_by(None).count())
+        rows = _build_export_rows_from_results(query.all())
+    else:
+        _validate_export_row_limit(query.order_by(None).count())
+        rows = _build_export_rows(query)
     return _build_csv_export_response(rows)
 
 
@@ -1101,6 +1171,106 @@ async def update_manual_job(
         command_kind="update",
         job_id=job_id,
     )
+
+
+class DuplicateAssociationReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["confirm", "reject"]
+
+
+@router.get("/{job_id}/duplicate-associations")
+def list_duplicate_associations(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+):
+    try:
+        return {
+            "job_id": str(job_id),
+            "associations": JevDuplicateAssociationService(db).list_for_job(job_id),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+
+
+@router.post("/{job_id}/duplicate-associations/evaluate")
+async def evaluate_duplicate_associations(
+    job_id: UUID,
+    db: Session = Depends(get_db),
+):
+    service = JevDuplicateAssociationService(db)
+    evaluator = None
+    try:
+        settings_row = JevRuntimeSettingsService(db).get_or_create()
+        if not settings_row.duplicate_enabled:
+            raise JevRunConfigurationError("Jev duplicate associations are disabled")
+        plan = service.start_for_job(
+            job_id,
+            candidate_limit=settings_row.duplicate_candidate_limit,
+            corpus_limit=settings_row.duplicate_corpus_limit,
+        )
+        if plan.run_id is not None:
+            run = JevRunService(db).get(plan.run_id)
+            evaluator = build_jev_evaluator(db, run)
+            await service.execute(run.id, evaluator=evaluator)
+        db.commit()
+        return {
+            "run_id": plan.run_id,
+            "candidate_count": plan.candidate_count,
+            "skipped_current_count": plan.skipped_current_count,
+            "associations": service.list_for_job(job_id),
+        }
+    except KeyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Job not found") from exc
+    except JevBudgetExhaustedError as exc:
+        db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "jev_allowance_exhausted",
+                "remaining_microdollars": exc.remaining_microdollars,
+            },
+        ) from exc
+    except JevRunConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (DuplicateAssociationError, ValueError, IntegrityError) as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        close = getattr(evaluator, "aclose", None)
+        if close is not None:
+            await close()
+
+
+@router.post("/{job_id}/duplicate-associations/{association_id}/review")
+def review_duplicate_association(
+    job_id: UUID,
+    association_id: str,
+    request: DuplicateAssociationReviewRequest,
+    idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ],
+    db: Session = Depends(get_db),
+):
+    service = JevDuplicateAssociationService(db)
+    try:
+        result = service.review(
+            association_id,
+            subject_job_id=job_id,
+            action=request.action,
+            idempotency_key=idempotency_key,
+        )
+        db.commit()
+        return result
+    except KeyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="Association not found") from exc
+    except DuplicateAssociationConflictError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _execute_manual_job_mutation(

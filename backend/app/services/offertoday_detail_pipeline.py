@@ -15,9 +15,6 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
-from app.job_intelligence.current_taxonomies.company_projection import (
-    project_current_company_industry,
-)
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.scraper.log_events import build_scrape_log_event
 from app.sources.contracts import (
@@ -517,12 +514,6 @@ class OfferTodayDetailPipeline:
                 db,
                 company_data,
                 auto_commit=False,
-            )
-            project_current_company_industry(
-                db,
-                company.id,
-                canonical_job,
-                outbox_repository=self.event_outbox_repository,
             )
             job_data = build_offertoday_job_data(canonical_job, company.id)
             raw_data = dict(job_data.get("raw_data") or {})

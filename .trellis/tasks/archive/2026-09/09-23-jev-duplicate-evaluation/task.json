@@ -1,0 +1,29 @@
+{
+  "id": "jev-duplicate-evaluation",
+  "name": "jev-duplicate-evaluation",
+  "title": "Jev phase 3A: source-preserving suspected duplicate evaluation",
+  "description": "Evaluate bounded Jev decisions for source-preserving suspected duplicate Job associations without product writes or record merging.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": "2026-09-23",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-23-research-jev-use-cases",
+  "relatedFiles": [],
+  "notes": "Phase 3A offline evaluation only. Known docs/jev.md credential is unchanged across six HTTP 401 attempts with jev-latest, jev-1.13.0, and jev-preview; paid dispatch is fingerprint-gated until the credential changes. Shared USD 10 allowance has USD 0.30 uncertain and USD 9.70 remaining.",
+  "meta": {
+    "github_issue": 66,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/66"
+  }
+}

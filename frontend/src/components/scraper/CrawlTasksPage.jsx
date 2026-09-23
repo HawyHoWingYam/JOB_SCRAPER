@@ -16,7 +16,16 @@ import { formatCrawlModeLabel } from "./crawlMode";
 import { formatCrawlPhaseLabel } from "./crawlPhase";
 import { formatScraperSourceLabel } from "./listingBatchLabel";
 import { cancelCrawlJob } from "./crawlTaskActions";
-import { getCrawlTaskDetail, resumeManualTask } from "../../features/taskControl/board/boardApi";
+import {
+  evaluateCrawlQuality,
+  evaluateIncidentTriage,
+  getCrawlQuality,
+  getIncidentTriage,
+  getCrawlTaskDetail,
+  previewCrawlQuality,
+  previewIncidentTriage,
+  resumeManualTask,
+} from "../../features/taskControl/board/boardApi";
 import { buildCrawlTaskRoute, parseCrawlTaskRoute } from "../../features/taskControl/board/boardRoute";
 import { buildControlRoute, newDraftId } from "../../features/taskControl/shared/controlRoute";
 import { createWizardDraft, writeDraft } from "../../features/taskControl/wizard/wizardDraft";
@@ -62,6 +71,78 @@ const TIME_RANGE_OPTIONS = [
   { value: "7d", label: "Last 7 days" },
   { value: "30d", label: "Last 30 days" },
 ];
+
+function IncidentTriageAdvisory({ value, pending, error, onPreview, onEvaluate }) {
+  const [eventLimit, setEventLimit] = useState(200);
+  const maximum = Number(value?.maximum_event_limit || 200);
+  const boundedLimit = Math.max(1, Math.min(maximum, eventLimit));
+  const preview = value?.preview;
+  const latest = value?.latest;
+  return (
+    <section className="glass-panel crawl-tasks-detail-block" aria-label="Jev repeated incident triage">
+      <h2>Repeated incident triage</h2>
+      <p>
+        Jev prioritizes secret-safe clusters only. It cannot change severity,
+        retry, resume, cancel, dismiss, or write Crawl Job events.
+      </p>
+      <label>
+        <span>Recent incident event limit</span>
+        <input
+          aria-label="Jev incident event limit"
+          type="number"
+          min="1"
+          max={maximum}
+          value={boundedLimit}
+          onChange={(event) => setEventLimit(Math.max(1, Math.min(maximum, Number(event.target.value) || 1)))}
+        />
+      </label>
+      <div className="board-actions">
+        <button type="button" disabled={pending !== null} onClick={() => onPreview(boundedLimit)}>
+          Preview incident clusters
+        </button>
+        <button
+          type="button"
+          disabled={!value?.enabled || pending !== null || !preview?.selected_cluster_count}
+          onClick={() => onEvaluate(preview.id)}
+        >
+          Evaluate clusters with Jev
+        </button>
+      </div>
+      {!value?.enabled && <p>Incident triage is disabled in Settings.</p>}
+      {preview && (
+        <p role="status">
+          Free database preview: {preview.selected_cluster_count} clusters selected
+          from {preview.total_event_count} events. No Jev request was sent.
+        </p>
+      )}
+      {error && <p role="alert" className="crawl-tasks-banner crawl-tasks-banner-error">{error}</p>}
+      {latest && (
+        <div data-testid="jev-incident-triage-receipt">
+          <p>
+            <strong>Latest:</strong> {latest.status}
+            {latest.request_id && ` · receipt ${latest.request_id}`}
+            {latest.provider && ` · ${latest.provider}`}
+            {latest.cost_usd != null && ` · cost USD ${Number(latest.cost_usd).toFixed(5)}`}
+            {latest.error_code && ` · ${latest.error_code}`}
+          </p>
+          {latest.status !== 'completed' && (
+            <p data-testid="jev-incident-triage-fallback">
+              Fallback: deterministic clusters remain visible without Jev prioritization.
+            </p>
+          )}
+          {(latest.clusters || []).map((cluster) => (
+            <article key={cluster.id} className="crawl-tasks-detail-text">
+              <strong>{cluster.source_site} · {cluster.issue_class}</strong>
+              {' · '}{cluster.event_count} events
+              {cluster.disposition && ` · ${cluster.disposition}`}
+              <br />{cluster.normalized_symptom}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function buildTasksUrl(page, filters) {
   const params = new URLSearchParams({
@@ -434,6 +515,12 @@ export default function CrawlTasksPage() {
   const [selectedTaskDetail, setSelectedTaskDetail] = useState(null);
   const [selectedTaskDetailError, setSelectedTaskDetailError] = useState(null);
   const [selectedTaskDetailLoading, setSelectedTaskDetailLoading] = useState(false);
+  const [crawlQuality, setCrawlQuality] = useState(null);
+  const [crawlQualityPending, setCrawlQualityPending] = useState(null);
+  const [crawlQualityError, setCrawlQualityError] = useState('');
+  const [incidentTriage, setIncidentTriage] = useState(null);
+  const [incidentTriagePending, setIncidentTriagePending] = useState(null);
+  const [incidentTriageError, setIncidentTriageError] = useState('');
   const [refreshedAt, setRefreshedAt] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -451,10 +538,23 @@ export default function CrawlTasksPage() {
   );
   const hasCancellingTask = tasks.some(isCancellingTask);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    getIncidentTriage({ signal: controller.signal })
+      .then((result) => setIncidentTriage(result))
+      .catch((triageError) => {
+        if (!controller.signal.aborted) {
+          setIncidentTriageError(extractErrorMessage(triageError, 'Incident triage is unavailable'));
+        }
+      });
+    return () => controller.abort();
+  }, []);
+
   const loadSelectedTaskDetail = useCallback(async ({ signal } = {}) => {
     if (!selectedTaskId) {
       setSelectedTaskDetail(null);
       setSelectedTaskDetailError(null);
+      setCrawlQuality(null);
       return;
     }
     setSelectedTaskDetail((current) => current?.run.id === selectedTaskId ? current : null);
@@ -464,6 +564,18 @@ export default function CrawlTasksPage() {
       if (!signal?.aborted) {
         setSelectedTaskDetail(value);
         setSelectedTaskDetailError(null);
+      }
+      try {
+        const quality = await getCrawlQuality(selectedTaskId, { signal });
+        if (!signal?.aborted) {
+          setCrawlQuality(quality);
+          setCrawlQualityError('');
+        }
+      } catch (qualityError) {
+        if (!signal?.aborted) {
+          setCrawlQuality(null);
+          setCrawlQualityError(extractErrorMessage(qualityError, 'Crawl quality is unavailable'));
+        }
       }
     } catch (detailError) {
       if (!signal?.aborted) setSelectedTaskDetailError(extractErrorMessage(detailError, "Failed to load normalized Task Details"));
@@ -673,6 +785,60 @@ export default function CrawlTasksPage() {
     if (succeeded) setCancelDialogOpen(false);
   }, [runTaskAction, selectedTaskId]);
 
+  const handleCrawlQualityPreview = useCallback(async (limit) => {
+    if (!selectedTaskId) return;
+    setCrawlQualityPending('preview');
+    setCrawlQualityError('');
+    try {
+      const preview = await previewCrawlQuality(selectedTaskId, limit);
+      setCrawlQuality((current) => ({ ...(current || {}), preview }));
+    } catch (qualityError) {
+      setCrawlQualityError(extractErrorMessage(qualityError, 'Preview failed'));
+    } finally {
+      setCrawlQualityPending(null);
+    }
+  }, [selectedTaskId]);
+
+  const handleCrawlQualityEvaluate = useCallback(async (limit) => {
+    if (!selectedTaskId) return;
+    setCrawlQualityPending('evaluate');
+    setCrawlQualityError('');
+    try {
+      const latest = await evaluateCrawlQuality(selectedTaskId, limit);
+      setCrawlQuality((current) => ({ ...(current || {}), latest }));
+    } catch (qualityError) {
+      setCrawlQualityError(extractErrorMessage(qualityError, 'Jev quality evaluation failed'));
+    } finally {
+      setCrawlQualityPending(null);
+    }
+  }, [selectedTaskId]);
+
+  const handleIncidentTriagePreview = useCallback(async (eventLimit) => {
+    setIncidentTriagePending('preview');
+    setIncidentTriageError('');
+    try {
+      const preview = await previewIncidentTriage(eventLimit);
+      setIncidentTriage((current) => ({ ...(current || {}), preview }));
+    } catch (triageError) {
+      setIncidentTriageError(extractErrorMessage(triageError, 'Incident preview failed'));
+    } finally {
+      setIncidentTriagePending(null);
+    }
+  }, []);
+
+  const handleIncidentTriageEvaluate = useCallback(async (evaluationId) => {
+    setIncidentTriagePending('evaluate');
+    setIncidentTriageError('');
+    try {
+      const latest = await evaluateIncidentTriage(evaluationId);
+      setIncidentTriage((current) => ({ ...(current || {}), latest }));
+    } catch (triageError) {
+      setIncidentTriageError(extractErrorMessage(triageError, 'Jev incident triage failed'));
+    } finally {
+      setIncidentTriagePending(null);
+    }
+  }, []);
+
   return (
     <section className="crawl-tasks-page">
       <header className="crawl-tasks-header">
@@ -699,6 +865,14 @@ export default function CrawlTasksPage() {
           <span>{isLoading ? "Refreshing..." : "Refresh"}</span>
         </button>
       </header>
+
+      <IncidentTriageAdvisory
+        value={incidentTriage}
+        pending={incidentTriagePending}
+        error={incidentTriageError}
+        onPreview={handleIncidentTriagePreview}
+        onEvaluate={handleIncidentTriageEvaluate}
+      />
 
       <div
         className="crawl-tasks-filters"
@@ -890,6 +1064,11 @@ export default function CrawlTasksPage() {
               onOpenEvents={handleOpenEvents}
               onContinueCappedListing={handleContinueCappedListing}
               onRecoveryChanged={handleRecoveryChanged}
+              crawlQuality={crawlQuality}
+              crawlQualityPending={crawlQualityPending}
+              crawlQualityError={crawlQualityError}
+              onCrawlQualityPreview={handleCrawlQualityPreview}
+              onCrawlQualityEvaluate={handleCrawlQualityEvaluate}
             />
           ) : (
             <div className="crawl-tasks-empty">

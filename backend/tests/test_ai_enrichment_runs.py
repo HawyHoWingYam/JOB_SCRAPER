@@ -35,6 +35,8 @@ from app.services.enrichment_run_service import (
     PendingJobFilters,
 )
 from app.services.ai_enrichment_service import AIEnrichmentService
+
+
 @compiles(UUID, "sqlite")
 def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(32)"
@@ -319,7 +321,9 @@ async def test_manual_filter_option_has_no_source_classification_paths(db, compa
 
     payload = await get_pending_filter_options_endpoint(db)
 
-    manual = next(item for item in payload["sources"] if item["source_site"] == "manual")
+    manual = next(
+        item for item in payload["sources"] if item["source_site"] == "manual"
+    )
     assert manual["classification_paths"] == []
     assert manual["classifications"] == []
 
@@ -454,7 +458,9 @@ async def test_manual_enrichment_preserves_operator_experience_and_fills_only_om
     assert job.experience_min_years == expected_min
     assert job.experience_max_years == expected_max
     assert job.experience_evidence == ["Role description evidence", *expected_conflicts]
-    assert job.manual_evidence.enriched_evidence_hash == job.manual_evidence.evidence_hash
+    assert (
+        job.manual_evidence.enriched_evidence_hash == job.manual_evidence.evidence_hash
+    )
 
 
 @pytest.mark.asyncio
@@ -505,7 +511,9 @@ async def test_failed_manual_enrichment_preserves_old_intelligence_and_stale_has
     assert job.ai_summary == "Old intelligence"
     assert job.ai_enriched_at == old_enriched_at
     assert job.manual_evidence.enriched_evidence_hash == "b" * 64
-    assert job.manual_evidence.enriched_evidence_hash != job.manual_evidence.evidence_hash
+    assert (
+        job.manual_evidence.enriched_evidence_hash != job.manual_evidence.evidence_hash
+    )
 
 
 def test_pending_preview_and_create_do_not_gate_jobs_on_taxonomy_mapping(db, company):
@@ -661,6 +669,82 @@ def test_execute_run_does_not_block_unmapped_job_before_worker_dispatch(db, comp
     assert result.status == "completed"
     assert result.excluded_items == 0
     assert result.items[0].status == "completed"
+
+
+def test_jev_skill_backfill_run_uses_dedicated_executor_and_skips_standard_preflight(
+    db, company
+):
+    job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000106",
+        projected=False,
+        enriched=True,
+    )
+    run = make_run(
+        db,
+        run_id="jev-skill-backfill-execution",
+        status="running",
+        created_at=datetime(2026, 7, 18, 12, 0),
+        job_ids=[str(job.id)],
+    )
+    run.source_type = "jev_skill_backfill"
+    calls = []
+
+    class _BackfillService:
+        async def enrich_job_id(self, job_id):
+            calls.append(job_id)
+            return {"status": "success", "job_id": str(job_id)}
+
+    class _WrongStandardService:
+        async def enrich_job_id(self, _job_id):
+            raise AssertionError("standard enrichment must not run for Jev backfill")
+
+    service = EnrichmentRunService(db)
+    service._resolve_run_concurrency = lambda: 1
+
+    result = asyncio.run(
+        service.execute_run(
+            run.id,
+            enrichment_service=_WrongStandardService(),
+            backfill_service=_BackfillService(),
+            claim=False,
+        )
+    )
+
+    assert calls == [job.id]
+    assert result.status == "completed"
+    assert result.excluded_items == 0
+    assert result.items[0].status == "completed"
+
+
+def test_cancelled_jev_backfill_resumes_only_untouched_items_in_a_new_run(db, company):
+    first = make_job(db, company, job_id="00000000-0000-0000-0000-000000000107")
+    second = make_job(db, company, job_id="00000000-0000-0000-0000-000000000108")
+    source = make_run(
+        db,
+        run_id="cancelled-jev-backfill",
+        status="cancelled",
+        created_at=datetime(2026, 7, 18, 12, 0),
+        job_ids=[str(first.id), str(second.id)],
+    )
+    source.source_type = "jev_skill_backfill"
+    source.pending_items = 0
+    source.cancelled_items = 1
+    source.items[0].status = "completed"
+    source.items[1].status = "cancelled"
+    db.flush()
+
+    continuation = EnrichmentRunService(db).create_resume_run_from_cancelled_backfill(
+        source.id
+    )
+
+    assert continuation.id != source.id
+    assert continuation.source_type == "jev_skill_backfill"
+    assert continuation.job_ids == [str(second.id)]
+    assert continuation.run_snapshot["resumed_from_run_id"] == source.id
+    assert source.items[0].status == "completed"
+    assert source.items[1].status == "cancelled"
 
 
 def test_public_routes_expose_filtered_controls_and_remove_single_job_endpoint():

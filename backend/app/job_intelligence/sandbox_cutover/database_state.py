@@ -25,6 +25,19 @@ RUNTIME_TABLE_NAMES = (
     "enrichment_runs",
     "event_outbox",
     "job_embeddings",
+    "jev_budget_reservations",
+    "jev_crawl_quality_evaluations",
+    "jev_crawl_quality_observations",
+    "jev_duplicate_associations",
+    "jev_incident_triage_clusters",
+    "jev_incident_triage_evaluations",
+    "jev_online_skill_classifications",
+    "jev_run_attempts",
+    "jev_run_items",
+    "jev_runs",
+    "jev_runtime_settings",
+    "jev_search_rerank_evaluations",
+    "jev_skill_maintenance_batches",
     "offertoday_keyword_csv_reviews",
     "schedule_executions",
     "scheduler_runtime_heartbeats",
@@ -155,9 +168,7 @@ def _employment_type_registry_issues(
     )
     if actual == expected:
         return []
-    return [
-        "Employment Type registry differs from the canonical seven-row seed"
-    ]
+    return ["Employment Type registry differs from the canonical seven-row seed"]
 
 
 def _target_schema_issues(

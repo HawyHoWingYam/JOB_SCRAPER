@@ -1,0 +1,29 @@
+{
+  "id": "jobsdb-detail-headless",
+  "name": "jobsdb-detail-headless",
+  "title": "Honor headless mode in JobsDB detail crawling",
+  "description": "Make JobsDB detail execution honor the reviewed crawl_mode instead of forcing a visible persistent browser; preserve manual-action behavior where explicitly supported.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-07-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "07-23-jobsdb-detail-recovery",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 21,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/21"
+  }
+}

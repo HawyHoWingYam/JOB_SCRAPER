@@ -54,12 +54,14 @@ from app.services.offertoday_listing_staging_service import (  # noqa: E402
     OfferTodayReconciledListingStagingSink,
     build_offertoday_listing_staging_payload,
 )
+from app.services.offertoday_keyword_catalog import OfferTodayKeywordCatalog  # noqa: E402
 from app.services.offertoday_detail_pipeline import (  # noqa: E402
     OfferTodayDetailPipeline,
     OfferTodayDetailTarget,
 )
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime  # noqa: E402
 from app.crawl_control.contracts import (  # noqa: E402
+    OfferTodayAdaptiveQueryTargetParametersV1,
     OfferTodayKeywordQueryTargetParametersV1,
     OfferTodayQueryTargetParametersV1,
 )
@@ -790,6 +792,7 @@ def _build_request_listing_conditions(
                 (
                     OfferTodayQueryTargetParametersV1,
                     OfferTodayKeywordQueryTargetParametersV1,
+                    OfferTodayAdaptiveQueryTargetParametersV1,
                 ),
             ):
                 raise RuntimeError("OfferToday Dispatch Plan contains another adapter")
@@ -865,12 +868,38 @@ def _production_listing_observation_payload(observation) -> dict[str, Any]:
     if response_url:
         payload["response_url"] = response_url
     for field_name in (
+        "distinct_job_id_count",
+        "new_job_id_count",
+        "duplicate_rate",
+        "consecutive_no_growth_pages",
+        "terminal_empty_count",
+        "stall_recovery_count",
+        "browser_loss_recovery_count",
+        "transition_reason",
+    ):
+        payload[field_name] = getattr(observation, field_name)
+    for field_name in (
         "supplemental_identity_issues",
         "supplemental_identity_conflicts",
     ):
         values = getattr(observation, field_name, ())
         if values:
             payload[field_name] = listing_observation_to_payload(values)
+    return payload
+
+
+def _production_listing_condition_outcome_payload(outcome) -> dict[str, Any]:
+    payload = listing_observation_to_payload(outcome)
+    for field_name in (
+        "observed_job_id_count",
+        "distinct_job_id_count",
+        "newly_contributed_job_id_count",
+        "duplicate_rate",
+        "stall_recovery_count",
+        "browser_loss_recovery_count",
+        "terminal_empty_count",
+    ):
+        payload[field_name] = getattr(outcome, field_name)
     return payload
 
 
@@ -1009,7 +1038,7 @@ class CrawlJobListingObservationSink:
             crawl_job_id=self.crawl_job_id,
             emitted_by="offertoday-crawl",
             event_type=f"crawl.listing_condition_{suffix}",
-            payload=listing_observation_to_payload(outcome),
+            payload=_production_listing_condition_outcome_payload(outcome),
         )
 
     def pop_success_latency_ms(self, *, condition_id: str, page: int) -> int:
@@ -1181,6 +1210,7 @@ def _capped_classification_ids(result, runtime_plan=None) -> tuple[str, ...]:
             (
                 OfferTodayQueryTargetParametersV1,
                 OfferTodayKeywordQueryTargetParametersV1,
+                OfferTodayAdaptiveQueryTargetParametersV1,
             ),
         ):
             continue
@@ -1245,6 +1275,53 @@ def _listing_metrics(result, staging_sink, runtime_plan=None) -> dict[str, Any]:
     }
 
 
+def _record_completed_keyword_evidence(
+    *,
+    crawl_runtime: CrawlJobRuntime,
+    runtime_plan: ListingRuntimePlan | None,
+    result,
+) -> None:
+    if runtime_plan is None:
+        return
+    session_factory = getattr(crawl_runtime, "session_factory", None)
+    if not callable(session_factory):
+        return
+    db = session_factory()
+    try:
+        catalog = OfferTodayKeywordCatalog(db)
+        for target, outcome in zip(
+            runtime_plan.targets,
+            result.condition_outcomes,
+            strict=False,
+        ):
+            parameters = target.query_target.parameters
+            if (
+                not isinstance(parameters, OfferTodayAdaptiveQueryTargetParametersV1)
+                or parameters.target_kind != "keyword"
+                or not outcome.is_complete
+                or parameters.normalized_keyword is None
+            ):
+                continue
+            catalog.record_completed_execution_evidence(
+                classification_id=parameters.top_level_classification_id,
+                normalized_keyword=parameters.normalized_keyword,
+                newly_contributed_job_ids=outcome.newly_contributed_job_id_count,
+                duplicate_rate=outcome.duplicate_rate,
+            )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            build_scrape_log_event(
+                "SCRAPE_KEYWORD_EVIDENCE_FAIL",
+                source="offertoday",
+                error_type=type(exc).__name__,
+            )
+        )
+    finally:
+        db.close()
+
+
 async def _run_listing_phase(
     args,
     browser_runtime,
@@ -1287,6 +1364,10 @@ async def _run_listing_phase(
     )
     if hasattr(runner, "_sleep"):
         runner._sleep = cancellation_token.sleep
+    runtime_uses_search_cursor = bool(runtime_plan) and all(
+        target.query_target.parameters.endpoint == "search"
+        for target in runtime_plan.targets
+    )
 
     try:
         cancellation_token.raise_if_cancelled()
@@ -1303,8 +1384,10 @@ async def _run_listing_phase(
                     runtime_plan.run_page_cap if runtime_plan is not None else None
                 ),
                 unique_job_cap=None,
-                require_empty_confirmation=runtime_plan is None,
+                require_empty_confirmation=True,
                 page_cap_behavior="retain-and-continue",
+                stall_no_growth_page_count=3,
+                max_stall_restarts_per_condition=1,
             ),
             retry_policy=ListingRetryPolicy(
                 max_attempts_per_page=3,
@@ -1315,14 +1398,14 @@ async def _run_listing_phase(
             staging_sink=staging_sink,
             session_mode=crawl_mode,
             request_policy=(
-                None
-                if runtime_plan is not None
-                else production_offertoday_listing_request_policy()
+                production_offertoday_listing_request_policy()
+                if runtime_plan is None or runtime_uses_search_cursor
+                else None
             ),
             terminal_policy=(
-                "cursor-terminal-empty-confirmation-v1"
-                if runtime_plan is not None
-                else "result-transition-confirmation-v1"
+                "result-transition-confirmation-v1"
+                if runtime_plan is None or runtime_uses_search_cursor
+                else "cursor-terminal-empty-confirmation-v1"
             ),
         )
     except ManualActionRequiredError as exc:
@@ -1489,6 +1572,11 @@ async def _run_listing_phase(
         )
         return execution
 
+    _record_completed_keyword_evidence(
+        crawl_runtime=crawl_runtime,
+        runtime_plan=runtime_plan,
+        result=result,
+    )
     listing_metrics = _listing_metrics(result, staging_sink, runtime_plan)
     crawl_runtime.merge_metrics(
         crawl_job_id=crawl_job_id,
@@ -2581,6 +2669,7 @@ async def main() -> None:
                 (
                     OfferTodayQueryTargetParametersV1,
                     OfferTodayKeywordQueryTargetParametersV1,
+                    OfferTodayAdaptiveQueryTargetParametersV1,
                 ),
             )
         ]

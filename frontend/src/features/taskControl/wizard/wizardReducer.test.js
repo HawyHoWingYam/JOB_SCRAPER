@@ -25,7 +25,7 @@ describe('wizard reducer invariants', () => {
     expect(changed.draft.execution.backlog_kind).toBe('crawl_scope');
   });
 
-  it('uses OfferToday listing defaults and requires a full 36-target budget', () => {
+  it('uses bounded OfferToday defaults and leaves adaptive workload to review', () => {
     const base = createWizardState({
       ...createWizardDraft(route),
       source_site: 'offertoday',
@@ -33,7 +33,7 @@ describe('wizard reducer invariants', () => {
     const changed = wizardReducer(base, { type: 'intentChanged', intent: 'listing' });
     expect(changed.draft.execution).toMatchObject({
       page_depth: 100,
-      run_page_cap: 3600,
+      run_page_cap: 20000,
     });
     expect(isStepComplete(changed.draft, 'execution')).toBe(true);
     expect(isStepComplete({
@@ -43,7 +43,7 @@ describe('wizard reducer invariants', () => {
     expect(isStepComplete({
       ...changed.draft,
       execution: { ...changed.draft.execution, page_depth: 101 },
-    }, 'execution')).toBe(false);
+    }, 'execution')).toBe(true);
   });
 
   it('preserves same-source classifications during hydration and resets for a source change', () => {

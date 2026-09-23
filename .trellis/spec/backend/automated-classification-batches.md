@@ -1,108 +1,96 @@
-# Automated Classification Batch Contracts
+# Skill Candidate Review Contracts
 
-## Scenario: Classify Company Industry and repeated Skill Candidates
+## Scenario: Review repeated Skill evidence
 
 ### 1. Scope / Trigger
 
-Use this contract for the shared preview/run/stop/retry lifecycle, Company
-Industry mapping batches, repeated-Skill Candidate promotion, Classification UI,
-or the Skill threshold in Settings. Supported domains are exactly
-`company_industry` and `skill`.
+Use this contract when changing the Skill Candidate review queue, its Settings,
+operator decisions, recommendations, or evidence shown to the operator.
+Company Industry and automated classification batch controls are removed.
 
 ### 2. Signatures
 
-```python
-ClassificationBatchRuntime(db, adapters).preview(domain, filters, limit)
-ClassificationBatchRuntime(db, adapters).start(domain, filters, limit)
-ClassificationBatchRuntime(db, adapters).execute(run_id)
-ClassificationBatchRuntime(db, adapters).request_stop(run_id)
-ClassificationBatchRuntime(db, adapters).retry_failed(run_id)
-```
-
 ```text
-POST /api/job-intelligence/classification-batches/{domain}/preview
-POST /api/job-intelligence/classification-batches/{domain}/runs
-GET  /api/job-intelligence/classification-batches/runs?domain=...
-GET  /api/job-intelligence/classification-batches/runs/{run_id}
-POST /api/job-intelligence/classification-batches/runs/{run_id}/stop
-POST /api/job-intelligence/classification-batches/runs/{run_id}/retry-failed
-#classification?target=<skill|company_industry>
+GET  /api/job-intelligence/skill-candidates?ready_only=true&limit=1..500&offset=0
+POST /api/job-intelligence/skill-candidates/{candidate_id}/decision
+GET  /api/job-intelligence/skills/tree
+PUT  /api/settings/ai
 ```
 
-Persistence uses `classification_batch_runs` and
-`classification_batch_run_items`. `app_runtime_settings` owns nullable
-`skill_auto_create_distinct_job_threshold`; effective default is `5`.
+`SkillCandidateDecisionRequest` accepts `match_existing`, `create`, `generic`,
+or `reject`. `create` requires an existing active Category/Technology pair;
+`generic` and `reject` require structured reasons.
 
 ### 3. Contracts
 
-- The runtime owns `pending -> running -> completed |
-  completed_with_failures | failed | cancelled`, counts, Stop, and retry.
-- At most one active run exists per retained domain; domains run independently.
-- Preview and Start use the same bounded selector; limit is `1..5000`.
-- Company Industry applies Source filters, selects a bounded Company population,
-  then reports `mapped_item_count`, `unmapped_item_count`, and
-  `excluded_item_count`. Start requires at least one mapped item.
-- Skill selects unresolved Candidates whose `distinct_job_count` reaches the
-  effective threshold. Existing Skill names/codes/aliases are reused.
-- Promotion creates no `Other`/`Unknown` fallback. Skill node, aliases,
-  Candidate resolution, Mentions, and affected projections share one item
-  transaction.
-- Failed-only Retry rechecks current eligibility and excludes Candidates that
-  already reached a terminal disposition.
-- The frontend has two tabs, defaults invalid/bare routes to `skill`, and keeps
-  Company Industry and Skill route targets durable.
-- Preview authority is the immutable accepted `{result, inputs}` pair. Any
-  domain, Source-filter, or limit change clears it and aborts the request.
+- Candidate selection uses persisted `skill_auto_create_distinct_job_threshold`;
+  effective default is `10`.
+- Candidate responses include `total_count`, `offset`, and `limit`; the UI uses
+  bounded pages rather than requiring the operator to scroll an unbounded
+  review list.
+- Response includes `recommendations` (bounded by
+  `skill_candidate_recommendation_limit`, default `5`) and `evidence` (bounded
+  by `skill_candidate_evidence_limit`, default `5`).
+- Recommendations are deterministic hints only. They never mutate taxonomy
+  state until an operator submits a decision.
+- Evidence is representative active Candidate Mention Job data and is not a
+  governed Skill assignment or searchable Skill filter.
+- New Skills can only be leaves under an existing Category → Technology.
+  Candidate raw variants become aliases only when explicitly selected by the
+  operator.
+- Existing Skill and Technology choices are searchable, bounded option lists;
+  they must not render a very long native select as the primary interaction.
+- Settings bounds are `1..20` for recommendation and evidence counts.
+- Operator decisions resolve Mentions, Candidate state, and affected Job Skill
+  projections atomically and are idempotent for an already-resolved Candidate.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
-| Unknown domain or limit outside `1..5000` | `400`/`422`; no run |
-| Active run exists for domain | `409 active_classification_batch_exists` |
-| Invalid/bare frontend target | Select `skill`; perform no mutation |
-| Company selected population has zero mapped items | Show counts; disable/reject Start |
-| Company mapping is missing | Isolated item failure; never infer |
-| Company label is explicit non-mapping | Count excluded; no item/retry |
-| Candidate is below threshold at execution | Item failure; no taxonomy mutation |
-| Candidate placement is uncertain | Retryable failure with visible reason |
-| Inputs change after Preview | Abort, clear Preview, disable Start |
-| Superseded response arrives | Ignore success and failure |
+| Candidate below threshold | Exclude from `ready_only=true` |
+| Unknown existing Skill code | `400`; no mutation |
+| Category/Technology missing, inactive, or unrelated | `400`; no mutation |
+| New Skill stable code conflicts | `400`; no mutation |
+| generic/reject reason missing or invalid | `400`; no mutation |
+| Settings count outside `1..20` | `422`; preserve previous values |
+| Taxonomy unavailable | UI shows blocked readiness state; no confirmation |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** repeated `DuckDB` evidence is placed under an existing active
-  Category/Technology pair and affected Jobs gain a governed Skill.
-- **Good:** a Company batch processes mapped rows while preserving unsupported
-  rows as isolated failures.
-- **Base:** `#classification` loads Skill history without Preview or Start.
-- **Bad:** accept a removed Job-classification domain or fallback route.
-- **Bad:** hide Candidate failure reasons or create fallback Skill nodes.
+- **Good:** operator clicks a high-confidence recommendation, confirms, and the
+  Candidate disappears while affected Jobs gain the governed Skill.
+- **Good:** operator creates a Skill under an existing Technology and selects
+  only the variants that are true aliases.
+- **Base:** no recommendation is strong enough; the operator searches the full
+  Skill list or chooses generic/reject with a reason.
+- **Bad:** auto-submit a recommendation, create a parent node, or expose
+  Candidate evidence as a canonical Skill filter.
 
 ### 6. Tests Required
 
-- Runtime tests cover both domains, active-run conflict, Stop, partial failure,
-  retry, transaction isolation, and settings threshold.
-- Company tests cover mapping counts, Source filters, non-mapping exclusions,
-  drift, and zero-mapped rejection.
-- Skill tests cover aggregation, aliases, terminal dispositions, uncertain
-  placement, atomic promotion, and reprojected Jobs.
-- Frontend tests cover two tabs, Skill default, Company route durability,
-  immutable Preview authority, request abort, visible failure evidence, and
-  no Source filters for Skill.
+- Backend: threshold filtering, bounded recommendations/evidence, invalid
+  codes, parent validation, structured reasons, idempotency, and atomic
+  reprojection.
+- Frontend: compact paged list/panel, scrollable evidence/actions, searchable
+  Skill/Technology pickers, keyboard navigation, auto-next, skip,
+  alias checkboxes, structured reason validation, taxonomy-unavailable state,
+  and Settings field rendering.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```js
-startClassificationBatch(domain, buildPayloadFromCurrentControls())
+onCandidateLoaded(candidate).then(() => decideSkillCandidate(candidate.id, {
+  action: "match_existing",
+  skill_code: candidate.recommendations[0].code,
+}));
 ```
 
 #### Correct
 
 ```js
-startClassificationBatch(preview.inputs.domain, preview.inputs.payload)
+operatorClickRecommendation(candidate.recommendations[0]);
+submitDecisionOnlyAfterExplicitConfirmation();
 ```
-
-Only the visible accepted Preview snapshot authorizes Start.

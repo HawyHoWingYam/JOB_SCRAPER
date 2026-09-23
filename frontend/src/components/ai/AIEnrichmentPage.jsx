@@ -359,6 +359,7 @@ export default function AIEnrichmentPage() {
   const [loadError, setLoadError] = useState(null);
   const [refreshError, setRefreshError] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [actionErrorNeedsSettings, setActionErrorNeedsSettings] = useState(false);
   const [actionMessage, setActionMessage] = useState(null);
   const [isPageVisible, setIsPageVisible] = useState(() => {
     if (typeof document === 'undefined') {
@@ -721,6 +722,7 @@ export default function AIEnrichmentPage() {
     try {
       setSubmitting(true);
       setActionError(null);
+      setActionErrorNeedsSettings(false);
       setActionMessage(null);
       setPendingLimit(String(normalizedLimit));
 
@@ -746,6 +748,11 @@ export default function AIEnrichmentPage() {
         if (response.status === 409 && payload?.detail?.code === 'active_run_exists') {
           throw new Error(`Another run is active: ${payload.detail.run_id}`);
         }
+        if (response.status === 409 && typeof payload?.detail === 'string') {
+          setActionError(payload.detail);
+          setActionErrorNeedsSettings(true);
+          return;
+        }
         throw new Error(`Run request failed with ${response.status}`);
       }
 
@@ -764,6 +771,7 @@ export default function AIEnrichmentPage() {
       fetchAIConsole({ queueAfterInFlight: true });
     } catch (err) {
       setActionError(err.message);
+      setActionErrorNeedsSettings(false);
     } finally {
       setSubmitting(false);
     }
@@ -777,6 +785,7 @@ export default function AIEnrichmentPage() {
     try {
       setSubmitting(true);
       setActionError(null);
+      setActionErrorNeedsSettings(false);
       setActionMessage(null);
 
       const response = await fetch(apiPath('/ai/runs/' + run.id + '/retry-failed'), {
@@ -796,6 +805,29 @@ export default function AIEnrichmentPage() {
     }
   }
 
+  async function resumeCancelledBackfill(run) {
+    if (!run) return;
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      setActionErrorNeedsSettings(false);
+      setActionMessage(null);
+      const response = await fetch(apiPath(`/ai/runs/${run.id}/resume-cancelled-backfill`), {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(`Resume request failed with ${response.status}`);
+      }
+      const continuation = await response.json();
+      setActionMessage(`Resumed cancelled backfill ${run.id} as ${continuation.id}.`);
+      fetchAIConsole({ queueAfterInFlight: true });
+    } catch (err) {
+      setActionError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function stopRun(run) {
     if (!window.confirm('Stop this run? Jobs already in flight may still finish and be saved.')) {
       return;
@@ -803,6 +835,7 @@ export default function AIEnrichmentPage() {
     try {
       setSubmitting(true);
       setActionError(null);
+      setActionErrorNeedsSettings(false);
       const response = await fetch(apiPath(`/ai/runs/${run.id}/stop`), { method: 'POST' });
       if (!response.ok) {
         throw new Error(`Stop request failed with ${response.status}`);
@@ -1019,7 +1052,18 @@ export default function AIEnrichmentPage() {
               </div>
 
               {actionMessage && <div className="ai-status-banner ai-status-success">{actionMessage}</div>}
-              {actionError && <div className="ai-status-banner ai-status-error">{actionError}</div>}
+              {actionError && (
+                <div className="ai-status-banner ai-status-error">
+                  <span>{actionError}</span>
+                  {actionErrorNeedsSettings && (
+                    <>
+                      {' Configure and successfully test the Jobs profile before retrying.'}
+                      {' '}
+                      <a href="#settings">Open AI Settings</a>
+                    </>
+                  )}
+                </div>
+              )}
             </section>
 
             <section className="chart-wrapper glass-panel ai-console-panel ai-monitor-panel">
@@ -1240,6 +1284,13 @@ export default function AIEnrichmentPage() {
                         {isRetryableTerminalRun(run) && (
                           <button type="button" className="ai-secondary-button" disabled={submitting || Boolean(activeRun)} onClick={() => retryFailedItems(run)}>
                             <RefreshCcw size={14} /> Retry failed jobs ({Number(run.failed_items || 0)})
+                          </button>
+                        )}
+                        {normalizeRunStatus(run.status) === 'cancelled'
+                          && run.source_type === 'jev_skill_backfill'
+                          && Number(run.cancelled_items || 0) > 0 && (
+                          <button type="button" className="ai-secondary-button" disabled={submitting || Boolean(activeRun)} onClick={() => resumeCancelledBackfill(run)}>
+                            <RefreshCcw size={14} /> Resume cancelled jobs ({Number(run.cancelled_items || 0)})
                           </button>
                         )}
                       </div>

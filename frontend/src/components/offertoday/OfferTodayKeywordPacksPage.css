@@ -1,0 +1,12 @@
+.keyword-pack-page { display: grid; gap: 1rem; }
+.keyword-pack-page h1 { margin-bottom: .35rem; }
+.keyword-pack-toolbar, .keyword-pack-preview, .keyword-pack-table-wrap { padding: 1rem; }
+.keyword-pack-toolbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+.keyword-pack-toolbar input[type="file"] { display: none; }
+.keyword-pack-toolbar input[type="text"], .keyword-pack-toolbar input:not([type]) { min-width: 18rem; padding: .65rem; }
+.keyword-pack-error { color: #ef4444; }
+.keyword-pack-table-wrap { overflow-x: auto; }
+.keyword-pack-table-wrap table { width: 100%; border-collapse: collapse; }
+.keyword-pack-table-wrap th, .keyword-pack-table-wrap td { padding: .7rem; text-align: left; border-bottom: 1px solid rgba(148, 163, 184, .2); }
+.keyword-pack-table-wrap small { display: block; opacity: .65; }
+.keyword-pack-preview pre { white-space: pre-wrap; }

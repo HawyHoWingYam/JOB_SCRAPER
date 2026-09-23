@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import re
+from copy import deepcopy
 from typing import Any
 
 from app.job_intelligence.foundation import Provenance
@@ -670,6 +671,13 @@ def parse_detail_page(
         "description_html": description_html,
         "description_text": description_text,
         "location": location,
+        "source_job_locations": deepcopy(
+            job_content.get("jobLocations")
+            if isinstance(job_content.get("jobLocations"), list)
+            else job_content.get("locations")
+            if isinstance(job_content.get("locations"), list)
+            else []
+        ),
         "source_classification_id": source_classification_id,
         "source_classification_name": source_classification_name,
         "source_classification_slug": source_classification_slug,

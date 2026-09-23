@@ -1,0 +1,29 @@
+{
+  "id": "enforce-searchable-experience-years",
+  "name": "enforce-searchable-experience-years",
+  "title": "Enforce searchable experience-year enrichment",
+  "description": "Diagnose and fix AI-enriched experience values such as 'Lead level' that cannot support year-based Job search; quantify affected Jobs, enforce a machine-searchable experience-year contract, and repair historical data.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-26",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "GitHub issue: https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/61",
+  "meta": {
+    "github_issue": 61,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/61"
+  }
+}

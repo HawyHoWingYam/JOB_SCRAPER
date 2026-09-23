@@ -73,7 +73,6 @@
   ],
   "original_job_url": "https://hk.jobsdb.com/job/fixture-job-1",
   "company_name": "Fixture Company",
-  "company_industry": null,
   "company_ai_description": null,
   "ai_enriched_at": null,
   "experience_min_years": null,
@@ -84,7 +83,6 @@
   "expiry_date": null,
   "is_expired": false,
   "skills": [],
-  "provisional_skills": [],
   "source_employment_labels": [
     {
       "id": "60000000-0000-0000-0000-000000000001",
@@ -139,16 +137,11 @@
       }
     }
   ],
-  "company_industries": null,
   "skill_state": null,
   "job_intelligence_availability": {
     "source_attributes": {
       "available": true,
       "unavailable_code": null
-    },
-    "company_industries": {
-      "available": false,
-      "unavailable_code": "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE"
     },
     "skills": {
       "available": false,

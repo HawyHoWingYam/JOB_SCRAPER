@@ -12,7 +12,6 @@ from app.services.classification_batch_runtime import (
     ClassificationDomainAdapter,
 )
 from app.services.classification_domain_adapters import (
-    CompanyIndustryClassificationAdapter,
     SkillClassificationAdapter,
 )
 
@@ -31,10 +30,7 @@ class ClassificationBatchRequest(BaseModel):
 
 
 def _runtime(db: Session) -> ClassificationBatchRuntime:
-    adapters: tuple[ClassificationDomainAdapter, ...] = (
-        CompanyIndustryClassificationAdapter(),
-        SkillClassificationAdapter(),
-    )
+    adapters: tuple[ClassificationDomainAdapter, ...] = (SkillClassificationAdapter(),)
     return ClassificationBatchRuntime(
         db,
         {adapter.domain: adapter for adapter in adapters},

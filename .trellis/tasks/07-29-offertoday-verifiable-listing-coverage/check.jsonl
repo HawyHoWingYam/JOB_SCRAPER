@@ -1,0 +1,10 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/backend/offertoday-production-crawl.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/backend/offertoday-research-artifacts.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/backend/ordinary-source-classifications.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/backend/crawl-control-automation-review.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/frontend/task-control-wizard-ui.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify adaptive OfferToday coverage against this contract"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Verify adaptive OfferToday coverage against this contract"}

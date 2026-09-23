@@ -9,9 +9,7 @@ from sqlalchemy import exists, false, select
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.current_taxonomies.contracts import TaxonomyKind
-from app.models.company import Company
 from app.models.current_taxonomy import (
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
     CurrentTaxonomyNodeRecord,
@@ -47,24 +45,6 @@ class CurrentTaxonomyNodeView:
 class CurrentTaxonomyTreeView:
     taxonomy: TaxonomyKind
     nodes: tuple[CurrentTaxonomyNodeView, ...]
-
-
-@dataclass(frozen=True)
-class CurrentCompanyIndustryAssignmentView:
-    id: int
-    company_id: UUID
-    taxonomy_code: str
-    method: str
-    breadcrumb: dict[str, object]
-    is_primary: bool
-    primary_basis: str | None
-    provenance: dict[str, object]
-
-
-@dataclass(frozen=True)
-class CurrentCompanyIndustryStateView:
-    company_id: UUID
-    assignments: tuple[CurrentCompanyIndustryAssignmentView, ...]
 
 
 @dataclass(frozen=True)
@@ -117,41 +97,6 @@ class CurrentTaxonomyReader:
                 for row in rows
             ),
         )
-
-    def get_company_industry_state(
-        self,
-        company_id: UUID,
-    ) -> CurrentCompanyIndustryStateView:
-        return self.get_company_industry_states((company_id,))[company_id]
-
-    def get_company_industry_states(
-        self,
-        company_ids: tuple[UUID, ...],
-    ) -> dict[UUID, CurrentCompanyIndustryStateView]:
-        ordered_ids = tuple(dict.fromkeys(company_ids))
-        grouped: dict[UUID, list[CurrentCompanyIndustryAssignment]] = defaultdict(list)
-        rows = self.db.scalars(
-            select(CurrentCompanyIndustryAssignment)
-            .where(CurrentCompanyIndustryAssignment.company_id.in_(ordered_ids))
-            .order_by(
-                CurrentCompanyIndustryAssignment.company_id,
-                CurrentCompanyIndustryAssignment.is_primary.desc(),
-                CurrentCompanyIndustryAssignment.captured_at,
-                CurrentCompanyIndustryAssignment.id,
-            )
-        ) if ordered_ids else ()
-        for row in rows:
-            grouped[row.company_id].append(row)
-        return {
-            company_id: CurrentCompanyIndustryStateView(
-                company_id=company_id,
-                assignments=tuple(
-                    self._company_industry_assignment(row)
-                    for row in grouped[company_id]
-                ),
-            )
-            for company_id in ordered_ids
-        }
 
     def get_job_skills(self, job_id: UUID) -> CurrentJobSkillStateView:
         return self.get_job_skill_states((job_id,))[job_id]
@@ -268,15 +213,6 @@ class CurrentTaxonomyReader:
                 cursor = by_code.get(cursor.parent_code) if cursor.parent_code else None
         return tuple(resolved)
 
-    def company_industry_filter(self, codes: tuple[str, ...]) -> object:
-        assignable_codes = self.resolve_assignable_codes("company_industry", codes)
-        if not assignable_codes:
-            return false()
-        return exists().where(
-            CurrentCompanyIndustryAssignment.company_id == Company.id,
-            CurrentCompanyIndustryAssignment.taxonomy_code.in_(assignable_codes),
-        )
-
     def job_skill_filter(self, codes: tuple[str, ...]) -> object:
         assignable_codes = self.resolve_assignable_codes("skill", codes)
         if not assignable_codes:
@@ -306,21 +242,6 @@ class CurrentTaxonomyReader:
         )
 
     @staticmethod
-    def _company_industry_assignment(
-        row: CurrentCompanyIndustryAssignment,
-    ) -> CurrentCompanyIndustryAssignmentView:
-        return CurrentCompanyIndustryAssignmentView(
-            id=row.id,
-            company_id=row.company_id,
-            taxonomy_code=row.taxonomy_code,
-            method=row.method,
-            breadcrumb=dict(row.breadcrumb),
-            is_primary=row.is_primary,
-            primary_basis=row.primary_basis,
-            provenance=dict(row.provenance),
-        )
-
-    @staticmethod
     def _display_label(labels: dict[str, Any]) -> str:
         for key in ("en", "en_HK", "zh_HK", "zh"):
             value = str(labels.get(key) or "").strip()
@@ -332,8 +253,6 @@ class CurrentTaxonomyReader:
         )
 
 __all__ = [
-    "CurrentCompanyIndustryAssignmentView",
-    "CurrentCompanyIndustryStateView",
     "CurrentJobSkillStateView",
     "CurrentJobSkillView",
     "CurrentSkillCandidateMentionView",

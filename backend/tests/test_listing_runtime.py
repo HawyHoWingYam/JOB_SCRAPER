@@ -12,6 +12,7 @@ import pytest
 import scrapy
 from scrapy.http import HtmlResponse, TextResponse
 
+from app.crawl_modes import resolve_crawl_mode
 from app.crawl_control.contracts import (
     QueryTargetSnapshotV1,
     SelectedClassificationSnapshotV1,
@@ -30,6 +31,7 @@ from app.scraper.ctgoodjobs.category_registry import (
     get_static_ctgoodjobs_categories,
 )
 from app.services.crawl_job_runtime import ListingBatchPersistResult
+from app.services.source_sites import build_source_sites
 from app.source_classifications.adapters.ctgoodjobs import CTgoodjobsSourceClassificationAdapter
 from app.source_classifications.adapters.jobsdb import JobsDBSourceClassificationAdapter
 from app.source_classifications.adapters.offertoday import OfferTodaySourceClassificationAdapter
@@ -41,6 +43,10 @@ from app.sources.offertoday.listing_runner import (
     OfferTodayListingCondition,
     OfferTodayListingRunner,
     listing_observation_to_payload,
+)
+from app.sources.offertoday.listing_contract import (
+    OfferTodayListingTransportResult,
+    production_offertoday_listing_request_policy,
 )
 from app.sources.offertoday.response_policy import OfferTodayTransportError
 from app.source_classifications.domain import SourceQueryTarget
@@ -125,6 +131,67 @@ def _runtime_plan(
         page_depth=page_depth,
         run_page_cap=run_page_cap or estimated,
         targets=targets,
+    )
+
+
+def _offertoday_adaptive_runtime_plan(
+    targets: tuple[tuple[str, str, str], ...],
+    *,
+    page_depth: int = 2,
+) -> ListingRuntimePlan:
+    adapter = OfferTodaySourceClassificationAdapter()
+    nodes = {
+        node.classification_id: node
+        for node in adapter.discover().nodes
+        if node.classification_id is not None
+    }
+    owner_id = "offertoday:118000"
+    runtime_targets: list[ListingRuntimeTarget] = []
+    for classification_id, target_kind, keyword in targets:
+        node = nodes[classification_id]
+        normalized_keyword = keyword.casefold() if keyword else None
+        source_target = SourceQueryTarget(
+            adapter="offertoday.category",
+            classification_id=classification_id,
+            payload={
+                "category_code": int(classification_id.split(":", 1)[1]),
+                "search_family": (
+                    "classification_keyword_pack"
+                    if target_kind == "keyword"
+                    else "native_classification"
+                ),
+                "endpoint": "search",
+                "keyword": keyword,
+                "rcd_type": None,
+                "target_kind": target_kind,
+                "top_level_classification_id": owner_id,
+                "normalized_keyword": normalized_keyword,
+                "taxonomy_snapshot_fingerprint": "c" * 64,
+                "keyword_catalog_fingerprint": "d" * 64,
+                "keyword_catalog_updated_at": "2026-07-29T12:00:00+00:00",
+            },
+        )
+        runtime_targets.append(
+            ListingRuntimeTarget(
+                selected_classification=SelectedClassificationSnapshotV1(
+                    node_key=node.node_key,
+                    classification_id=classification_id,
+                    native_label=node.native_label,
+                    native_path=node.native_path,
+                    query_semantics_hash=node.query_semantics_hash or "b" * 64,
+                ),
+                query_target=QueryTargetSnapshotV1.from_source_target(source_target),
+            )
+        )
+    return ListingRuntimePlan(
+        crawl_job_id=uuid4(),
+        dispatch_plan_id=uuid4(),
+        dispatch_plan_fingerprint="a" * 64,
+        source_site="offertoday",
+        crawl_mode="headless",
+        page_depth=page_depth,
+        run_page_cap=len(runtime_targets) * page_depth,
+        targets=tuple(runtime_targets),
     )
 
 
@@ -286,6 +353,69 @@ class _Runtime:
         return None
 
 
+def test_jobsdb_defaults_to_headless_across_runtime_capabilities() -> None:
+    assert resolve_crawl_mode("jobsdb") == "headless"
+    assert build_source_sites()["jobsdb"]["default_crawl_mode"] == "headless"
+
+
+@pytest.mark.parametrize(
+    ("crawl_mode", "is_resume", "resume_strategy"),
+    [
+        ("headless", False, "fresh_profile"),
+        ("headless", True, "fresh_profile"),
+        ("headless", True, "reuse_open_browser"),
+        ("headed", False, "fresh_profile"),
+        ("headed", True, "fresh_profile"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_jobsdb_detail_always_uses_mode_aware_browser_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    crawl_mode: str,
+    is_resume: bool,
+    resume_strategy: str,
+) -> None:
+    scraper_calls: list[dict[str, object]] = []
+
+    class FakeBrowserDetailScraper:
+        def __init__(self, **kwargs) -> None:
+            scraper_calls.append(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    monkeypatch.setattr(
+        jobsdb_crawl,
+        "JobsDBBrowserDetailScraper",
+        FakeBrowserDetailScraper,
+    )
+    args = SimpleNamespace(
+        crawl_job_id="jobsdb-detail-route",
+        crawl_mode=crawl_mode,
+        is_resume=is_resume,
+        resume_strategy=resume_strategy,
+        source_listing_crawl_job_id="listing-run",
+        category_ids=[],
+        detail_limit=10,
+        detail_statuses=["pending", "manual_action_required"],
+        skip_existing=False,
+        manual_action_browser_channel="",
+        manual_action_browser_profile_path="",
+    )
+
+    async with jobsdb_crawl._detail_scraper_context(args):
+        pass
+
+    assert len(scraper_calls) == 1
+    request_payload = scraper_calls[0]["request_payload"]
+    assert request_payload["crawl_mode"] == crawl_mode
+    assert request_payload["is_resume"] is is_resume
+    assert request_payload["resume_strategy"] == resume_strategy
+
+
 def test_listing_request_budget_fails_before_exceeding_reviewed_cap() -> None:
     plan = _runtime_plan("jobsdb", ("jobsdb:1200",), run_page_cap=2)
     budget = plan.new_request_budget()
@@ -440,9 +570,13 @@ def test_planned_scrapy_requests_use_frozen_order_and_do_not_chain_detail(
         if node.parent_node_key == root_node.node_key
         and node.classification_id is not None
     )
-    offertoday_plan = _runtime_plan(
-        "offertoday",
-        ("offertoday:118000", child_id),
+    offertoday_plan = _offertoday_adaptive_runtime_plan(
+        (
+            ("offertoday:118000", "native_top_level", ""),
+            (child_id, "native_child", ""),
+            ("offertoday:118000", "keyword", "Java"),
+            ("offertoday:118000", "keyword", "Python"),
+        ),
     )
     monkeypatch.setattr(
         offertoday_spider_module,
@@ -455,18 +589,27 @@ def test_planned_scrapy_requests_use_frozen_order_and_do_not_chain_detail(
         max_pages="999",
     )
     offertoday_requests = [
-        offertoday._build_next_listing_request() for _ in range(4)
+        offertoday._build_next_listing_request() for _ in range(8)
     ]
     payloads = [json.loads(request.body) for request in offertoday_requests]
     assert all(request.url.endswith("/recommend/search/list") for request in offertoday_requests)
-    assert [payload["page"] for payload in payloads] == [1, 2, 1, 2]
-    assert [payload["keyword"] for payload in payloads] == ["A", "A", "B", "B"]
+    assert [payload["page"] for payload in payloads] == [1, 2] * 4
+    assert [payload["keyword"] for payload in payloads] == [
+        "",
+        "",
+        "",
+        "",
+        "Java",
+        "Java",
+        "Python",
+        "Python",
+    ]
     assert all("rcdType" not in payload for payload in payloads)
     assert all(
         request.meta["dont_retry"] is True
         for request in offertoday_requests
     )
-    assert len(offertoday._listing_tasks) == 140
+    assert len(offertoday._listing_tasks) == 0
     offertoday._listing_tasks.clear()
     assert list(offertoday._next_listing_or_detail()) == []
 
@@ -526,6 +669,7 @@ async def test_planned_standalone_targets_ignore_payload_and_stop_empty_target(
         skip_existing=True,
     )
     jobsdb_crawl._apply_listing_runtime_plan(jobsdb_args, jobsdb_plan)
+    assert jobsdb_args.skip_existing is True
     await jobsdb_crawl.run_listing_phase(jobsdb_args, _Runtime())
     assert jobsdb_calls == [(1200, 2), (6281, 2)]
 
@@ -572,6 +716,7 @@ async def test_planned_standalone_targets_ignore_payload_and_stop_empty_target(
         ctgoodjobs_args,
         ctgoodjobs_plan,
     )
+    assert ctgoodjobs_args.skip_existing is True
     await ctgoodjobs_crawl._run_listing_phase(
         ctgoodjobs_args,
         _Runtime(),
@@ -806,6 +951,725 @@ async def test_offertoday_runner_ignores_explicit_banner_cards_before_identity()
 
 
 @pytest.mark.asyncio
+async def test_offertoday_runner_isolates_empty_state_and_recommendation_cohort():
+    class Transport:
+        browser_context_hash = "e" * 64
+
+        def __init__(self):
+            self.calls = 0
+
+        async def fetch_listing_page(self, _payload, *, listing_url):
+            self.calls += 1
+            if self.calls == 1:
+                result_list = [
+                    {
+                        "cardType": 2,
+                        "emptyCardType": 2,
+                        "imageUrl": "https://img.offertodayhk.com/empty.png",
+                        "desc": None,
+                        "buttonText": None,
+                        "jumpUrl": None,
+                    },
+                    {
+                        "cardType": 0,
+                        "jobId": "job-in-scope",
+                        "jobName": "Enterprise Architect",
+                        "jobFunctions": [],
+                    },
+                    {
+                        "cardType": 3,
+                        "separateLineCode": 0,
+                        "separateDesc": "暫無更多結果\n為您推薦以下崗位",
+                        "actionList": [],
+                    },
+                    {
+                        "cardType": 0,
+                        "jobId": "job-recommended-1",
+                        "jobName": "Oil Painter",
+                        "jobFunctions": [],
+                    },
+                ]
+            else:
+                result_list = [
+                    {
+                        "cardType": 0,
+                        "jobId": f"job-recommended-{self.calls}",
+                        "jobName": "Unrelated recommendation",
+                        "jobFunctions": [],
+                    }
+                ]
+            return OfferTodayListingTransportResult(
+                payload={
+                    "code": 0,
+                    "data": {
+                        "resultList": result_list,
+                        "suppleRcdList": [],
+                        "hasMore": True,
+                        "total": 1,
+                        "pageSize": 10,
+                        "sessionId": "separator-session",
+                        "supplePage": self.calls - 1,
+                        "suppleAmount": 0,
+                        "suppleType": 0,
+                    },
+                },
+                response_url=listing_url,
+                http_status=200,
+                browser_context_hash=self.browser_context_hash,
+            )
+
+    class Sink:
+        def __init__(self):
+            self.observations = []
+            self.rows = []
+
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, observation):
+            self.observations.append(observation)
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, *, rows, **_kwargs):
+            self.rows.extend(rows)
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    sink = Sink()
+    transport = Transport()
+    result = await OfferTodayListingRunner(transport).run(
+        conditions=(
+            OfferTodayListingCondition(
+                search_family="classification_keyword_sweep",
+                category_id=118000,
+                keyword="A",
+                endpoint="search",
+                rcd_type=None,
+            ),
+        ),
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=3,
+            run_page_cap=3,
+            page_cap_behavior="retain-and-continue",
+            stall_no_growth_page_count=3,
+        ),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=sink,
+        staging_sink=sink,
+        session_mode="headless",
+        request_policy=production_offertoday_listing_request_policy(),
+        terminal_policy="result-transition-confirmation-v1",
+    )
+
+    assert result.is_complete is True
+    assert result.accepted_job_ids == ("job-in-scope",)
+    assert result.supplemental_job_ids == (
+        "job-recommended-1",
+        "job-recommended-2",
+        "job-recommended-3",
+    )
+    assert result.identity_issues == ()
+    assert result.non_job_cards_observed == 2
+    assert transport.calls == 3
+    assert sink.observations[0].row_count == 4
+    assert sink.observations[0].non_job_cards_observed == 2
+    assert [item.terminal_empty_count for item in sink.observations] == [0, 1, 2]
+    assert len(sink.rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_offertoday_stall_restarts_once_then_marks_only_target_partial():
+    first_keyword = "Java"
+
+    class Transport:
+        def __init__(self) -> None:
+            self.first_calls = 0
+            self.restart_calls = 0
+
+        async def fetch_listing_json(self, payload, *, listing_url=None):
+            if payload["keyword"] == first_keyword:
+                self.first_calls += 1
+                return {
+                    "code": 0,
+                    "data": {
+                        "resultList": [
+                            {
+                                "cardType": 0,
+                                "jobId": "job-1",
+                                "jobName": "Engineer",
+                                "jobFunctions": [],
+                            }
+                        ],
+                        "hasMore": True,
+                        "total": 100,
+                    },
+                }
+            return {
+                "code": 0,
+                "data": {"resultList": [], "hasMore": False, "total": 0},
+            }
+
+        async def restart_after_stalled_query(self) -> None:
+            self.restart_calls += 1
+
+    class Sink:
+        def __init__(self) -> None:
+            self.staged_rows = []
+
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, _observation):
+            return None
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, *, rows, **_kwargs):
+            self.staged_rows.extend(rows)
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    transport = Transport()
+    sink = Sink()
+    conditions = (
+        OfferTodayListingCondition(
+            search_family="classification_keyword_pack",
+            category_id=118000,
+            keyword=first_keyword,
+            endpoint="search",
+            rcd_type=None,
+        ),
+        OfferTodayListingCondition(
+            search_family="classification_keyword_pack",
+            category_id=118000,
+            keyword="Python",
+            endpoint="search",
+            rcd_type=None,
+        ),
+    )
+
+    result = await OfferTodayListingRunner(transport).run(
+        conditions=conditions,
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=10,
+            run_page_cap=20,
+            page_cap_behavior="retain-and-continue",
+            stall_no_growth_page_count=3,
+            max_stall_restarts_per_condition=1,
+        ),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=sink,
+        staging_sink=sink,
+        session_mode="headless",
+    )
+
+    assert transport.first_calls == 7
+    assert transport.restart_calls == 1
+    assert len(sink.staged_rows) == 1
+    assert result.accepted_job_ids == ("job-1",)
+    assert [outcome.stop_reason for outcome in result.condition_outcomes] == [
+        "stalled_after_session_recovery",
+        "natural_exhaustion",
+    ]
+    assert result.condition_outcomes[0].stall_recovery_count == 1
+    assert result.condition_outcomes[0].is_partial is True
+    assert result.condition_outcomes[1].is_complete is True
+    assert result.stop_reason == "partial_coverage"
+    assert result.is_partial is True
+    assert result.capped_condition_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_offertoday_two_empty_pages_complete_before_stall_detection():
+    class Transport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_listing_json(self, _payload, *, listing_url=None):
+            self.calls += 1
+            return {
+                "code": 0,
+                "data": {"resultList": [], "hasMore": True, "total": 100},
+            }
+
+    class Sink:
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, _observation):
+            return None
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, **_kwargs):
+            return None
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    transport = Transport()
+    result = await OfferTodayListingRunner(transport).run(
+        conditions=(
+            OfferTodayListingCondition(
+                search_family="classification_keyword_pack",
+                category_id=118000,
+                keyword="Java",
+                endpoint="search",
+                rcd_type=None,
+            ),
+        ),
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=10,
+            stall_no_growth_page_count=2,
+        ),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=Sink(),
+        staging_sink=Sink(),
+        session_mode="headless",
+    )
+
+    assert transport.calls == 2
+    assert result.is_complete is True
+    assert result.condition_outcomes[0].stop_reason == "natural_exhaustion"
+
+
+@pytest.mark.asyncio
+async def test_offertoday_terminal_empty_pages_may_reuse_last_response_cursor():
+    class Transport:
+        browser_context_hash = "e" * 64
+
+        def __init__(self) -> None:
+            self.payloads = []
+
+        async def fetch_listing_page(self, payload, *, listing_url):
+            self.payloads.append(dict(payload))
+            if len(self.payloads) == 1:
+                data = {
+                    "resultList": [
+                        {
+                            "cardType": 0,
+                            "jobId": "job-terminal",
+                            "jobName": "Terminal page job",
+                            "jobFunctions": [],
+                        }
+                    ],
+                    "suppleRcdList": [],
+                    "hasMore": False,
+                    "total": 1,
+                    "pageSize": 10,
+                    "sessionId": "terminal-session",
+                    "supplePage": 0,
+                    "suppleAmount": 0,
+                    "suppleType": 0,
+                }
+            else:
+                data = {
+                    "resultList": [],
+                    "suppleRcdList": [],
+                    "hasMore": False,
+                    "total": 0,
+                    "pageSize": 10,
+                }
+            return OfferTodayListingTransportResult(
+                payload={"code": 0, "data": data},
+                response_url=listing_url,
+                http_status=200,
+                browser_context_hash=self.browser_context_hash,
+            )
+
+    class Sink:
+        def __init__(self) -> None:
+            self.observations = []
+
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, observation):
+            self.observations.append(observation)
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, **_kwargs):
+            return None
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    transport = Transport()
+    sink = Sink()
+    result = await OfferTodayListingRunner(transport).run(
+        conditions=(
+            OfferTodayListingCondition(
+                search_family="native_classification",
+                category_id=118000,
+                keyword="",
+                endpoint="search",
+                rcd_type=None,
+            ),
+        ),
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=10,
+            run_page_cap=10,
+            page_cap_behavior="retain-and-continue",
+            stall_no_growth_page_count=3,
+        ),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=sink,
+        staging_sink=sink,
+        session_mode="headless",
+        request_policy=production_offertoday_listing_request_policy(),
+        terminal_policy="result-transition-confirmation-v1",
+    )
+
+    assert result.is_complete is True
+    assert result.condition_outcomes[0].terminal_empty_count == 2
+    assert len(transport.payloads) == 3
+    assert [payload["page"] for payload in transport.payloads] == [1, 2, 3]
+    assert transport.payloads[1]["sessionId"] == "terminal-session"
+    assert transport.payloads[2]["sessionId"] == "terminal-session"
+    assert [
+        observation.terminal_empty_count for observation in sink.observations
+    ] == [0, 1, 2]
+    assert sink.observations[1].cursor_evidence.cursor_output is None
+    assert (
+        sink.observations[1].cursor_evidence.response_cursor_fields.session_id
+        is False
+    )
+    assert [observation.stop_reason for observation in sink.observations] == [
+        None,
+        None,
+        "result_cohort_exhaustion",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_offertoday_terminal_empty_page_rejects_partial_response_cursor():
+    class Transport:
+        browser_context_hash = "e" * 64
+
+        def __init__(self) -> None:
+            self.payloads = []
+
+        async def fetch_listing_page(self, payload, *, listing_url):
+            self.payloads.append(dict(payload))
+            data = {
+                "resultList": [
+                    {
+                        "cardType": 0,
+                        "jobId": "job-terminal",
+                        "jobName": "Terminal page job",
+                        "jobFunctions": [],
+                    }
+                ],
+                "suppleRcdList": [],
+                "hasMore": False,
+                "total": 1,
+                "pageSize": 10,
+                "sessionId": "terminal-session",
+                "supplePage": 0,
+                "suppleAmount": 0,
+                "suppleType": 0,
+            }
+            if len(self.payloads) == 2:
+                data = {
+                    "resultList": [],
+                    "suppleRcdList": [],
+                    "hasMore": False,
+                    "total": 0,
+                    "pageSize": 10,
+                    "sessionId": "terminal-session",
+                }
+            return OfferTodayListingTransportResult(
+                payload={"code": 0, "data": data},
+                response_url=listing_url,
+                http_status=200,
+                browser_context_hash=self.browser_context_hash,
+            )
+
+    class Sink:
+        def __init__(self) -> None:
+            self.observations = []
+
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, observation):
+            self.observations.append(observation)
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, **_kwargs):
+            return None
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    transport = Transport()
+    sink = Sink()
+    result = await OfferTodayListingRunner(transport).run(
+        conditions=(
+            OfferTodayListingCondition(
+                search_family="native_classification",
+                category_id=118000,
+                keyword="",
+                endpoint="search",
+                rcd_type=None,
+            ),
+        ),
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=10,
+            run_page_cap=10,
+            page_cap_behavior="retain-and-continue",
+            stall_no_growth_page_count=3,
+        ),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=sink,
+        staging_sink=sink,
+        session_mode="headless",
+        request_policy=production_offertoday_listing_request_policy(),
+        terminal_policy="result-transition-confirmation-v1",
+    )
+
+    assert result.stop_reason == "cursor_contract_violation"
+    assert result.is_complete is False
+    assert len(transport.payloads) == 2
+    assert sink.observations[1].cursor_evidence.contract_error == "incomplete_cursor"
+
+
+@pytest.mark.asyncio
+async def test_offertoday_source_collection_window_is_partial_and_continues():
+    class Transport:
+        browser_context_hash = "e" * 64
+
+        def __init__(self) -> None:
+            self.pages_by_keyword: dict[str, list[int]] = {}
+
+        async def fetch_listing_page(self, payload, *, listing_url):
+            keyword = str(payload["keyword"])
+            page = int(payload["page"])
+            self.pages_by_keyword.setdefault(keyword, []).append(page)
+            if keyword == "middle" and page == 46:
+                data = {
+                    "resultList": [],
+                    "hasMore": True,
+                    "total": 500,
+                    "pageSize": 10,
+                }
+            elif keyword == "middle":
+                data = {
+                    "resultList": [
+                        {
+                            "cardType": 0,
+                            "jobId": f"middle-{page}",
+                            "jobName": f"Middle job {page}",
+                            "jobFunctions": [],
+                        }
+                    ],
+                    "suppleRcdList": [],
+                    "hasMore": True,
+                    "total": 500,
+                    "pageSize": 10,
+                    "sessionId": "middle-session",
+                    "supplePage": page,
+                    "suppleAmount": 0,
+                    "suppleType": 0,
+                }
+            else:
+                call_count = len(self.pages_by_keyword[keyword])
+                data = {
+                    "resultList": (
+                        [
+                            {
+                                "cardType": 0,
+                                "jobId": f"{keyword}-job",
+                                "jobName": f"{keyword.title()} job",
+                                "jobFunctions": [],
+                            }
+                        ]
+                        if call_count == 1
+                        else []
+                    ),
+                    "suppleRcdList": [],
+                    "hasMore": False,
+                    "total": 1 if call_count == 1 else 0,
+                    "pageSize": 10,
+                    **(
+                        {
+                            "sessionId": f"{keyword}-session",
+                            "supplePage": page,
+                            "suppleAmount": 0,
+                            "suppleType": 0,
+                        }
+                        if call_count == 1
+                        else {}
+                    ),
+                }
+            return OfferTodayListingTransportResult(
+                payload={"code": 0, "data": data},
+                response_url=listing_url,
+                http_status=200,
+                browser_context_hash=self.browser_context_hash,
+            )
+
+    class Sink:
+        def __init__(self) -> None:
+            self.observations = []
+            self.staged_rows = []
+
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, observation):
+            self.observations.append(observation)
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, *, rows, **_kwargs):
+            self.staged_rows.extend(rows)
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    conditions = tuple(
+        OfferTodayListingCondition(
+            search_family="classification_keyword_pack",
+            category_id=118000,
+            keyword=keyword,
+            endpoint="search",
+            rcd_type=None,
+        )
+        for keyword in ("first", "middle", "third")
+    )
+    transport = Transport()
+    sink = Sink()
+
+    result = await OfferTodayListingRunner(transport).run(
+        conditions=conditions,
+        stop_policy=ListingStopPolicy(
+            max_pages_per_condition=50,
+            run_page_cap=60,
+            page_cap_behavior="retain-and-continue",
+            stall_no_growth_page_count=None,
+        ),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=sink,
+        staging_sink=sink,
+        session_mode="headless",
+        request_policy=production_offertoday_listing_request_policy(),
+        terminal_policy="result-transition-confirmation-v1",
+    )
+
+    assert transport.pages_by_keyword["middle"][-1] == 46
+    assert transport.pages_by_keyword["third"] == [1, 2, 3]
+    assert [outcome.stop_reason for outcome in result.condition_outcomes] == [
+        "result_cohort_exhaustion",
+        "source_collection_window",
+        "result_cohort_exhaustion",
+    ]
+    assert result.condition_outcomes[1].is_partial is True
+    assert result.stop_reason == "partial_coverage"
+    assert result.is_complete is False
+    assert "middle-45" in result.accepted_job_ids
+    assert "third-job" in result.accepted_job_ids
+    window = next(
+        observation
+        for observation in sink.observations
+        if observation.stop_reason == "source_collection_window"
+    )
+    assert window.cursor_evidence.contract_error == "incomplete_cursor"
+
+
+@pytest.mark.asyncio
+async def test_offertoday_cursorless_empty_before_source_window_remains_fatal():
+    class Transport:
+        browser_context_hash = "e" * 64
+
+        async def fetch_listing_page(self, payload, *, listing_url):
+            page = int(payload["page"])
+            data = {
+                "resultList": (
+                    [
+                        {
+                            "cardType": 0,
+                            "jobId": "job-1",
+                            "jobName": "Job 1",
+                            "jobFunctions": [],
+                        }
+                    ]
+                    if page == 1
+                    else []
+                ),
+                "suppleRcdList": [],
+                "hasMore": True,
+                "total": 500,
+                "pageSize": 10,
+                **(
+                    {
+                        "sessionId": "session-1",
+                        "supplePage": 1,
+                        "suppleAmount": 0,
+                        "suppleType": 0,
+                    }
+                    if page == 1
+                    else {}
+                ),
+            }
+            return OfferTodayListingTransportResult(
+                payload={"code": 0, "data": data},
+                response_url=listing_url,
+                http_status=200,
+                browser_context_hash=self.browser_context_hash,
+            )
+
+    class Sink:
+        async def record_page_start(self, **_kwargs):
+            return None
+
+        async def record_page_attempt(self, _observation):
+            return None
+
+        async def record_condition_outcome(self, _outcome):
+            return None
+
+        async def stage_page(self, **_kwargs):
+            return None
+
+        async def defer_identity_conflict(self, **_kwargs):
+            return None
+
+    result = await OfferTodayListingRunner(Transport()).run(
+        conditions=(
+            OfferTodayListingCondition(
+                search_family="classification_keyword_pack",
+                category_id=118000,
+                keyword="early",
+                endpoint="search",
+                rcd_type=None,
+            ),
+        ),
+        stop_policy=ListingStopPolicy(max_pages_per_condition=50),
+        retry_policy=ListingRetryPolicy(max_attempts_per_page=1),
+        observation_sink=Sink(),
+        staging_sink=Sink(),
+        session_mode="headless",
+        request_policy=production_offertoday_listing_request_policy(),
+        terminal_policy="result-transition-confirmation-v1",
+    )
+
+    assert result.stop_reason == "cursor_contract_violation"
+    assert result.condition_outcomes[0].is_partial is False
+
+
+@pytest.mark.asyncio
 async def test_offertoday_job_shaped_missing_identity_remains_fatal():
     class Transport:
         async def fetch_listing_json(self, _payload, *, listing_url=None):
@@ -868,7 +1732,13 @@ async def test_offertoday_job_shaped_missing_identity_remains_fatal():
 async def test_offertoday_standalone_uses_keyword_plan_without_hidden_defaults(
     monkeypatch,
 ) -> None:
-    plan = _runtime_plan("offertoday", ("offertoday:118000",))
+    plan = _offertoday_adaptive_runtime_plan(
+        (
+            ("offertoday:118000", "native_top_level", ""),
+            ("offertoday:118000", "keyword", "Java"),
+            ("offertoday:118000", "keyword", "Python"),
+        )
+    )
     captured: dict[str, object] = {}
 
     class Browser:
@@ -930,6 +1800,7 @@ async def test_offertoday_standalone_uses_keyword_plan_without_hidden_defaults(
         resume_strategy="fresh_profile",
     )
     offertoday_crawl._apply_listing_runtime_plan(args, plan)
+    assert args.skip_existing is True
 
     await offertoday_crawl._run_listing_phase(
         args=args,
@@ -944,17 +1815,18 @@ async def test_offertoday_standalone_uses_keyword_plan_without_hidden_defaults(
         (condition.category_id, condition.keyword, condition.endpoint)
         for condition in conditions
     ] == [
-        (118000, keyword, "search")
-        for keyword in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        (118000, "", "search"),
+        (118000, "Java", "search"),
+        (118000, "Python", "search"),
     ]
     stop_policy = captured["stop_policy"]
     assert stop_policy.max_pages_per_condition == 2
-    assert stop_policy.run_page_cap == 72
-    assert stop_policy.require_empty_confirmation is False
-    assert captured["request_policy"] is None
-    assert captured["terminal_policy"] == (
-        "cursor-terminal-empty-confirmation-v1"
-    )
+    assert stop_policy.run_page_cap == 6
+    assert stop_policy.require_empty_confirmation is True
+    assert stop_policy.stall_no_growth_page_count == 3
+    assert stop_policy.max_stall_restarts_per_condition == 1
+    assert captured["request_policy"] is not None
+    assert captured["terminal_policy"] == "result-transition-confirmation-v1"
 
 
 @pytest.mark.asyncio
@@ -991,6 +1863,7 @@ async def test_jobsdb_and_ctgoodjobs_detail_loops_receive_frozen_runtime_plan(
         ),
     )
     jobsdb_crawl._apply_detail_runtime_plan(jobsdb_args, jobsdb_plan)
+    assert jobsdb_args.skip_existing is True
     jobsdb_runtime = Runtime()
     await jobsdb_crawl.run_detail_phase(jobsdb_args, jobsdb_runtime)
     assert jobsdb_runtime.calls[0]["detail_runtime_plan"] is jobsdb_plan
@@ -1020,6 +1893,7 @@ async def test_jobsdb_and_ctgoodjobs_detail_loops_receive_frozen_runtime_plan(
         ctgoodjobs_args,
         ctgoodjobs_plan,
     )
+    assert ctgoodjobs_args.skip_existing is True
     ctgoodjobs_runtime = Runtime()
     await ctgoodjobs_crawl._run_detail_phase(
         ctgoodjobs_args,
@@ -1057,6 +1931,7 @@ async def test_offertoday_recovery_segments_only_frozen_complete_run_membership(
         detail_pacing=None,
     )
     offertoday_crawl._apply_detail_runtime_plan(args, plan)
+    assert args.skip_existing is True
 
     class Runtime:
         def __init__(self) -> None:

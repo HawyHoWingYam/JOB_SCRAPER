@@ -1,0 +1,35 @@
+{
+  "id": "prevent-hung-offertoday-listing-executions",
+  "name": "prevent-hung-offertoday-listing-executions",
+  "title": "Prevent hung OfferToday listing executions",
+  "description": "Bound OfferToday browser fetches and reconcile stale direct-launch execution heartbeats so Crawl Jobs cannot remain running indefinitely.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-12",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/config.py",
+    "backend/app/scraper/offertoday_browser_runtime.py",
+    "backend/app/services/crawl_job_execution_launcher.py",
+    "backend/app/services/startup_recovery_service.py",
+    "backend/app/repositories/crawl_job_execution_repository.py"
+  ],
+  "notes": "GitHub issue: https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/56",
+  "meta": {
+    "github_issue": 56,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/56"
+  }
+}

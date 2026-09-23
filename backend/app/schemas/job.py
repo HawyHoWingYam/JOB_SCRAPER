@@ -5,10 +5,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.current_taxonomy import (
-    CurrentCompanyIndustryStateSchema,
-    CurrentJobSkillStateSchema,
-)
+from app.schemas.current_taxonomy import CurrentJobSkillStateSchema
 from app.company_website import normalize_company_website
 
 
@@ -210,9 +207,6 @@ class JobIntelligenceAvailabilitySchema(BaseModel):
     source_attributes: JobIntelligenceDomainAvailabilitySchema = Field(
         default_factory=JobIntelligenceDomainAvailabilitySchema
     )
-    company_industries: JobIntelligenceDomainAvailabilitySchema = Field(
-        default_factory=JobIntelligenceDomainAvailabilitySchema
-    )
     skills: JobIntelligenceDomainAvailabilitySchema = Field(
         default_factory=JobIntelligenceDomainAvailabilitySchema
     )
@@ -235,12 +229,24 @@ class JobSchema(JobCreateSchema):
     employment_types: list[EmploymentTypeSchema] = Field(default_factory=list)
 
 
+class JevSkillClassificationReceiptSchema(BaseModel):
+    """Secret-safe latest Jev Skill classification shown on Job Detail."""
+
+    classification_id: str
+    run_id: Optional[str] = None
+    status: Literal["pending", "running", "answered", "unavailable", "invalid"]
+    error_code: Optional[str] = None
+    model: Optional[str] = None
+    request_id: Optional[str] = None
+    cost_usd: Optional[float] = Field(default=None, ge=0)
+    completed_at: Optional[datetime] = None
+
+
 class JobDetailSchema(JobSchema):
     """Expanded schema for the job detail view."""
 
     original_job_url: Optional[str] = None
     company_name: Optional[str] = None
-    company_industry: Optional[str] = None
     company_ai_description: Optional[str] = None
     company_website: Optional[str] = None
     origin: str = "source"
@@ -264,8 +270,8 @@ class JobDetailSchema(JobSchema):
     source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
         default_factory=list
     )
-    company_industries: Optional[CurrentCompanyIndustryStateSchema] = None
     skill_state: Optional[CurrentJobSkillStateSchema] = None
+    jev_skill_classification: Optional[JevSkillClassificationReceiptSchema] = None
     job_intelligence_availability: JobIntelligenceAvailabilitySchema = Field(
         default_factory=JobIntelligenceAvailabilitySchema
     )
@@ -274,11 +280,7 @@ class JobDetailSchema(JobSchema):
     @classmethod
     def require_composed_governed_states(cls, value):
         if isinstance(value, Mapping):
-            required_fields = {
-                "company_industries",
-                "skill_state",
-                "job_intelligence_availability",
-            }
+            required_fields = {"skill_state", "job_intelligence_availability"}
             missing = sorted(required_fields - set(value))
             if missing:
                 raise ValueError(

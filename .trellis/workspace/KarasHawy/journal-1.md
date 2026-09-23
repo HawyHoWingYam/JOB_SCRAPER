@@ -1933,3 +1933,36 @@ Clarified uncapped Company run sizing, contained responsive Layer cards, added p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 56: Restore Employment Type registry
+
+**Date**: 2026-08-03
+**Task**: Restore Employment Type registry
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Seeded the canonical seven Employment Types during bootstrap, added safe non-empty repair, removed the bootstrap-owned registry from cutover retention, improved OfferToday FK diagnostics, repaired current jobsdb, and verified with PostgreSQL/Redis tests.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `24a82c90` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

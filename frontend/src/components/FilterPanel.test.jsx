@@ -2,8 +2,6 @@ import { useState } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import taxonomyFixture from "../fixtures/current_taxonomy_responses.json";
-
 import FilterPanel from "./FilterPanel";
 
 const EMPTY_FILTERS = {
@@ -12,7 +10,6 @@ const EMPTY_FILTERS = {
   employment_type_codes: [],
   subcategory_ids: [],
   industry: "",
-  company_industry_node_ids: [],
   source_classification_ids: [],
   posted_date_from: "",
   posted_date_to: "",
@@ -20,11 +17,7 @@ const EMPTY_FILTERS = {
   experience_years_to: "",
 };
 
-function FilterPanelHarness({
-  filterOptions,
-  loadCompanyIndustryChildren,
-  onFilterChange,
-}) {
+function FilterPanelHarness({ filterOptions, onFilterChange }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
 
   const handleFilterChange = (nextFilters) => {
@@ -36,7 +29,6 @@ function FilterPanelHarness({
     <FilterPanel
       filters={filters}
       onFilterChange={handleFilterChange}
-      loadCompanyIndustryChildren={loadCompanyIndustryChildren}
       onReset={vi.fn()}
       onDatePresetChange={vi.fn()}
       filterOptions={filterOptions}
@@ -62,7 +54,6 @@ describe("FilterPanel", () => {
             { id: "permanent", code: "permanent", label: "Permanent", count: 2, order: 20 },
           ],
           source_classifications: [],
-          company_industry_tree: { nodes: [] },
           job_subcategories: [],
           industries: [],
         }}
@@ -113,7 +104,6 @@ describe("FilterPanel", () => {
               count: 5,
             },
           ],
-          company_industry_tree: { nodes: [] },
           job_subcategories: [],
           industries: [],
         }}
@@ -137,67 +127,4 @@ describe("FilterPanel", () => {
     });
   });
 
-  it("lets a selected Company Industry parent cover its descendants", async () => {
-    const user = userEvent.setup();
-    const onFilterChange = vi.fn();
-    const root = taxonomyFixture.company_tree.nodes[0];
-    const child = taxonomyFixture.company_child_tree.nodes[0];
-
-    render(
-      <FilterPanelHarness
-        onFilterChange={onFilterChange}
-        filterOptions={{
-          employment_types: [],
-          source_classifications: [],
-          company_industry_tree: taxonomyFixture.company_tree,
-          company_industries: [
-            {
-              id: root.id,
-              label: root.labels.en,
-              parent_id: null,
-              level: root.level,
-              count: 4,
-            },
-            {
-              id: child.id,
-              label: child.labels.en,
-              parent_id: root.id,
-              level: child.level,
-              count: 2,
-            },
-          ],
-          job_subcategories: [],
-          industries: [],
-        }}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", {
-      name: "Company Industry, 0 selected",
-    }));
-    await user.click(
-      screen.getByRole("checkbox", {
-        name: "J · Information and communications (4 jobs)",
-      }),
-    );
-    expect(onFilterChange).toHaveBeenLastCalledWith({
-      ...EMPTY_FILTERS,
-      company_industry_node_ids: [root.id],
-    });
-
-    await user.click(
-      screen.getByRole("button", {
-        name: "Show children of J · Information and communications",
-      }),
-    );
-    const childCheckbox = screen.getByRole("checkbox", {
-      name: "62 · Information technology service activities (2 jobs)",
-    });
-    expect(childCheckbox).toBeDisabled();
-    expect(
-      screen.getByText(
-        "Company Industry: J · Information and communications",
-      ),
-    ).toBeInTheDocument();
-  });
 });

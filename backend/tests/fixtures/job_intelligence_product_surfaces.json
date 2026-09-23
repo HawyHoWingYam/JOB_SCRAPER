@@ -120,60 +120,7 @@
       "ai_description_updated_at": "2026-07-19T08:00:00Z",
       "id": "30000000-0000-0000-0000-000000000010",
       "created_at": "2026-07-18T08:00:00Z",
-      "updated_at": "2026-07-19T08:00:00Z",
-      "company_industries": {
-        "company_id": "30000000-0000-0000-0000-000000000010",
-        "assignments": [
-          {
-            "id": 1,
-            "company_id": "30000000-0000-0000-0000-000000000010",
-            "taxonomy_code": "J",
-            "method": "authoritative_code",
-            "breadcrumb": {
-              "section": {
-                "code": "J",
-                "label": "Information and communications",
-                "labels": {
-                  "en": "Information and communications",
-                  "zh_hant": "資訊及通訊",
-                  "zh_hans": "资讯及通讯"
-                }
-              }
-            },
-            "is_primary": true,
-            "primary_basis": "authoritative_source",
-            "provenance": {
-              "method": "source-hsic-code"
-            }
-          },
-          {
-            "id": 2,
-            "company_id": "30000000-0000-0000-0000-000000000010",
-            "taxonomy_code": "K",
-            "method": "operator",
-            "breadcrumb": {
-              "section": {
-                "code": "K",
-                "label": "Financial and insurance activities",
-                "labels": {
-                  "en": "Financial and insurance activities",
-                  "zh_hant": "金融及保險活動",
-                  "zh_hans": "金融及保险活动"
-                }
-              }
-            },
-            "is_primary": false,
-            "primary_basis": null,
-            "provenance": {
-              "method": "operator"
-            }
-          }
-        ]
-      },
-      "company_industry_availability": {
-        "available": true,
-        "unavailable_code": null
-      }
+      "updated_at": "2026-07-19T08:00:00Z"
     },
     {
       "company_id": "fixture-company-2",
@@ -185,15 +132,7 @@
       "ai_description_updated_at": null,
       "id": "30000000-0000-0000-0000-000000000020",
       "created_at": "2026-07-18T08:00:00Z",
-      "updated_at": "2026-07-19T08:00:00Z",
-      "company_industries": {
-        "company_id": "30000000-0000-0000-0000-000000000020",
-        "assignments": []
-      },
-      "company_industry_availability": {
-        "available": true,
-        "unavailable_code": null
-      }
+      "updated_at": "2026-07-19T08:00:00Z"
     },
     {
       "company_id": "fixture-company-3",
@@ -205,12 +144,7 @@
       "ai_description_updated_at": null,
       "id": "30000000-0000-0000-0000-000000000030",
       "created_at": "2026-07-18T08:00:00Z",
-      "updated_at": "2026-07-19T08:00:00Z",
-      "company_industries": null,
-      "company_industry_availability": {
-        "available": false,
-        "unavailable_code": "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE"
-      }
+      "updated_at": "2026-07-19T08:00:00Z"
     }
   ],
   "job_detail": {
@@ -278,7 +212,6 @@
     ],
     "original_job_url": "https://hk.jobsdb.com/job/fixture-job-1",
     "company_name": "Fixture Company",
-    "company_industry": "Legacy evidence only",
     "company_ai_description": null,
     "company_website": "https://fixture.example.com",
     "origin": "jobsdb",
@@ -339,33 +272,6 @@
         }
       }
     ],
-    "company_industries": {
-      "company_id": "30000000-0000-0000-0000-000000000010",
-      "assignments": [
-        {
-          "id": 1,
-          "company_id": "30000000-0000-0000-0000-000000000010",
-          "taxonomy_code": "J",
-          "method": "authoritative_code",
-          "breadcrumb": {
-            "section": {
-              "code": "J",
-              "label": "Information and communications",
-              "labels": {
-                "en": "Information and communications",
-                "zh_hant": "資訊及通訊",
-                "zh_hans": "资讯及通讯"
-              }
-            }
-          },
-          "is_primary": true,
-          "primary_basis": "authoritative_source",
-          "provenance": {
-            "method": "source-hsic-code"
-          }
-        }
-      ]
-    },
     "skill_state": {
       "job_id": "40000000-0000-0000-0000-000000000010",
       "skills": [
@@ -396,10 +302,6 @@
     },
     "job_intelligence_availability": {
       "source_attributes": {
-        "available": true,
-        "unavailable_code": null
-      },
-      "company_industries": {
         "available": true,
         "unavailable_code": null
       },

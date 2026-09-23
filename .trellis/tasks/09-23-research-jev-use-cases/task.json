@@ -1,0 +1,53 @@
+{
+  "id": "research-jev-use-cases",
+  "name": "research-jev-use-cases",
+  "title": "Research and adopt Jev in JOB_SCRAPER",
+  "description": "Preserve the completed Jev research/evaluation evidence and implement confidence-routed daily Skill classification, periodic stronger-model taxonomy maintenance, and the remaining product phases.",
+  "status": "in_progress",
+  "dev_type": "feature",
+  "scope": "cross-layer Jev production adoption",
+  "package": "backend,frontend",
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-23-jev-settings-budget",
+    "09-23-jev-skill-evaluation",
+    "09-23-jev-skill-review",
+    "09-23-jev-duplicate-evaluation",
+    "09-23-jev-crawl-quality-evaluation",
+    "09-23-jev-search-relevance-evaluation",
+    "09-23-jev-incident-triage-evaluation"
+  ],
+  "parent": null,
+  "relatedFiles": [
+    ".trellis/tasks/09-23-research-jev-use-cases/design.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/implement.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/completion-audit.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/task-portfolio-closeout.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/prd.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/catalog-LICENSE.txt",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/catalog-screening.csv",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/catalog-screening.json",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/catalog-screening.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/coverage.json",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/report.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/retrieval-notes.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/scout-linkage.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/scout-sdk.md",
+    ".trellis/tasks/09-23-research-jev-use-cases/research/source-revisions.json"
+  ],
+  "notes": "All authorized Jev production phases are implemented. Final evidence: backend 748/748 on disposable PostgreSQL plus Redis cutover rehearsal, frontend 224/224 with lint/build, deterministic Playwright 15/15, and seven supplemental real OpenRouter UI paths. Phase 3.3 spec review is complete: the executable cross-layer contracts are captured in jev-system-one.md and the linked backend/frontend specs. The user authorized a repository checkpoint on 2026-09-23, so Phase 3.4 commit and archive may proceed despite the shared multi-task worktree.",
+  "meta": {
+    "github_issue": 62,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/62"
+  }
+}

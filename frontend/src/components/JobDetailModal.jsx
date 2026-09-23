@@ -194,24 +194,6 @@ function relatedEmploymentTypesLabel(relatedJob) {
   return labels.length > 0 ? labels.join(', ') : 'Employment Types Unknown';
 }
 
-function companyIndustryBreadcrumbLabel(breadcrumb) {
-  const nodes = Array.isArray(breadcrumb)
-    ? breadcrumb
-    : ['section', 'division', 'group', 'class', 'subclass']
-      .map((level) => breadcrumb?.[level])
-      .filter(Boolean);
-  if (nodes.length === 0) {
-    return 'Unknown Company Industry';
-  }
-
-  return nodes
-    .map((node) => {
-      const label = node?.labels?.en || 'Unknown Company Industry';
-      return node?.code ? `${node.code} · ${label}` : label;
-    })
-    .join(' / ');
-}
-
 function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilitiesLoading = false }) {
   const dialogRef = useRef(null);
   const closeButtonRef = useRef(null);
@@ -222,6 +204,11 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const [relatedJobs, setRelatedJobs] = useState([]);
   const [relatedJobsLoading, setRelatedJobsLoading] = useState(true);
   const [relatedJobsError, setRelatedJobsError] = useState('');
+  const [duplicateAssociations, setDuplicateAssociations] = useState([]);
+  const [duplicateAssociationsLoading, setDuplicateAssociationsLoading] = useState(true);
+  const [duplicateAssociationsError, setDuplicateAssociationsError] = useState('');
+  const [duplicateActionPending, setDuplicateActionPending] = useState(false);
+  const [duplicateActionMessage, setDuplicateActionMessage] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const recommendationsAvailable = capabilities?.recommendations?.similar_jobs?.available !== false;
 
@@ -368,6 +355,100 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
     };
   }, [jobId, apiUrl, capabilitiesLoading, recommendationsAvailable]);
 
+  useEffect(() => {
+    let isActive = true;
+    setDuplicateAssociations([]);
+    setDuplicateAssociationsError('');
+    setDuplicateAssociationsLoading(true);
+
+    fetch(`${apiUrl}/api/jobs/${jobId}/duplicate-associations`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Duplicate associations are unavailable right now');
+        return res.json();
+      })
+      .then((data) => {
+        if (!isActive) return;
+        setDuplicateAssociations(Array.isArray(data.associations) ? data.associations : []);
+        setDuplicateAssociationsLoading(false);
+      })
+      .catch((err) => {
+        if (!isActive) return;
+        setDuplicateAssociationsError(err.message);
+        setDuplicateAssociationsLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [jobId, apiUrl]);
+
+  const evaluateDuplicateAssociations = async () => {
+    setDuplicateActionPending(true);
+    setDuplicateActionMessage('');
+    try {
+      const response = await fetch(
+        `${apiUrl}/api/jobs/${jobId}/duplicate-associations/evaluate`,
+        { method: 'POST' },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const detail = typeof payload.detail === 'string'
+          ? payload.detail
+          : payload.detail?.code;
+        throw new Error(detail || 'Jev duplicate evaluation could not run');
+      }
+      const payload = await response.json();
+      setDuplicateAssociations(
+        Array.isArray(payload.associations) ? payload.associations : [],
+      );
+      setDuplicateAssociationsError('');
+      setDuplicateActionMessage(
+        payload.candidate_count > 0
+          ? 'Jev duplicate evaluation completed.'
+          : 'No new candidate pairs needed evaluation.',
+      );
+    } catch (err) {
+      setDuplicateAssociationsError(err.message);
+    } finally {
+      setDuplicateActionPending(false);
+    }
+  };
+
+  const reviewDuplicateAssociation = async (associationId, action) => {
+    setDuplicateActionPending(true);
+    setDuplicateActionMessage('');
+    try {
+      const response = await fetch(
+        `${apiUrl}/api/jobs/${jobId}/duplicate-associations/${associationId}/review`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Idempotency-Key': globalThis.crypto?.randomUUID?.()
+              || `duplicate-${Date.now()}-${associationId}`,
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+      if (!response.ok) throw new Error('Duplicate association review failed');
+      const updated = await response.json();
+      setDuplicateAssociations((current) => (
+        action === 'reject'
+          ? current.filter((item) => item.id !== associationId)
+          : current.map((item) => (item.id === associationId ? updated : item))
+      ));
+      setDuplicateActionMessage(
+        action === 'confirm'
+          ? 'Association confirmed; both source Jobs remain available.'
+          : 'Association marked as different vacancies.',
+      );
+    } catch (err) {
+      setDuplicateAssociationsError(err.message);
+    } finally {
+      setDuplicateActionPending(false);
+    }
+  };
+
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) {
       onClose();
@@ -386,17 +467,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const sourceEmploymentLabels = Array.isArray(job?.source_employment_labels)
     ? job.source_employment_labels
     : [];
-  const companyIndustryState = job?.company_industries || null;
-  const companyIndustryAvailability = job?.job_intelligence_availability?.company_industries;
-  const companyIndustryAssignments = Array.isArray(companyIndustryState?.assignments)
-    ? companyIndustryState.assignments
-    : [];
-  const primaryCompanyIndustry = companyIndustryAssignments.find(
-    (assignment) => assignment?.is_primary === true,
-  );
-  const additionalCompanyIndustryCount = primaryCompanyIndustry
-    ? Math.max(companyIndustryAssignments.length - 1, 0)
-    : 0;
   const governedSkillNames = Array.isArray(job?.skill_state?.skills)
     ? job.skill_state.skills.map((skill) => skill?.name).filter(Boolean)
     : (job?.skills || []);
@@ -564,37 +634,10 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
               </div>
             </section>
 
-            <section
-              className="modal-section"
-              role="region"
-              aria-labelledby="company-industries-heading"
-            >
-              <h3 id="company-industries-heading">Company Industries</h3>
-              {companyIndustryAvailability?.available === false ? (
-                <p className="modal-empty">
-                  Unavailable ({companyIndustryAvailability.unavailable_code || 'UNKNOWN'})
-                </p>
-              ) : companyIndustryAssignments.length > 0 ? (
-                <ul className="modal-contract-list">
-                  {companyIndustryAssignments.map((assignment) => (
-                    <li key={assignment.id}>
-                      <strong>{companyIndustryBreadcrumbLabel(assignment.breadcrumb)}</strong>
-                      <span>
-                        {assignment.is_primary
-                          ? `Primary Company Industry${additionalCompanyIndustryCount > 0
-                            ? ` +${additionalCompanyIndustryCount}`
-                            : ''}`
-                          : 'Additional Company Industry'}
-                      </span>
-                      <span>Basis: {humanizeContractValue(assignment.primary_basis || assignment.method)}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="modal-empty">No governed Company Industry assignment</p>
-              )}
+            <section className="modal-section" aria-labelledby="company-description-heading">
+              <h3 id="company-description-heading">Company AI description</h3>
               <dl className="modal-kv modal-company-description">
-                <dt>Company AI description</dt>
+                <dt>Summary</dt>
                 <dd>{job.company_ai_description || 'No company AI description available'}</dd>
               </dl>
             </section>
@@ -631,6 +674,32 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                   </div>
                 </div>
               )}
+
+              {job.jev_skill_classification && (
+                <div className="modal-subsection" aria-label="Latest Jev Skill classification">
+                  <h4>Latest Jev Skill classification</h4>
+                  <dl className="modal-kv">
+                    <dt>Status</dt>
+                    <dd>{job.jev_skill_classification.status}</dd>
+                    <dt>Model</dt>
+                    <dd>{job.jev_skill_classification.model || 'Model unavailable'}</dd>
+                    <dt>Request</dt>
+                    <dd>{job.jev_skill_classification.request_id || 'Request ID unavailable'}</dd>
+                    <dt>Cost</dt>
+                    <dd>
+                      {job.jev_skill_classification.cost_usd != null
+                        ? `USD ${Number(job.jev_skill_classification.cost_usd).toFixed(5)}`
+                        : 'Cost unavailable'}
+                    </dd>
+                    {job.jev_skill_classification.error_code && (
+                      <>
+                        <dt>Error</dt>
+                        <dd>{job.jev_skill_classification.error_code}</dd>
+                      </>
+                    )}
+                  </dl>
+                </div>
+              )}
             </section>
 
             <section className="modal-section modal-section-ai">
@@ -660,6 +729,82 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 className="modal-description"
                 dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(job.description ?? '') }}
               />
+            </section>
+
+            <section className="modal-section" aria-labelledby="duplicate-associations-heading">
+              <div className="related-job-card-header">
+                <div>
+                  <h3 id="duplicate-associations-heading">Possible same vacancy</h3>
+                  <p className="modal-evidence-note">
+                    Source-preserving associations only. No Job is merged, hidden, or deleted.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={evaluateDuplicateAssociations}
+                  disabled={duplicateActionPending}
+                >
+                  {duplicateActionPending ? 'Working…' : 'Evaluate with Jev'}
+                </button>
+              </div>
+              {duplicateActionMessage && (
+                <p role="status" className="modal-ai-state">{duplicateActionMessage}</p>
+              )}
+              {duplicateAssociationsLoading ? (
+                <p className="modal-empty">Loading duplicate associations...</p>
+              ) : duplicateAssociations.length > 0 ? (
+                <div className="related-jobs-list">
+                  {duplicateAssociations.map((association) => {
+                    const otherJob = association.other_job;
+                    return (
+                      <article key={association.id} className="related-job-card">
+                        <div className="related-job-card-header">
+                          <h4>{otherJob?.title || 'Source Job unavailable'}</h4>
+                          <span className="related-job-score">
+                            {association.status === 'confirmed'
+                              ? 'Confirmed same vacancy'
+                              : 'Jev proposal — pending review'}
+                          </span>
+                        </div>
+                        <p className="related-job-company">
+                          {otherJob?.company_name || 'Unknown company'}
+                        </p>
+                        <div className="related-job-meta">
+                          <span>
+                            {otherJob?.source_site || 'unknown source'}:{otherJob?.source_job_id || 'unknown'}
+                          </span>
+                          {otherJob?.location && <span>{otherJob.location}</span>}
+                          {association.confidence != null && (
+                            <span>Jev confidence {Math.round(Number(association.confidence) * 100)}%</span>
+                          )}
+                        </div>
+                        {association.status === 'proposed' && (
+                          <div className="modal-inline-actions">
+                            <button
+                              type="button"
+                              disabled={duplicateActionPending}
+                              onClick={() => reviewDuplicateAssociation(association.id, 'confirm')}
+                            >
+                              Confirm association
+                            </button>
+                            <button
+                              type="button"
+                              disabled={duplicateActionPending}
+                              onClick={() => reviewDuplicateAssociation(association.id, 'reject')}
+                            >
+                              Not the same vacancy
+                            </button>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="modal-empty">
+                  {duplicateAssociationsError || 'No possible same-vacancy associations yet'}
+                </p>
+              )}
             </section>
 
             <section className="modal-section">

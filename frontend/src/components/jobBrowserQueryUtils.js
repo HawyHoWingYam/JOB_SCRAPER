@@ -11,8 +11,6 @@ const EMPTY_QUERY = {
   skills: [],
   technology_ids: [],
   skill_category_ids: [],
-  industry: '',
-  company_industry_node_ids: [],
   posted_date_from: '',
   posted_date_to: '',
   experience_years_from: '',
@@ -108,10 +106,6 @@ export function normalizeQueryForSubmit(query) {
     skills: normalizeIdArray(query?.skills),
     technology_ids: normalizeIdArray(query?.technology_ids),
     skill_category_ids: normalizeIdArray(query?.skill_category_ids),
-    industry: normalizeValue(query?.industry),
-    company_industry_node_ids: normalizeIdArray(
-      query?.company_industry_node_ids,
-    ),
     posted_date_from: normalizeValue(query?.posted_date_from),
     posted_date_to: normalizeValue(query?.posted_date_to),
     experience_years_from: normalizeNumericString(query?.experience_years_from),
@@ -160,15 +154,6 @@ export function countPendingQueryChanges(appliedQuery, draftQuery) {
     count += 1;
   }
   if (JSON.stringify(applied.skill_ids) !== JSON.stringify(draft.skill_ids)) {
-    count += 1;
-  }
-  if (applied.industry !== draft.industry) {
-    count += 1;
-  }
-  if (
-    JSON.stringify(applied.company_industry_node_ids) !==
-    JSON.stringify(draft.company_industry_node_ids)
-  ) {
     count += 1;
   }
   if (

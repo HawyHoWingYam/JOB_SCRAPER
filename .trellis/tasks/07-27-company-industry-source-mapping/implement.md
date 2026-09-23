@@ -28,7 +28,10 @@
 - [x] Run targeted and full frontend tests (204 passed), frontend lint, and production build.
 - [x] Run the management command in validation/dry mode and inspect the complete OfferToday summary (54 non-mapping dispositions, zero positive changes).
 - [x] Apply the approved current manifest to the shared sandbox (idempotent zero-change synchronization).
-- [ ] Manual QA is explicitly deferred: UI-hit one explicit exclusion and one missing/invalid disposition failure, then test a positive mapped Company after target-specific evidence supplies a defensible leaf. The synthetic real-write test already proves assignment provenance.
+- [x] Superseded closure: the later approved product direction removed Company
+  Industry end to end. The unperformed positive-mapping manual scenario is
+  intentionally retired rather than represented as tested; historical mapping
+  evidence remains in this task for provenance.
 - [x] Update ordinary-current-taxonomy and automated-classification-batch specs.
 
 Shared-sandbox Preview smoke for OfferToday limit 100 completed after synchronization: selected 100, mapped 0, unsupported 100, excluded 0. The oldest bounded population has no retained Source Industry Label evidence, so the backend correctly blocks Start without pulling replacement Companies beyond the limit.

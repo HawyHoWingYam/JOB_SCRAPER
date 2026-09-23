@@ -80,6 +80,11 @@ The implementation may refine type names while preserving the contracts below.
   `sessionId`, `supplePage`, `suppleAmount`, and `suppleType`.
 - Cursor state belongs to one condition/browser chain and resets before the
   next condition.
+- Every browser-context OfferToday API fetch has a configurable positive hard
+  deadline independent from page navigation timeout. The in-page deadline uses
+  an abort signal and covers both response acquisition and body consumption.
+  Deadline expiry enters the existing transient-transport retry policy and can
+  never count as successful progress or natural exhaustion.
 - Two successful cursor-continuous pages with empty `resultList` produce
   natural result exhaustion.
 - `suppleRcdList` is observed and deduplicated separately but never staged or
@@ -96,12 +101,22 @@ The implementation may refine type names while preserving the contracts below.
 - `retain-and-continue`: production keeps validated rows, records the condition
   partial, resets the cursor, and continues.
 
-Only `page_cap` may continue. Auth/WAF/IP, endpoint/cursor/page/session,
+Only `page_cap` and the exact Source-owned collection-window boundary may
+continue. The latter is derived only under the production response-cursor
+policy at logical page 46 when page 45 contributed new result IDs with
+`hasMore=true`, page 46 is API-success with both cohorts empty and
+`hasMore=true`, `pageSize` remains 10, and all four response-cursor fields are
+absent. The page observation retains primitive `incomplete_cursor` evidence,
+while the condition stops partial with `source_collection_window` and later
+frozen conditions continue. It is never natural exhaustion.
+
+Auth/WAF/IP, every non-matching endpoint/cursor/page/session anomaly,
 result-cohort identity, unresolved gap, and staging persistence failures stop
 the run. A hard stop prevents detail loading.
 
-A run whose conditions are all natural or page-cap partial finishes
-`completed`; any cap sets `listing_partial=true`.
+A run whose conditions are all natural, page-cap partial, or
+Source-collection-window partial finishes `completed`; any partial condition
+sets `listing_partial=true` and the runner stop reason is `partial_coverage`.
 
 `listing_capped_condition_ids` is the runner's condition identity. Production
 also maps those conditions through the immutable runtime plan to ordered,
@@ -202,6 +217,9 @@ is not evidence that the production cursor contract should be relaxed.
 | Two cursor-continuous empty `resultList` pages | Natural condition completion |
 | Supplemental rows remain while `resultList` is empty twice | Natural result completion; supplemental metrics only |
 | Production page cap | Retain validated rows, continue next condition, set partial |
+| Exact page-46 Source collection window after page-45 identity growth | Preserve the accepted prefix, retain `incomplete_cursor` evidence, mark the target `source_collection_window` partial, and continue |
+| Cursorless empty response before page 46, after a non-growing page, or with `hasMore!=true` | `cursor_contract_violation` hard stop |
+| Page-46 response contains only part of the cursor tuple or changes page size | `cursor_contract_violation` hard stop |
 | Auth/WAF/IP | Manual action; no detail |
 | Result or historical identity conflict | Identity audit/manual action; no detail |
 | Supplemental identity conflict | Count and exclude from supplemental sets; continue |
@@ -860,14 +878,13 @@ for segment in partition(runtime_plan.targets, recovery_segment_size):
 The immutable plan defines complete-run membership; pacing only partitions it,
 and later eligible work belongs to a later reviewed plan.
 
-## Scenario: Classification keyword sweep listing plans
+## Scenario: Historical classification keyword sweep listing plans
 
 ### 1. Scope / Trigger
 
-Use this contract when compiling, reviewing, executing, or displaying a normal
-OfferToday listing scope. It replaces newly authored empty-keyword category
-browse plans with one explicit frozen keyword sweep. Historical browse targets
-remain a supported runtime input.
+Use this compatibility contract only when reading or executing an already
+frozen A-Z/0-9 sweep or empty-keyword browse plan. New plans use the adaptive
+coverage scenario below and never emit this sweep.
 
 ### 2. Signatures
 
@@ -914,10 +931,9 @@ Historical frozen parameters:
 
 ### 3. Contracts
 
-- One newly authored OfferToday listing selects exactly one active top-level
-  Source Classification and freezes exactly 36 targets in `A-Z`, then `0-9`
-  order. Every target retains the selected `category_code`; categoryless and
-  empty-keyword targets are forbidden in new plans.
+- A historical sweep plan freezes exactly 36 targets in `A-Z`, then `0-9`
+  order. Every target retains the selected `category_code`; current plan
+  resolution never creates this variant.
 - The legacy and keyword target parameter models are distinct union variants.
   Do not add keyword defaults to the legacy model: its exact serialized payload
   participates in historical fingerprints.
@@ -936,10 +952,20 @@ Historical frozen parameters:
 - The runner consumes frozen targets in order; it never regenerates keywords.
   Search targets omit `rcdType`, while a historical browse target still sends
   `rcdType=7` to the browse endpoint.
-- A result row is ignorable only when it has the positive OfferToday banner
-  envelope: exact integer `cardType=1`, `bannerType`, and `bannerCode`. Raw page
-  row count includes these cards; identity analysis, staging, and detail scope
-  exclude them. Missing identity alone is never non-job evidence.
+- A result row is ignorable only when it has one of the positive OfferToday UI
+  envelopes: a banner with exact integer `cardType=1`, `bannerType`, and
+  `bannerCode`; an empty-state card with exact integer `cardType=2` and
+  `emptyCardType` plus a nonblank `imageUrl`; or a recommendation separator
+  with exact integer `cardType=3` and `separateLineCode`, nonblank string
+  `separateDesc`, and list `actionList`. Raw page row count includes these
+  cards; identity analysis, staging, and detail scope exclude them. Missing
+  identity alone is never non-job evidence.
+- A recommendation separator ends the in-scope result cohort. Job-shaped rows
+  after it, including later cursor pages in the same condition, are recorded as
+  supplemental recommendation evidence and never staged as results for that
+  classification. The separator begins terminal confirmation; two subsequent
+  cursor-continuous pages containing only recommendations count as two empty
+  result-cohort confirmations.
 - `non_job_cards_observed` is present in production page events and task
   metrics. `listing_observation_to_payload()` removes it to preserve historical
   research serialization.
@@ -956,8 +982,10 @@ Historical frozen parameters:
 | Aggregate could exceed the technical cap | `SCOPE_RULE_INVALID` before persistence/fingerprinting |
 | Historical browse snapshot fingerprint is valid | Decode and execute the original browse request unchanged |
 | Explicit banner card is mixed with valid jobs | Count and ignore banner; stage valid jobs |
+| Empty-state card precedes a recommendation separator | Count and ignore empty state; do not raise `identity_issue` |
+| Recommendation separator is mixed with valid jobs | Stage only rows before separator; retain later rows as supplemental evidence; confirm result exhaustion |
 | Job-shaped row lacks identity | `identity_issue`; stop under the existing hard-stop contract |
-| Banner and invalid job share a page | Count/filter banner first, then fail for invalid job |
+| UI card and invalid job share a page | Count/filter UI card first, then fail for invalid job |
 
 ### 5. Good / Base / Bad Cases
 
@@ -970,6 +998,14 @@ Historical frozen parameters:
 - **Good:** A page has 10 job cards plus 2 explicit banner cards. Its raw row
   count is 12, `non_job_cards_observed=2`, and only 10 rows enter identity and
   staging.
+- **Base:** `cardType=3` separates exhausted category results from recommended
+  jobs. The separator is counted as non-job evidence; later recommendations
+  retain supplemental identity evidence but cannot enter this target's staging
+  or distinct-result counts.
+- **Base:** a keyword with no direct match returns `cardType=2`, then
+  `cardType=3`, then recommendations. Both UI cards are non-job evidence, the
+  keyword contributes zero result IDs, and recommendation-only pages confirm
+  exhaustion without an identity audit.
 - **Bad:** Runtime appends a hidden keyword loop after plan confirmation. This
   makes workload review and fingerprints untruthful.
 - **Bad:** Treating every missing `jobId` as an advertisement hides source
@@ -985,8 +1021,9 @@ Historical frozen parameters:
   exemption, and unchanged other-source bounds.
 - `backend/tests/test_listing_runtime.py`: legacy snapshot decode/execution,
   frozen keyword target order, search payloads without `rcdType`, banner/job
-  mixed pages, job-shaped identity failure, production metric projection, and
-  frozen historical serializer keys.
+  mixed pages, empty-state plus recommendation-separator cohort isolation and
+  two-page result confirmation, job-shaped identity failure, production metric
+  projection, and frozen historical serializer keys.
 - `backend/tests/test_automation_review_service.py`: under-budget saved
   configuration remains visible with blocked readiness.
 - Run dispatch-plan/runtime/Crawl Control regression suites, Ruff, Python
@@ -1017,3 +1054,100 @@ for runtime_target in listing_runtime_plan.targets:
 
 The compiled target list is the reviewed workload and the only runtime request
 authority.
+
+## Scenario: Adaptive OfferToday listing coverage
+
+### 1. Scope / Trigger
+
+Use this contract for newly authored OfferToday listing preview, dispatch,
+pagination, evidence, and keyword maintenance.
+
+### 2. Signatures
+
+```text
+GET  /api/offertoday-keyword-packs
+GET  /api/offertoday-keyword-packs/csv
+POST /api/offertoday-keyword-packs/csv/preview
+POST /api/offertoday-keyword-packs/csv/confirm
+```
+
+```python
+OfferTodayTaxonomyResolver.refresh_or_last_verified(refresh=True)
+OfferTodayKeywordCatalog.preview_csv(csv_bytes, actor=actor)
+OfferTodayKeywordCatalog.confirm_csv(confirmation_token=token, csv_hash=hash, actor=actor)
+```
+
+### 3. Contracts
+
+- Operators select exactly one active top-level classification. Resolution
+  freezes root-without-keyword, every active child-without-keyword, then enabled
+  root keywords. Never multiply children by keywords.
+- Live taxonomy refresh is bounded. Failure uses the last verified immutable
+  snapshot with a warning; no verified snapshot blocks dispatch.
+- CSV identity is classification ID plus case/whitespace-normalized keyword.
+  Import is merge/upsert, omission is unchanged, `enabled=false` disables, and
+  150 enabled keywords per root is the limit. Preview is non-mutating;
+  confirmation is atomic, expiring, actor-bound, and single-use.
+- Dispatch freezes taxonomy and keyword fingerprints and exact target payloads.
+  Runtime never re-resolves them. Historical browse and A-Z targets remain
+  executable.
+- Three consecutive successful `hasMore=true` pages with no new IDs trigger one
+  fresh-session stall recovery. Seen IDs survive restart. A second stall makes
+  only that target partial and later targets continue.
+- A non-empty `hasMore=false` page is not completion. Two consecutive empty
+  pages establish exhaustion. Once terminal confirmation has begun, an empty
+  response may omit all four response-cursor fields; the runner records that
+  absence and reuses the last verified cursor for the second confirmation
+  request. Partially present cursor fields, page-size drift, and missing cursor
+  fields on a non-terminal/non-empty page remain contract violations. Any
+  partial target makes the run partial.
+- Completed keyword targets update runtime-owned latest contribution evidence;
+  CSV evidence columns are read-only and partial targets do not overwrite them.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| Unknown/inactive/non-root owner | Reject before catalog mutation or request |
+| Invalid/duplicate/over-limit CSV | Row errors; no catalog mutation |
+| Stale, expired, or replayed confirm token | `409 KEYWORD_CSV_REVIEW_STALE` |
+| Refresh failure with prior snapshot | Resolve stale snapshot and warn |
+| Refresh failure without snapshot | Block dispatch |
+| Second no-growth stall | Retain rows; target partial; continue |
+| Page/run cap before two-empty evidence | Target/run partial, never complete |
+| Terminal empty response omits every response-cursor field | Reuse last verified cursor and continue confirmation |
+| Terminal response supplies only some cursor fields | `cursor_contract_violation` hard stop |
+
+### 5. Good / Base / Bad Cases
+
+- **Good:** one root, four current children, and ten enabled keywords freeze 15
+  targets in native-then-keyword order and show exact workload before dispatch.
+- **Base:** a non-IT root with no keyword pack still runs root plus live children.
+- **Bad:** React generates keywords, runtime reads the current catalog after
+  confirmation, or a repeated cohort consumes the remaining page allowance.
+
+### 6. Tests Required
+
+- Catalog tests cover 127-term seed, normalization, merge, evidence protection,
+  limits, stale/replayed confirmation, and completed-execution evidence.
+- Scope/dispatch tests cover ordering, no Cartesian product, frozen payloads,
+  stale taxonomy fallback, cap enforcement, and historical target decoding.
+- Runner tests cover two-empty completion, terminal reset, one independent stall
+  restart, retained deduplication, second-stall partial, later-target progress,
+  and terminal-empty reuse of the last verified cursor without one-empty
+  completion.
+- UI tests cover route, read-only/filterable table, CSV preview/confirm,
+  invalidation, and server-owned native/keyword workload rendering.
+
+### 7. Wrong vs Correct
+
+```python
+# Wrong: hidden mutable expansion
+for child in current_children:
+    for keyword in current_keywords:
+        fetch(child, keyword)
+
+# Correct: execute only immutable reviewed targets
+for target in listing_runtime_plan.targets:
+    fetch_frozen_target(target)
+```

@@ -15,9 +15,6 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
-from app.job_intelligence.current_taxonomies.company_projection import (
-    project_current_company_industry,
-)
 from app.models.crawl_job_listing import CrawlJobListing
 from app.models.job import Job
 from app.repositories.company_repository import CompanyRepository
@@ -297,12 +294,6 @@ class OfferTodayJobRepairService:
             self.db,
             company_data,
             auto_commit=False,
-        )
-        project_current_company_industry(
-            self.db,
-            company.id,
-            canonical,
-            outbox_repository=self.event_outbox_repository,
         )
 
         before_description = str(job.description or "").strip()

@@ -140,6 +140,7 @@ function installFetch({
   runs = [activeRun, failedRun],
   previewCount = 12,
   filterOptions = null,
+  createRunResponse = null,
 } = {}) {
   globalThis.fetch = vi.fn((input, init = {}) => {
     const url = String(input);
@@ -174,6 +175,9 @@ function installFetch({
       return jsonResponse({ ...activeRun, status: 'stopping' });
     }
     if (url.includes('/ai/runs') && init.method === 'POST') {
+      if (createRunResponse) {
+        return jsonResponse(createRunResponse.payload, createRunResponse.status);
+      }
       return jsonResponse({ ...activeRun, id: 'filtered-run', status: 'pending' });
     }
     if (url.includes('/ai/runs')) {
@@ -320,6 +324,46 @@ describe('AIEnrichmentPage', () => {
     });
   });
 
+  it('shows actionable Jobs profile readiness feedback for a 409', async () => {
+    installFetch({
+      overviewPayload: { ...overview, active_runs: 0 },
+      runs: [completedRun],
+      createRunResponse: {
+        status: 409,
+        payload: { detail: 'jobs profile is not configured' },
+      },
+    });
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    await user.click(await screen.findByLabelText('jobsdb'));
+    await waitFor(() => expect(screen.getByText('12 match · 12 will run')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Run 12 filtered jobs' }));
+
+    expect(await screen.findByText(/jobs profile is not configured/i)).toBeInTheDocument();
+    expect(screen.getByText(/configure and successfully test the Jobs profile/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Open AI Settings/i })).toHaveAttribute('href', '#settings');
+  });
+
+  it('preserves the active-run ID for a structured 409 conflict', async () => {
+    installFetch({
+      overviewPayload: { ...overview, active_runs: 0 },
+      runs: [completedRun],
+      createRunResponse: {
+        status: 409,
+        payload: { detail: { code: 'active_run_exists', run_id: 'run-conflict-9' } },
+      },
+    });
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    await user.click(await screen.findByLabelText('jobsdb'));
+    await waitFor(() => expect(screen.getByText('12 match · 12 will run')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Run 12 filtered jobs' }));
+
+    expect(await screen.findByText('Another run is active: run-conflict-9')).toBeInTheDocument();
+  });
+
   it('submits source-qualified path IDs when different Sources reuse a label', async () => {
     installFetch({
       overviewPayload: { ...overview, active_runs: 0 },
@@ -422,6 +466,35 @@ describe('AIEnrichmentPage', () => {
     render(<AIEnrichmentPage />);
     await user.click(await screen.findByRole('button', { name: /Retry failed/i }));
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/ai/runs/run-failed-3/retry-failed', { method: 'POST' });
+  });
+
+  it('resumes only cancelled Jev backfill work as a new durable run', async () => {
+    const cancelledBackfill = {
+      ...completedRun,
+      id: 'run-backfill-cancelled',
+      source_type: 'jev_skill_backfill',
+      status: 'cancelled',
+      completed_items: 2,
+      cancelled_items: 3,
+    };
+    installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [cancelledBackfill] });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((input, init) => {
+      if (String(input).endsWith('/resume-cancelled-backfill')) {
+        return jsonResponse({ id: 'run-backfill-resumed' });
+      }
+      return originalFetch(input, init);
+    });
+    const user = userEvent.setup();
+    render(<AIEnrichmentPage />);
+
+    await user.click(await screen.findByRole('button', { name: /Resume cancelled jobs \(3\)/i }));
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/ai/runs/run-backfill-cancelled/resume-cancelled-backfill',
+      { method: 'POST' },
+    );
+    expect(await screen.findByText(/run-backfill-resumed/)).toBeInTheDocument();
   });
 
   it('copies the visible run UUID for debugging', async () => {

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from tempfile import TemporaryDirectory
 from typing import Any
 
+import requests
+
 from app.scraper.manual_action import ManualActionRequiredError
 from app.scraper.offertoday.category_registry import (
     OFFERTODAY_CATEGORIES_L1,
+    OfferTodayCategory,
     offertoday_category_registry_hash,
     offertoday_category_registry_payload,
 )
@@ -25,8 +28,10 @@ from app.sources.offertoday.constants import (
     OFFERTODAY_LISTING_SEARCH_URL,
     build_offertoday_listing_payload,
 )
-from app.sources.offertoday.search_space import (
-    OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS,
+
+
+OFFERTODAY_TAXONOMY_URL = (
+    "https://www.offertoday.com/wapi/geek/recommend/filter/content/all"
 )
 
 
@@ -41,24 +46,28 @@ class OfferTodaySourceClassificationAdapter:
         self,
         *,
         browser_runtime_factory: Callable[[], Any] | None = None,
+        live_discovery: bool = False,
+        taxonomy_payload_provider: Callable[[], Mapping[str, Any]] | None = None,
+        taxonomy_timeout_seconds: float = 15.0,
     ) -> None:
         self._browser_runtime_factory = browser_runtime_factory
+        self._live_discovery = live_discovery
+        self._taxonomy_payload_provider = taxonomy_payload_provider
+        self._taxonomy_timeout_seconds = taxonomy_timeout_seconds
 
     @staticmethod
     def _target(
         classification_id: str,
         category_code: int,
-        keyword: str,
     ) -> SourceQueryTarget:
         return SourceQueryTarget(
             adapter="offertoday.category",
             classification_id=classification_id,
             payload={
                 "category_code": category_code,
-                "search_family": "classification_keyword_sweep",
-                "endpoint": "search",
-                "keyword": keyword,
-                "rcd_type": None,
+                "endpoint": "browse",
+                "keyword": "",
+                "rcd_type": 7,
             },
         )
 
@@ -68,18 +77,148 @@ class OfferTodaySourceClassificationAdapter:
         classification_id: str,
         category_code: int,
     ) -> tuple[SourceQueryTarget, ...]:
-        return tuple(
-            cls._target(classification_id, category_code, keyword)
-            for keyword in OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS
-        )
+        return (cls._target(classification_id, category_code),)
 
     @staticmethod
     def _semantics_hash(targets: tuple[SourceQueryTarget, ...]) -> str:
-        return payload_fingerprint([target.to_payload() for target in targets])
+        return (
+            targets[0].fingerprint
+            if len(targets) == 1
+            else payload_fingerprint([target.to_payload() for target in targets])
+        )
 
     def discover(self) -> DiscoveredCatalog:
+        if self._live_discovery:
+            return self.discover_live()
+        return self._build_catalog(
+            OFFERTODAY_CATEGORIES_L1,
+            source_payload=offertoday_category_registry_payload(),
+            provenance={
+                "adapter": "offertoday",
+                "discovery": "bundled_registry",
+                "source_classification_hash": offertoday_category_registry_hash(),
+            },
+        )
+
+    def discover_live(self) -> DiscoveredCatalog:
+        payload = dict(
+            self._taxonomy_payload_provider()
+            if self._taxonomy_payload_provider is not None
+            else self._fetch_live_taxonomy_payload()
+        )
+        categories = self._parse_live_categories(payload)
+        source_payload = {
+            "endpoint": "/wapi/geek/recommend/filter/content/all",
+            "language": "en",
+            "categories": [item.to_registry_dict() for item in categories],
+        }
+        return self._build_catalog(
+            categories,
+            source_payload=source_payload,
+            provenance={
+                "adapter": "offertoday",
+                "discovery": "live_taxonomy",
+                "endpoint": "/wapi/geek/recommend/filter/content/all",
+                "source_classification_hash": payload_fingerprint(source_payload),
+            },
+        )
+
+    def _fetch_live_taxonomy_payload(self) -> Mapping[str, Any]:
+        response = requests.get(
+            OFFERTODAY_TAXONOMY_URL,
+            headers={"Accept": "application/json", "Accept-Language": "en"},
+            timeout=self._taxonomy_timeout_seconds,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, Mapping):
+            raise ValueError("OfferToday taxonomy response must be an object")
+        return payload
+
+    @classmethod
+    def _parse_live_categories(
+        cls, payload: Mapping[str, Any]
+    ) -> tuple[OfferTodayCategory, ...]:
+        if payload.get("code") != 0:
+            raise ValueError("OfferToday taxonomy response code is not successful")
+        try:
+            raw_categories = payload["data"]["en"]["POSITION"]["children"]
+        except (KeyError, TypeError) as exc:
+            raise ValueError("OfferToday taxonomy POSITION tree is missing") from exc
+        if not isinstance(raw_categories, list) or not raw_categories:
+            raise ValueError("OfferToday taxonomy POSITION roots are missing")
+
+        roots = tuple(cls._parse_live_node(item, root=True) for item in raw_categories)
+        root_codes = {item.code for item in roots}
+        if len(root_codes) != len(roots):
+            raise ValueError("OfferToday taxonomy roots contain duplicate codes")
+        child_codes: set[int] = set()
+        for root in roots:
+            alias_count = 0
+            for child in root.children:
+                if child.parent_code != root.code:
+                    raise ValueError("OfferToday taxonomy child parent is inconsistent")
+                if child.code == root.code:
+                    alias_count += 1
+                elif child.code in child_codes or child.code in root_codes:
+                    raise ValueError("OfferToday taxonomy child code is not unique")
+                else:
+                    child_codes.add(child.code)
+            if alias_count > 1:
+                raise ValueError("OfferToday taxonomy root has duplicate all-category aliases")
+        return roots
+
+    @classmethod
+    def _parse_live_node(
+        cls,
+        value: Any,
+        *,
+        root: bool,
+    ) -> OfferTodayCategory:
+        if not isinstance(value, Mapping):
+            raise ValueError("OfferToday taxonomy node must be an object")
+        code = value.get("code")
+        name = value.get("name")
+        level = value.get("level")
+        parent_code = value.get("parentCode")
+        children = value.get("children")
+        if (
+            not isinstance(code, int)
+            or isinstance(code, bool)
+            or not isinstance(name, str)
+            or not name.strip()
+            or name != name.strip()
+            or not isinstance(level, int)
+            or isinstance(level, bool)
+            or level != (1 if root else 2)
+            or not isinstance(parent_code, int)
+            or isinstance(parent_code, bool)
+            or not isinstance(children, list)
+        ):
+            raise ValueError("OfferToday taxonomy node fields are invalid")
+        if not root and children:
+            raise ValueError("OfferToday taxonomy child cannot own descendants")
+        return OfferTodayCategory(
+            code=code,
+            name=name,
+            parent_code=0 if root else parent_code,
+            level=level,
+            children=(
+                tuple(cls._parse_live_node(child, root=False) for child in children)
+                if root
+                else ()
+            ),
+        )
+
+    def _build_catalog(
+        self,
+        categories: Sequence[OfferTodayCategory],
+        *,
+        source_payload: Mapping[str, Any],
+        provenance: Mapping[str, Any],
+    ) -> DiscoveredCatalog:
         nodes: list[CatalogNodeSnapshot] = []
-        for root in OFFERTODAY_CATEGORIES_L1:
+        for root in categories:
             root_classification_id = f"offertoday:{root.code}"
             root_node_key = _root_key(root.code)
             root_targets = self._targets(root_classification_id, root.code)
@@ -148,19 +287,15 @@ class OfferTodaySourceClassificationAdapter:
             capabilities=CatalogScopeCapabilities(
                 supports_all_scope=True,
                 all_scope_root_node_keys=tuple(
-                    _root_key(root.code) for root in OFFERTODAY_CATEGORIES_L1
+                    _root_key(root.code) for root in categories
                 ),
                 recommended_scope={
                     "mode": "subtree",
                     "classification_ids": ["offertoday:118000"],
                 },
             ),
-            source_payload=offertoday_category_registry_payload(),
-            provenance={
-                "adapter": "offertoday",
-                "discovery": "bundled_registry",
-                "source_classification_hash": offertoday_category_registry_hash(),
-            },
+            source_payload=dict(source_payload),
+            provenance=dict(provenance),
         )
 
     def compile(self, node: CatalogNodeSnapshot) -> tuple[SourceQueryTarget, ...]:
@@ -183,14 +318,7 @@ class OfferTodaySourceClassificationAdapter:
                 "OfferToday category code must be an integer",
                 node_key=node.node_key,
             ) from exc
-        targets = self._targets(node.classification_id, category_code)
-        if len(targets) != len(OFFERTODAY_CLASSIFICATION_SWEEP_KEYWORDS):
-            raise CatalogValidationError(
-                "SOURCE_CLASSIFICATION_NOT_EXECUTABLE",
-                "OfferToday classification did not compile to the bounded keyword sweep",
-                node_key=node.node_key,
-            )
-        return targets
+        return self._targets(node.classification_id, category_code)
 
     async def smoke(self, target: SourceQueryTarget) -> dict[str, Any]:
         try:

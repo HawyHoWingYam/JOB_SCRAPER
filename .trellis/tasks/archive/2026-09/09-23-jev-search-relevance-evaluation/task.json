@@ -1,0 +1,30 @@
+{
+  "id": "jev-search-relevance-evaluation",
+  "name": "jev-search-relevance-evaluation",
+  "title": "Jev phase 4: bounded search relevance evaluation",
+  "description": "Evaluate bounded Jev reranking without changing search candidate, facet, pagination, export, or source identity contracts.",
+  "status": "completed",
+  "dev_type": "feature",
+  "scope": "backend offline evaluation",
+  "package": "backend",
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": "2026-09-23",
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-23-research-jev-use-cases",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue_number": 69,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/69",
+    "github_issue": 69
+  }
+}

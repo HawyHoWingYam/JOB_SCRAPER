@@ -125,6 +125,39 @@ const defaultProviderCatalog = {
     { value: "openai_responses", label: "OpenAI Responses" },
   ],
 };
+const defaultJevRequest = {
+  enabled: false,
+  endpoint: "https://www.rsiai.net/v1/systemone",
+  model: "jev-latest",
+  api_key: "",
+  allowance_microdollars: 10_000_000,
+  input_microdollars_per_million_tokens: null,
+  output_microdollars_per_million_tokens: null,
+  max_request_reservation_microdollars: null,
+  sample_limit: 100,
+  question_batch_limit: 10,
+  concurrency: 2,
+  retry_limit: 0,
+  timeout_seconds: 30,
+  evidence_threshold: "0.800",
+  recommendation_threshold: "0.800",
+  duplicate_enabled: false,
+  duplicate_candidate_limit: 3,
+  duplicate_corpus_limit: 200,
+  crawl_quality_enabled: false,
+  crawl_quality_batch_limit: 20,
+  search_rerank_enabled: false,
+  search_rerank_candidate_limit: 20,
+  incident_triage_enabled: false,
+  incident_triage_event_limit: 200,
+  maintenance_enabled: false,
+  maintenance_model: "jev-latest",
+  maintenance_allowance_microdollars: 2_000_000,
+  maintenance_interval_days: 30,
+  maintenance_min_candidates: 50,
+  maintenance_batch_size: 100,
+  maintenance_threshold: "0.900",
+};
 const aiSettingsPayload = {
   provider_catalog: defaultProviderCatalog,
   persisted_config: {
@@ -243,6 +276,17 @@ const aiSettingsPayload = {
     is_ready: false,
     last_test_status: "untested",
   },
+  jev: {
+    ...defaultJevRequest,
+    has_api_key: true,
+    api_key_preview: "jev-...alue",
+    spent_microdollars: 0,
+    reserved_microdollars: 0,
+    remaining_microdollars: 10_000_000,
+    maintenance_spent_microdollars: 0,
+    maintenance_reserved_microdollars: 0,
+    maintenance_remaining_microdollars: 2_000_000,
+  },
 };
 
 describe("AISettingsPage", () => {
@@ -332,6 +376,18 @@ describe("AISettingsPage", () => {
         return mockJsonResponse(currentSettingsPayload);
       }
 
+      if (url.includes("/api/jev/runs")) {
+        return mockJsonResponse({
+          runs: [],
+          allowance: {
+            allowance_microdollars: 10_000_000,
+            spent_microdollars: 0,
+            reserved_microdollars: 0,
+            remaining_microdollars: 10_000_000,
+          },
+        });
+      }
+
       if (url.includes("/api/settings/scraper-pacing")) {
         return mockJsonResponse({
           items: ["jobsdb", "ctgoodjobs", "offertoday"].map((source_site) => ({
@@ -402,6 +458,184 @@ describe("AISettingsPage", () => {
     expect(screen.getByText(/comp\.\.\.9999/i)).toBeInTheDocument();
     expect(screen.queryByText(/configured provider/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/degraded state/i)).not.toBeInTheDocument();
+  });
+
+  it("edits Jev future-run defaults through the shared settings save", async () => {
+    const user = userEvent.setup();
+    putSettingsResponse.mockImplementationOnce(async (_url, init) => {
+      const body = JSON.parse(init.body);
+      expect(body.jev).toEqual({
+        ...defaultJevRequest,
+        enabled: true,
+        api_key: "new-jev-secret",
+        allowance_microdollars: 12_500_000,
+      });
+      return mockJsonResponse({
+        ...currentSettingsPayload,
+        jev: {
+          ...currentSettingsPayload.jev,
+          enabled: true,
+          allowance_microdollars: 12_500_000,
+          remaining_microdollars: 12_500_000,
+          api_key_preview: "new-...cret",
+        },
+      });
+    });
+
+    render(<AISettingsPage />);
+    await waitForSettingsLoaded();
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: /jev system one/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText(/jev endpoint/i)).toHaveValue(
+      "https://www.rsiai.net/v1/systemone",
+    );
+    expect(screen.getByLabelText(/jev model/i)).toHaveValue("jev-latest");
+    expect(screen.getByText("jev-...alue")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText(/^enable jev$/i));
+    await user.type(
+      screen.getByLabelText(/^jev api key$/i),
+      "new-jev-secret",
+    );
+    await user.clear(screen.getByLabelText(/jev allowance/i));
+    await user.type(screen.getByLabelText(/jev allowance/i), "12.50");
+    await user.click(screen.getByRole("button", { name: /save settings/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /ai runtime settings saved/i,
+    );
+    expect(screen.getByLabelText(/^enable jev$/i)).toBeChecked();
+    expect(screen.getByLabelText(/jev allowance/i)).toHaveValue(12.5);
+    expect(screen.getByText("new-...cret")).toBeInTheDocument();
+  });
+
+  it("starts an explicit Jev smoke run and renders its auditable receipt", async () => {
+    const user = userEvent.setup();
+    currentSettingsPayload.jev.enabled = true;
+    currentSettingsPayload.jev.max_request_reservation_microdollars = 50_000;
+    const defaultFetch = globalThis.fetch;
+    const completedRun = {
+      id: "run-1",
+      purpose: "configuration_smoke_test",
+      rubric_version: "jev-smoke-v1",
+      status: "completed",
+      settings_snapshot: {
+        model: "jev-latest",
+        endpoint: "https://www.rsiai.net/v1/systemone",
+      },
+      total_items: 1,
+      pending_items: 0,
+      running_items: 0,
+      completed_items: 1,
+      failed_items: 0,
+      cancelled_items: 0,
+      items: [
+        {
+          id: "item-1",
+          subject_id: "settings-smoke-test",
+          status: "completed",
+          attempt_count: 1,
+          result: {
+            usage: { input_tokens: 10, output_tokens: 1 },
+          },
+        },
+      ],
+      allowance: {
+        allowance_microdollars: 10_000_000,
+        spent_microdollars: 50_000,
+        reserved_microdollars: 0,
+        remaining_microdollars: 9_950_000,
+      },
+    };
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = String(input);
+      if (url.endsWith("/api/jev/runs") && init.method === "POST") {
+        return mockJsonResponse({ ...completedRun, status: "pending" });
+      }
+      if (url.endsWith("/api/jev/runs/run-1/execute-next")) {
+        return mockJsonResponse(completedRun);
+      }
+      return defaultFetch(input, init);
+    });
+
+    render(<AISettingsPage />);
+    await waitForSettingsLoaded();
+    await user.click(
+      screen.getByRole("button", { name: /run one jev smoke test/i }),
+    );
+
+    expect(await screen.findByText(/configuration_smoke_test/i)).toBeInTheDocument();
+    expect(screen.getByText(/completed · 1\/1/i)).toBeInTheDocument();
+    expect(screen.getByText(/11 tokens/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/allowance usd 10\.00 · spent 0\.05 · reserved 0\.00 · remaining 9\.95/i),
+    ).toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jev/runs",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/jev/runs/run-1/execute-next",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("shows allowance exhaustion and refreshes the persisted failed smoke run", async () => {
+    const user = userEvent.setup();
+    currentSettingsPayload.jev.enabled = true;
+    currentSettingsPayload.jev.max_request_reservation_microdollars = 50_000;
+    const defaultFetch = globalThis.fetch;
+    const pendingRun = {
+      id: "run-budget",
+      purpose: "configuration_smoke_test",
+      rubric_version: "jev-smoke-v1",
+      status: "pending",
+      settings_snapshot: { model: "jev-latest", endpoint: "https://www.rsiai.net/v1/systemone" },
+      total_items: 1,
+      pending_items: 1,
+      running_items: 0,
+      completed_items: 0,
+      failed_items: 0,
+      cancelled_items: 0,
+      items: [],
+    };
+    const failedRun = {
+      ...pendingRun,
+      status: "completed_with_failures",
+      pending_items: 0,
+      failed_items: 1,
+      items: [{
+        id: "item-budget",
+        subject_id: "settings-smoke-test",
+        status: "failed",
+        attempt_count: 1,
+        error_code: "jev_allowance_exhausted",
+      }],
+    };
+    globalThis.fetch = vi.fn((input, init = {}) => {
+      const url = String(input);
+      if (url.endsWith("/api/jev/runs") && init.method === "POST") {
+        return mockJsonResponse(pendingRun);
+      }
+      if (url.endsWith("/api/jev/runs/run-budget/execute-next")) {
+        return mockJsonResponse({
+          detail: { code: "jev_allowance_exhausted", remaining_microdollars: 12 },
+        }, { ok: false, status: 409 });
+      }
+      if (url.endsWith("/api/jev/runs/run-budget")) {
+        return mockJsonResponse(failedRun);
+      }
+      return defaultFetch(input, init);
+    });
+
+    render(<AISettingsPage />);
+    await waitForSettingsLoaded();
+    await user.click(screen.getByRole("button", { name: /run one jev smoke test/i }));
+
+    expect(await screen.findByText("jev_allowance_exhausted")).toBeInTheDocument();
+    expect(screen.getByText(/completed_with_failures · 0\/1/i)).toBeInTheDocument();
   });
 
   it("navigates between AI Runtime and Scraper Pacing settings sections", async () => {
@@ -703,6 +937,9 @@ describe("AISettingsPage", () => {
         ai_enrichment_run_concurrency: 8,
         company_ai_enrichment_run_concurrency: 3,
         skill_auto_create_distinct_job_threshold: 5,
+        skill_candidate_recommendation_limit: 5,
+        skill_candidate_evidence_limit: 5,
+        jev: defaultJevRequest,
         custom_api_key: "",
         custom_model: "gpt-4.1-mini",
         custom_base_url: "https://api.example.com/v1",
@@ -790,6 +1027,9 @@ describe("AISettingsPage", () => {
         ai_enrichment_run_concurrency: 12,
         company_ai_enrichment_run_concurrency: 4,
         skill_auto_create_distinct_job_threshold: 5,
+        skill_candidate_recommendation_limit: 5,
+        skill_candidate_evidence_limit: 5,
+        jev: defaultJevRequest,
         gemini_api_key: "",
         gemini_model: "gemini-2.5-pro",
         company_anthropic_api_key: "",
@@ -871,6 +1111,9 @@ describe("AISettingsPage", () => {
         ai_enrichment_run_concurrency: 9,
         company_ai_enrichment_run_concurrency: 3,
         skill_auto_create_distinct_job_threshold: 5,
+        skill_candidate_recommendation_limit: 5,
+        skill_candidate_evidence_limit: 5,
+        jev: defaultJevRequest,
         anthropic_api_key: "anthropic-secret-987654",
         anthropic_model: "claude-sonnet-4-5",
         anthropic_base_url: "https://api.anthropic.com/v1",
@@ -1414,6 +1657,9 @@ describe("AISettingsPage", () => {
         ai_enrichment_run_concurrency: 8,
         company_ai_enrichment_run_concurrency: 2,
         skill_auto_create_distinct_job_threshold: 5,
+        skill_candidate_recommendation_limit: 5,
+        skill_candidate_evidence_limit: 5,
+        jev: defaultJevRequest,
         custom_api_key: "deepseek-secret",
         custom_model: "deepseek-v4-flash",
         custom_base_url: "https://api.deepseek.com",

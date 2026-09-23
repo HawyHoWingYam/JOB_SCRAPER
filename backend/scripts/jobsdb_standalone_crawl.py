@@ -27,6 +27,7 @@ from app.crawl_control.contracts import (  # noqa: E402
     JobsDBQueryTargetParametersV1,
 )
 from app.crawl_control.detail_runtime import DetailRuntimePlan  # noqa: E402
+from app.crawl_control.errors import DetailPersistenceError  # noqa: E402
 from app.crawl_control.listing_runtime import ListingRuntimePlan  # noqa: E402
 from app.crawl_control.runtime_authority import (  # noqa: E402
     WorkerStartupInput,
@@ -34,7 +35,6 @@ from app.crawl_control.runtime_authority import (  # noqa: E402
 )
 from app.repositories.job_repository import JobRepository  # noqa: E402
 from app.scraper.category_scraper import CategoryListScraper  # noqa: E402
-from app.scraper.job_detail_scraper import JobDetailScraper  # noqa: E402
 from app.scraper.jobsdb_browser_detail_scraper import JobsDBBrowserDetailScraper  # noqa: E402
 from app.scraper.log_events import build_scrape_log_event  # noqa: E402
 from app.scraper.manual_action import (  # noqa: E402
@@ -51,7 +51,10 @@ from app.services.crawl_cancellation_token import (  # noqa: E402
 from app.services.detail_pacing import build_detail_pacing_controller  # noqa: E402
 from app.sources.contracts import build_jobsdb_canonical_job  # noqa: E402
 from app.source_classifications.runtime import load_source_query_plan  # noqa: E402
-from app.workers.run_ingest_worker import IngestWorkerService  # noqa: E402
+from app.workers.run_ingest_worker import (  # noqa: E402
+    IngestWorkerService,
+    InvalidIngestPayloadError,
+)
 
 JOBSDB_SOURCE_SITE = "jobsdb"
 DEFAULT_DETAIL_STATUSES = ["pending", "manual_action_required"]
@@ -593,10 +596,6 @@ async def run_listing_phase(args, crawl_runtime: CrawlJobRuntime) -> ListingBatc
     )
 
 
-def _should_use_headed_detail_scraper(args) -> bool:
-    return str(args.crawl_mode or "").strip().lower() == "headed" or bool(args.is_resume)
-
-
 def _build_detail_scraper_request_payload(args) -> dict[str, Any]:
     return {
         "crawl_job_id": args.crawl_job_id,
@@ -616,21 +615,17 @@ def _build_detail_scraper_request_payload(args) -> dict[str, Any]:
 
 @asynccontextmanager
 async def _detail_scraper_context(args) -> AsyncIterator[Any]:
-    if _should_use_headed_detail_scraper(args):
-        async with JobsDBBrowserDetailScraper(
-            request_payload=_build_detail_scraper_request_payload(args),
-            browser_channel=(
-                getattr(args, "manual_action_browser_channel", "") or None
-            ),
-            user_data_dir=(
-                getattr(args, "manual_action_browser_profile_path", "") or None
-            ),
-            cancellation_token=resolve_cancellation_token(args),
-        ) as scraper:
-            yield scraper
-        return
-
-    yield JobDetailScraper()
+    async with JobsDBBrowserDetailScraper(
+        request_payload=_build_detail_scraper_request_payload(args),
+        browser_channel=(
+            getattr(args, "manual_action_browser_channel", "") or None
+        ),
+        user_data_dir=(
+            getattr(args, "manual_action_browser_profile_path", "") or None
+        ),
+        cancellation_token=resolve_cancellation_token(args),
+    ) as scraper:
+        yield scraper
 
 
 async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, int]:
@@ -786,22 +781,35 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                     ).to_dict()
                     if ingest_service is None:
                         ingest_service = IngestWorkerService()
-                    company_data = ingest_service._build_company_data(canonical)
-                    company, _ = company_repository.upsert_company(db, company_data, auto_commit=False)
-                    ingest_service.project_company_industry(db, company, canonical)
-                    job_data = ingest_service._build_job_data(canonical, company.id)
-                    saved_job, _ = job_repository.upsert_source_job(
-                        db,
-                        job_data,
-                        skip_existing=False,
-                        auto_commit=False,
-                    )
-                    ingest_service.project_source_attributes(
-                        db,
-                        saved_job,
-                        canonical,
-                    )
-                    db.commit()
+                    try:
+                        company_data = ingest_service._build_company_data(canonical)
+                        company, _ = company_repository.upsert_company(
+                            db,
+                            company_data,
+                            auto_commit=False,
+                        )
+                        job_data = ingest_service._build_job_data(canonical, company.id)
+                        saved_job, _ = job_repository.upsert_source_job(
+                            db,
+                            job_data,
+                            skip_existing=False,
+                            auto_commit=False,
+                        )
+                        ingest_service.project_source_attributes(
+                            db,
+                            saved_job,
+                            canonical,
+                        )
+                        db.commit()
+                    except InvalidIngestPayloadError:
+                        db.rollback()
+                        raise
+                    except Exception as exc:
+                        db.rollback()
+                        raise DetailPersistenceError(
+                            source_site=JOBSDB_SOURCE_SITE,
+                            source_job_id=target["source_job_id"],
+                        ) from exc
                     published_job_id = saved_job.id
                     crawl_runtime.mark_detail_completed(
                         listing_ids=_detail_target_listing_ids(target),
@@ -889,6 +897,14 @@ async def run_detail_phase(args, crawl_runtime: CrawlJobRuntime) -> dict[str, in
                             cumulative_saved=counts["completed"],
                         )
                     )
+                    raise
+                except DetailPersistenceError as exc:
+                    crawl_runtime.mark_detail_failed(
+                        listing_ids=_detail_target_listing_ids(target),
+                        detail_crawl_job_id=args.crawl_job_id,
+                        error_message=str(exc),
+                    )
+                    counts["failed"] += 1
                     raise
                 except Exception as exc:
                     db.rollback()
@@ -1053,6 +1069,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
 
     listing_result = None
     detail_result: dict[str, int] | None = None
+    active_phase = "listing" if args.crawl_phase in {"listing", "full"} else "detail"
 
     try:
         if args.crawl_phase in {"full", "listing"}:
@@ -1106,6 +1123,7 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 return 1
 
         if args.crawl_phase in {"full", "detail"}:
+            active_phase = "detail"
             try:
                 detail_result = await run_detail_phase(args, crawl_runtime)
             except ManualActionRequiredError as exc:
@@ -1198,20 +1216,29 @@ async def main(argv: Sequence[str] | None = None) -> int:
                 error_type=type(exc).__name__,
             )
         )
-        crawl_runtime.mark_failed(
-            crawl_job_id=args.crawl_job_id,
-            source_site=JOBSDB_SOURCE_SITE,
-            error_message=str(exc),
-            payload=(
-                _build_listing_request_payload(args)
-                if args.crawl_phase == "listing"
-                else {
-                    "crawl_phase": args.crawl_phase,
-                    "crawl_mode": args.crawl_mode,
-                    "category_ids": list(args.category_ids),
-                }
-            ),
+        failure_payload = (
+            _build_listing_request_payload(args)
+            if args.crawl_phase == "listing"
+            else {
+                "crawl_phase": args.crawl_phase,
+                "crawl_mode": args.crawl_mode,
+                "category_ids": list(args.category_ids),
+            }
         )
+        if active_phase == "detail":
+            crawl_runtime.mark_detail_run_failed(
+                crawl_job_id=args.crawl_job_id,
+                source_site=JOBSDB_SOURCE_SITE,
+                error_message=str(exc),
+                payload=failure_payload,
+            )
+        else:
+            crawl_runtime.mark_failed(
+                crawl_job_id=args.crawl_job_id,
+                source_site=JOBSDB_SOURCE_SITE,
+                error_message=str(exc),
+                payload=failure_payload,
+            )
         return 1
 
 

@@ -8,7 +8,10 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 import pytest
 
-from app.models.source_classification import SOURCE_CLASSIFICATION_TABLES
+from app.models.source_classification import (
+    SOURCE_CLASSIFICATION_TABLES,
+    SourceClassification,
+)
 from app.crawl_control.ordinary_scope import (
     OrdinaryCrawlScopeResolver,
     SourceCrawlScope,
@@ -280,6 +283,80 @@ def test_partial_sync_never_marks_unseen_roots_inactive():
         engine.dispose()
 
 
+def test_offertoday_complete_sync_inactivates_missing_children_without_deleting():
+    engine, db = _session()
+    try:
+        registry = SourceClassificationRegistry(db)
+        full = (
+            ObservedSourceClassification(
+                classification_id="offertoday:100000",
+                native_id="100000",
+                label="Root",
+                depth=0,
+            ),
+            ObservedSourceClassification(
+                classification_id="offertoday:100100",
+                native_id="100100",
+                label="Retained child",
+                depth=1,
+                parent_classification_id="offertoday:100000",
+            ),
+            ObservedSourceClassification(
+                classification_id="offertoday:100200",
+                native_id="100200",
+                label="Removed child",
+                depth=1,
+                parent_classification_id="offertoday:100000",
+            ),
+        )
+        registry.synchronize("offertoday", full, complete=True)
+        registry.synchronize("offertoday", full[:2], complete=True)
+
+        rows = {
+            row.classification_id: row
+            for row in registry.list_all(source_site="offertoday")
+        }
+        assert rows["offertoday:100100"].is_active is True
+        assert rows["offertoday:100200"].is_active is False
+        assert db.get(SourceClassification, rows["offertoday:100200"].id) is not None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_non_offertoday_complete_sync_preserves_unseen_children():
+    engine, db = _session()
+    try:
+        registry = SourceClassificationRegistry(db)
+        full = (
+            ObservedSourceClassification(
+                classification_id="jobsdb:100",
+                native_id="100",
+                label="Root",
+                depth=0,
+            ),
+            ObservedSourceClassification(
+                classification_id="jobsdb:101",
+                native_id="101",
+                label="Observed child evidence",
+                depth=1,
+                parent_classification_id="jobsdb:100",
+            ),
+        )
+        registry.synchronize("jobsdb", full, complete=True)
+        registry.synchronize("jobsdb", full[:1], complete=True)
+
+        child = next(
+            row
+            for row in registry.list_all(source_site="jobsdb")
+            if row.classification_id == "jobsdb:101"
+        )
+        assert child.is_active is True
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_ingest_observation_idempotently_preserves_child_identity_but_not_as_crawl_choice():
     engine, db = _session()
     try:
@@ -306,6 +383,44 @@ def test_ingest_observation_idempotently_preserves_child_identity_but_not_as_cra
             row.classification_id for row in registry.list_top_level("offertoday")
         ] == ["offertoday:100000"]
         assert len(registry.list_all(source_site="offertoday")) == 2
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_ingest_observation_preserves_existing_crawl_query_metadata():
+    engine, db = _session()
+    try:
+        registry = SourceClassificationRegistry(db)
+        authoritative = ObservedSourceClassification(
+            classification_id="ctgoodjobs:021",
+            native_id="021",
+            label="Information Technology",
+            depth=0,
+            query_metadata={
+                "queryable": True,
+                "supports_exact": True,
+                "supports_subtree": False,
+                "url_path": "/jobs/jobs-in-information-technology",
+            },
+        )
+        registry.synchronize("ctgoodjobs", (authoritative,), complete=True)
+
+        registry.observe_path(
+            "job-1",
+            "ctgoodjobs",
+            (
+                ObservedSourceClassification(
+                    classification_id="ctgoodjobs:021",
+                    native_id="021",
+                    label="Information Technology",
+                    depth=0,
+                ),
+            ),
+        )
+
+        row = registry.list_top_level("ctgoodjobs")[0]
+        assert row.query_metadata == authoritative.query_metadata
     finally:
         db.close()
         engine.dispose()

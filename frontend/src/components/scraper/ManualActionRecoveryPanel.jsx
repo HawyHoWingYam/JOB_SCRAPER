@@ -156,6 +156,7 @@ export default function ManualActionRecoveryPanel({
           "Failed to check browser connection",
         );
         setHelperHealth({ status: "offline", detail });
+        setPollHelper(true);
         setReuseState({ status: "unknown", detail: null });
         if (surfaceError) {
           setActionState({ pending: null, error: detail, notice: null });
@@ -176,6 +177,10 @@ export default function ManualActionRecoveryPanel({
       setHelperHealth({ status: "offline", detail: null });
       return;
     }
+    // Keep checking after the initial probe. The operator may start the
+    // helper manually instead of using the copy button, so an initial offline
+    // result must not leave the recovery panel stuck on the Helper step.
+    setPollHelper(true);
     void checkHelperHealth();
   }, [checkHelperHealth, reuseSupported, taskId]);
 
@@ -307,6 +312,7 @@ export default function ManualActionRecoveryPanel({
         status: "offline",
         detail: current.detail || "Manual-action helper is unavailable",
       }));
+      setPollHelper(true);
       return;
     }
     setPollReuse(true);
@@ -471,9 +477,10 @@ export default function ManualActionRecoveryPanel({
                   : "Host helper is offline"}
               </strong>
               <p>
-                Copy the start command, then paste it into a terminal from the
-                repository root. It starts in <code>{helperStartWorkdir}</code>;
-                this page will detect it automatically.
+                Copy the setup-and-start command, then paste it into a terminal
+                from the repository root. It prepares the host environment and
+                starts in <code>{helperStartWorkdir}</code>; this page will
+                detect it automatically.
               </p>
               <button
                 type="button"
@@ -649,8 +656,8 @@ export default function ManualActionRecoveryPanel({
               <code>{helperStartWorkdir}</code>
             </div>
             <div>
-              <span>Start command</span>
-              <code>{helperStartCommand}</code>
+              <span>Start command (from repository root)</span>
+              <code>{helperStartCommandWithDirectory}</code>
             </div>
             <div>
               <span>Health endpoint</span>
@@ -676,7 +683,10 @@ export default function ManualActionRecoveryPanel({
               type="button"
               data-testid="crawl-task-retry-helper-health"
               disabled={anyPending || helperHealth.status === "checking"}
-              onClick={() => void checkHelperHealth()}
+              onClick={() => {
+                setPollHelper(true);
+                void checkHelperHealth();
+              }}
             >
               <RefreshCcw size={16} aria-hidden="true" />
               <span>Check Helper Health</span>

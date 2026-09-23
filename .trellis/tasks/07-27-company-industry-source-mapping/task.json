@@ -21,7 +21,7 @@
   "children": [],
   "parent": "07-27-fix-automated-classification-qa-defects",
   "relatedFiles": [],
-  "notes": "Implementation committed in 71fce2c9. Current 54-entry all-non-mapping manifest approved on 2026-07-28; evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/38#issuecomment-5098334289. Browser manual QA explicitly deferred; keep task and issue open.",
+  "notes": "Implementation committed in 71fce2c9. The historical 54-entry all-non-mapping manifest and evidence remain preserved at https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/38#issuecomment-5098334289. The later approved Job Intelligence direction removed Company Industry from the product, so the remaining positive-mapping manual QA is obsolete. Close as superseded, not as a claim that a positive mapping was tested.",
   "meta": {
     "github_issue": 38,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/38"

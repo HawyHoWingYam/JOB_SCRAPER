@@ -117,11 +117,22 @@ def preview_crawl_scope(
     db: Session = Depends(get_db),
 ) -> CrawlScopePreviewV1:
     try:
-        return CrawlScopeService(db).preview(
+        preview = CrawlScopeService(db).preview(
             request.scope,
             listing_settings=request.listing_settings,
+            refresh_offertoday_taxonomy=(
+                request.scope.source_site == "offertoday"
+                and request.listing_settings is not None
+            ),
         )
+        if (
+            request.scope.source_site == "offertoday"
+            and request.listing_settings is not None
+        ):
+            db.commit()
+        return preview
     except CrawlControlError as exc:
+        db.rollback()
         raise crawl_control_http_error(exc) from exc
 
 

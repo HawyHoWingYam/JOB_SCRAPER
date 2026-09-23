@@ -9,39 +9,10 @@ from app.database import get_db
 from app.job_intelligence.current_taxonomies import (
     CurrentTaxonomyReader,
 )
-from app.schemas.current_taxonomy import (
-    CurrentCompanyIndustryStateSchema,
-    CurrentJobSkillStateSchema,
-    CurrentTaxonomyTreeSchema,
-)
+from app.schemas.current_taxonomy import CurrentJobSkillStateSchema, CurrentTaxonomyTreeSchema
 
 
 router = APIRouter(prefix="/job-intelligence", tags=["job-intelligence"])
-
-
-@router.get(
-    "/company-industries/tree",
-    response_model=CurrentTaxonomyTreeSchema,
-)
-def read_company_industry_tree(
-    db: Session = Depends(get_db),
-) -> CurrentTaxonomyTreeSchema:
-    return CurrentTaxonomyTreeSchema.model_validate(
-        CurrentTaxonomyReader(db).get_tree("company_industry")
-    )
-
-
-@router.get(
-    "/companies/{company_id}/industries",
-    response_model=CurrentCompanyIndustryStateSchema,
-)
-def read_company_industry_state(
-    company_id: UUID,
-    db: Session = Depends(get_db),
-) -> CurrentCompanyIndustryStateSchema:
-    return CurrentCompanyIndustryStateSchema.model_validate(
-        CurrentTaxonomyReader(db).get_company_industry_state(company_id)
-    )
 
 
 @router.get("/skills/tree", response_model=CurrentTaxonomyTreeSchema)
@@ -64,8 +35,6 @@ def read_job_skills(
 
 
 __all__ = [
-    "read_company_industry_state",
-    "read_company_industry_tree",
     "read_job_skills",
     "read_skill_tree",
     "router",

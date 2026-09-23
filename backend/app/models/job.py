@@ -88,7 +88,7 @@ class Job(Base):
     salary_min = Column(Integer, nullable=True, index=True)
     salary_max = Column(Integer, nullable=True, index=True)
     salary_currency = Column(String(10), default="HKD", nullable=True)
-    location = Column(String(255), nullable=True)
+    location = Column(Text, nullable=True)
     employment_type = Column(String(100), nullable=True)
     raw_data = Column(JSON, nullable=True)
     posted_date = Column(DateTime, nullable=True)
@@ -147,10 +147,6 @@ class Job(Base):
     def company_name(self) -> Optional[str]:
         """Convenience field for job detail responses."""
         return self.company.name if self.company else None
-
-    @property
-    def company_industry(self) -> Optional[str]:
-        return self.company.industry if self.company else None
 
     @property
     def company_ai_description(self) -> Optional[str]:

@@ -111,6 +111,7 @@ class CrawlJobCancellationService:
         crawl_job_id,
         dispatch_plan_id,
         timestamp,
+        outcome: str = "cancelled_retryable",
     ) -> list[dict]:
         """Release only still-running rows owned by one stopped Crawl Job."""
 
@@ -119,6 +120,7 @@ class CrawlJobCancellationService:
             crawl_job_id=crawl_job_id,
             dispatch_plan_id=dispatch_plan_id,
             timestamp=timestamp,
+            outcome=outcome,
         )
 
     @staticmethod
@@ -128,6 +130,7 @@ class CrawlJobCancellationService:
         crawl_job_id,
         dispatch_plan_id,
         timestamp,
+        outcome: str = "cancelled_retryable",
     ) -> list[dict]:
         query = db.query(CrawlJobListing).filter(
             CrawlJobListing.last_detail_crawl_job_id == crawl_job_id,
@@ -161,7 +164,7 @@ class CrawlJobCancellationService:
                     "source_job_id": row.source_job_id,
                     "before_status": "running",
                     "after_status": "pending",
-                    "outcome": "cancelled_retryable",
+                    "outcome": outcome,
                 }
             )
         return records

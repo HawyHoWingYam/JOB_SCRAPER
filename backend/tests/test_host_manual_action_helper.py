@@ -15,6 +15,7 @@ from app.host_manual_action_helper import (
     launch_browser_process,
 )
 from app.manual_actions.live_browser_registry import LiveBrowserRegistry
+from app.workers.run_manual_action_helper import resolve_host_database_url
 
 
 def _make_executable(path: Path) -> Path:
@@ -22,6 +23,23 @@ def _make_executable(path: Path) -> Path:
     path.touch()
     path.chmod(0o755)
     return path
+
+
+def test_host_helper_translates_docker_database_url(monkeypatch) -> None:
+    monkeypatch.delenv("MANUAL_ACTION_HELPER_DATABASE_URL", raising=False)
+
+    assert resolve_host_database_url(
+        "postgresql://admin:dev_password@postgres-db:5432/jobsdb"
+    ) == "postgresql://admin:dev_password@127.0.0.1:5433/jobsdb"
+
+
+def test_host_helper_database_override_wins(monkeypatch) -> None:
+    override = "postgresql://admin:custom@db.example.test:6543/jobsdb"
+    monkeypatch.setenv("MANUAL_ACTION_HELPER_DATABASE_URL", override)
+
+    assert resolve_host_database_url(
+        "postgresql://admin:dev_password@postgres-db:5432/jobsdb"
+    ) == override
 
 
 def test_macos_resolves_chromium_app(monkeypatch, tmp_path: Path) -> None:

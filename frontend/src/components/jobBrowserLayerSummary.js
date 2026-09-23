@@ -32,12 +32,6 @@ export function summarizeJobBrowserLayer(layer, facets = {}) {
   if (employmentIds.length > 0) {
     clauses.push(`Employment Type: ${optionLabels(facets.employment_types, employmentIds)}`);
   }
-  if (filters.company_industry_node_ids.length > 0) {
-    clauses.push(`Company Industry: ${optionLabels(
-      facets.company_industries,
-      filters.company_industry_node_ids,
-    )}`);
-  }
   if (filters.posted_date_from) clauses.push(`Posted from: ${filters.posted_date_from}`);
   if (filters.posted_date_to) clauses.push(`Posted to: ${filters.posted_date_to}`);
   if (filters.experience_years_from && filters.experience_years_to) {

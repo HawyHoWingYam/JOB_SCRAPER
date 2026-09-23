@@ -56,7 +56,7 @@ The default `backend-api` image only supports the lexical search baseline. Seman
 - If `UVICORN_RELOAD` is unset, direct `python -m app.main`, `python -m app.retrieval_main`, and `python -m app.recommendation_main` runs still fall back to `DEBUG`.
 - Crawl jobs now support explicit `crawl_mode` values: `headless` and `headed`.
 - Recommended operational defaults are source-aware:
-  - `JobsDB` defaults to `headed`
+  - `JobsDB` defaults to `headless`
   - `CTGoodJobs` defaults to `headless`
 - `CTGoodJobs` headless runs can be paired with the explicit `CTGOODJOBS_PROXY_*` settings in `.env` for per-request proxy rotation; global `HTTP_PROXY` / `HTTPS_PROXY` variables are not part of that runtime path.
 - `POST /api/jobs/search` supports `lexical`, `semantic`, and `hybrid`, but the non-lexical modes require `retrieval-api`.
@@ -89,11 +89,11 @@ Typical local setup:
 docker compose up -d postgres-db redis-mq backend-api frontend-ui
 docker compose --profile workers up -d crawl-worker ingest-worker enrichment-worker
 
-# Then run the headed crawl worker on the host.
-python backend/scripts/prepare_headed_crawl_worker_host.py
+# Then prepare the host environment and run the headed crawl worker on the host.
+python3 backend/scripts/prepare_headed_crawl_worker_host.py
 
-# Or launch it in a dedicated visible cmd window.
-python backend\scripts\prepare_headed_crawl_worker_host.py
+# Or launch it in a dedicated visible cmd window on Windows.
+py -3 backend\scripts\prepare_headed_crawl_worker_host.py
 ```
 
 Recommended profile setup:
@@ -102,7 +102,10 @@ Recommended profile setup:
 - container-owned headed automation now defaults to Playwright `chromium`
 - the host-side manual/browser helper supports `chromium`, `msedge`, and `chrome` on
   macOS, Linux, and Windows; for Playwright Chromium install the browser once with
-  `python -m playwright install chromium` in the host helper environment
+  `python3 -m playwright install chromium` in the host helper environment
+- when Docker provides the database, the host helper automatically maps
+  `postgres-db:5432` to the published `127.0.0.1:5433`; set
+  `MANUAL_ACTION_HELPER_DATABASE_URL` only when using a different database host
 - open a JobsDB or CTGoodJobs page once in that automation profile and complete any anti-bot challenge before relying on automated headed runs
 - keep the script running while you want headed JobsDB jobs to keep progressing
 - if you want a separate persistent window without blocking your current shell, run `prepare_headed_crawl_worker_host.py` in a new terminal
@@ -119,7 +122,7 @@ Behavior notes:
 To repair previously ingested short `JobsDB` descriptions after the headed worker path is available:
 
 ```bash
-python backend/scripts/backfill_jobsdb_details.py
+python3 backend/scripts/backfill_jobsdb_details.py
 ```
 
 This script targets degraded `JobsDB` rows and rewrites detail-related fields only when richer detail payloads are recovered.
@@ -148,14 +151,14 @@ Use these commands when validating backend-only changes or before moving on to d
 Install backend development dependencies into your local Python environment first:
 
 ```bash
-python -m pip install -r backend/requirements-dev.txt
+python3 -m pip install -r backend/requirements-dev.txt
 ```
 
 Then, from the repo root, run:
 
 ```bash
-python -m pytest --collect-only -q backend/tests
-python -m pytest -q backend/tests
+python3 -m pytest --collect-only -q backend/tests
+python3 -m pytest -q backend/tests
 ```
 
 ### Docker path

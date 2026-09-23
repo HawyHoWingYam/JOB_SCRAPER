@@ -28,6 +28,21 @@ from app.models.classification_batch import (
     ClassificationBatchRunItem,
 )
 from app.models.app_runtime_settings import AppRuntimeSettings
+from app.models.jev import (
+    JevBudgetReservation,
+    JevCrawlQualityEvaluation,
+    JevCrawlQualityObservation,
+    JevDuplicateAssociation,
+    JevIncidentTriageCluster,
+    JevIncidentTriageEvaluation,
+    JevOnlineSkillClassification,
+    JevRun,
+    JevRunAttempt,
+    JevRunItem,
+    JevRuntimeSettings,
+    JevSearchRerankEvaluation,
+    JevSkillMaintenanceBatch,
+)
 from app.models.scraper_pacing_settings import ScraperPacingSettings
 from app.models.source_classification import SourceClassification
 from app.models.offertoday_coverage import (
@@ -38,12 +53,10 @@ from app.models.offertoday_coverage import (
 )
 from app.models.current_taxonomy import (
     CurrentTaxonomyAliasRecord,
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillMention,
     CurrentJobSkillAssignment,
     CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
-    CurrentSourceTaxonomyMapping,
 )
 from app.models.governance import (
     GovernanceAuditEvent,
@@ -84,6 +97,19 @@ __all__ = [
     "ClassificationBatchRun",
     "ClassificationBatchRunItem",
     "AppRuntimeSettings",
+    "JevRuntimeSettings",
+    "JevSearchRerankEvaluation",
+    "JevBudgetReservation",
+    "JevCrawlQualityEvaluation",
+    "JevCrawlQualityObservation",
+    "JevDuplicateAssociation",
+    "JevIncidentTriageCluster",
+    "JevIncidentTriageEvaluation",
+    "JevOnlineSkillClassification",
+    "JevRun",
+    "JevRunAttempt",
+    "JevRunItem",
+    "JevSkillMaintenanceBatch",
     "ScraperPacingSettings",
     "SourceClassification",
     "OfferTodayKeywordCsvReview",
@@ -91,12 +117,10 @@ __all__ = [
     "OfferTodayKeywordMutationLog",
     "OfferTodayTaxonomySnapshot",
     "CurrentTaxonomyAliasRecord",
-    "CurrentCompanyIndustryAssignment",
     "CurrentJobSkillMention",
     "CurrentJobSkillAssignment",
     "CurrentSkillCandidate",
     "CurrentTaxonomyNodeRecord",
-    "CurrentSourceTaxonomyMapping",
     "GovernanceAuditEvent",
     "GovernanceIdempotencyRecord",
     "EmploymentType",

@@ -25,6 +25,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Manual Job Detail Pacing](./scraper-detail-pacing.md) | Source settings, immutable task snapshots, dispatch exclusion, and per-attempt pacing | Active |
 | [AI Enrichment Run Operations](./ai-enrichment-runs.md) | Filter candidates, single-active scheduling, waiting promotion, monitor, retry, and cooperative Stop | Active |
 | [Company Enrichment Runs](./company-enrichment-runs.md) | Krill Chat/Responses routing, explicit Company-only Web Search, capability probes, persistence, and safe diagnostics | Active |
+| [Jev System One Settings and Bounded Runs](./jev-system-one.md) | Native typed decisions, frozen bounded runs, cumulative microdollar allowance, Settings UI, and isolated browser E2E | Active |
 | [CTGoodJobs Transport Research](./ctgoodjobs-transport-research.md) | Bounded HTTP/headless/headed comparison, sanitized evidence, viability replay, and WAF hard stops | Active |
 | [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, finite detail scope, normalized progress, and hard-stop contracts | Active |
 | [OfferToday Keyword Coverage Review](./offertoday-keyword-coverage-review.md) | Read-only Job Detail corpus analysis, bounded listing probes, and evidence-limited recommendations | Active |
@@ -33,8 +34,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Crawl Control Automation Review](./crawl-control-automation-review.md) | Read-only scheduled-run review, fingerprint fencing, and non-frozen detail preview | Active |
 | [Task Control Board Projections](./task-control-board-projections.md) | Current Board, per-Source authority, normalized Task Details, and safe action contracts | Active |
 | [Source Job Attributes](./source-job-attributes.md) | Source-owned classification paths, governed Employment Types, atomic projection, APIs, and rebuild evidence | Active |
-| [Ordinary Current Taxonomies](./ordinary-current-taxonomies.md) | Stable current Company Industry and Skill assignment/evidence contracts without releases or review queues | Active |
-| [Automated Classification Batches](./automated-classification-batches.md) | Company Industry and Skill preview/run/stop/retry lifecycle plus repeated-Skill auto-creation | Active |
+| [Ordinary Current Taxonomies](./ordinary-current-taxonomies.md) | Stable current Skill assignment/evidence contracts without releases or Company Industry state | Active |
+| [Skill Candidate Review](./automated-classification-batches.md) | Skill Candidate pagination, bounded evidence/recommendations, and explicit operator decisions | Active |
 | [Job Intelligence Product Reads](./job-intelligence-product-surfaces.md) | Ordinary current composition, safe Job Detail serialization, bulk recommendations, and fixture contracts | Active |
 | [Dashboard Operational Statistics](./dashboard-operational-stats.md) | Retained-corpus enrichment, Skill, and Candidate denominators with refresh isolation and accessibility | Active |
 | [Job Browser Search](./job-browser-search.md) | Layered scope, contextual facets, selectors, pagination, and same-tab restoration | Active |

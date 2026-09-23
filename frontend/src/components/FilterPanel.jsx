@@ -90,16 +90,6 @@ function FilterPanel({
         ...option,
         displayLabel: sourceClassificationLabel(option),
     }));
-    const companyIndustryOptions = (filterOptions.company_industries || []).map(
-        (option) => ({
-            ...option,
-            displayLabel: `${option.id} · ${option.label}`,
-        }),
-    );
-    const companyIndustryLabel = (nodeId) => (
-        companyIndustryOptions.find((option) => option.id === nodeId)
-            ?.displayLabel || nodeId
-    );
 
     const handleEmploymentTypeChange = (selectedValues) => {
         const selectedOptions = employmentTypeOptions.filter((option) =>
@@ -135,10 +125,6 @@ function FilterPanel({
                 )
                 .join(', ')}`,
         filters.employment_type && `Employment Type: ${filters.employment_type}`,
-        filters.company_industry_node_ids?.length > 0 &&
-            `Company Industry: ${filters.company_industry_node_ids
-                .map(companyIndustryLabel)
-                .join(', ')}`,
         filters.posted_date_from && `Date from: ${filters.posted_date_from}`,
         filters.posted_date_to && `Date to: ${filters.posted_date_to}`,
         hasFilterValue(filters.experience_years_from) && `Experience from: ${filters.experience_years_from} years`,
@@ -162,7 +148,7 @@ function FilterPanel({
                         <p className="filter-card-title">Search Lenses</p>
                         <h3>Filters</h3>
                         <p className="filter-card-hint">
-                            Active source, industry, date, and experience constraints.
+                            Active source, date, and experience constraints.
                         </p>
                     </div>
                     <div className="filter-deck-actions">
@@ -254,20 +240,6 @@ function FilterPanel({
                                 : []),
                         ]}
                         onChange={handleEmploymentTypeChange}
-                        disabled={facetControlsDisabled}
-                    />
-
-                    <HierarchyFacetSelector
-                        title="Company Industry"
-                        options={companyIndustryOptions}
-                        selectedIds={filters.company_industry_node_ids || []}
-                        onChange={(nodeIds) =>
-                            onFilterChange({
-                                ...filters,
-                                company_industry_node_ids: nodeIds,
-                                industry: '',
-                            })
-                        }
                         disabled={facetControlsDisabled}
                     />
 

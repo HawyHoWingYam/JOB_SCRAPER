@@ -21,7 +21,7 @@
   "children": [],
   "parent": "07-27-fix-automated-classification-qa-defects",
   "relatedFiles": [],
-  "notes": "Implementation committed in 71fce2c9. Evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/36#issuecomment-5098334279. Browser manual QA deferred; keep issue open.",
+  "notes": "Implementation committed in 71fce2c9 and evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/36#issuecomment-5098334279. The user does not require a separate manual review; automated regression plus the 2026-09-23 full backend/frontend/E2E validation is accepted as the closure gate.",
   "meta": {
     "github_issue": 36,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/36"

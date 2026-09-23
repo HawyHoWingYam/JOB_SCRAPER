@@ -8,17 +8,6 @@ function getCurrent(path, options) {
   });
 }
 
-export function fetchCurrentCompanyIndustryTree(options) {
-  return getCurrent('/job-intelligence/company-industries/tree', options);
-}
-
-export function fetchCurrentCompanyIndustryState(companyId, options) {
-  return getCurrent(
-    `/job-intelligence/companies/${encodeURIComponent(companyId)}/industries`,
-    options,
-  );
-}
-
 export function fetchCurrentSkillTree(options) {
   return getCurrent('/job-intelligence/skills/tree', options);
 }

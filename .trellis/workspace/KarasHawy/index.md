@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 62
-- **Last Active**: 2026-08-05
+- **Total Sessions**: 63
+- **Last Active**: 2026-08-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~207 | Active |
+| `journal-2.md` | ~240 | Active |
 | `journal-1.md` | ~1968 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,12 +30,14 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 63 | 2026-08-12 | Retry transient JobsDB listing disconnects | `84a68307` | `codex/offertoday-it-coverage-20260702` |
 | 62 | 2026-08-05 | Skip historical manual listing identities | `993de45b` | `codex/offertoday-it-coverage-20260702` |
 | 61 | 2026-08-05 | Prevent JobsDB zero-work listing completion | `4dd20f42` | `codex/offertoday-it-coverage-20260702` |
 | 60 | 2026-08-04 | Skip published jobs during listing crawls | `3b0d7431` | `codex/offertoday-it-coverage-20260702` |
 | 59 | 2026-08-04 | Apply OfferToday keyword pack recommendations | `e887fc2e` | `codex/offertoday-it-coverage-20260702` |
 | 58 | 2026-08-04 | Extend OfferToday keyword review with cross-source evidence | `4c666b79`, `539d626f` | `codex/offertoday-it-coverage-20260702` |
 | 57 | 2026-08-04 | Review OfferToday keyword coverage | `1e18f3bd`, `0d9b8d6a` | `codex/offertoday-it-coverage-20260702` |
+| 56 | 2026-08-03 | Restore Employment Type registry | `24a82c90` | `codex/offertoday-it-coverage-20260702` |
 | 55 | 2026-07-30 | Improve Company and Data Explorer experience | `71f3a9af`, `d8f6329e` | `codex/offertoday-it-coverage-20260702` |
 | 54 | 2026-07-29 | Remove canonical job taxonomy | `0a88ab68`, `e5697cb2`, `1e0afa04`, `19c74554` | `codex/offertoday-it-coverage-20260702` |
 | 53 | 2026-07-28 | Improve Job Browser filters and layered search | `ecdb7e3c`, `7d13a75e`, `ed39ae09` | `codex/offertoday-it-coverage-20260702` |

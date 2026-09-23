@@ -48,6 +48,10 @@ _Avoid_: Selected category, crawl task
 A Source-specific deterministic set of hybrid Query Targets that pairs one selected Source Classification with each approved keyword while retaining that classification in every request. It is explicit frozen run scope, not a categoryless keyword search or hidden runner expansion.
 _Avoid_: Keyword pack, global keyword crawl, implicit supplement
 
+**Source Classification Keyword Pack**:
+An operator-maintained set of supplemental search terms owned by one top-level Source Classification. A run may freeze its approved terms into Query Targets, but the pack does not redefine the operator's authored Crawl Scope.
+_Avoid_: Global keyword list, generated keywords, Source Classification
+
 **Non-Job Listing Card**:
 A source-returned row inside a listing cohort that is structurally identifiable as advertisement or interface content rather than a Job. It may be ignored with recorded evidence and is distinct from a job-shaped row with a missing identity.
 _Avoid_: Broken Job, identity issue, listing
@@ -59,6 +63,14 @@ _Avoid_: Total page limit, max depth
 **Run Page Cap**:
 The maximum aggregate listing pages that one run may request across all Query Targets.
 _Avoid_: Pages per sector, batch size
+
+**Evidence-Bounded Coverage**:
+The state in which every planned collection route has stopped producing new listing identities under the run's recorded coverage policy. It does not claim knowledge of the Source's absolute inventory.
+_Avoid_: All Jobs, absolute completeness, expected job count
+
+**Stalled Query Target**:
+A Query Target for which the Source still reports continuation but three consecutive pages contribute no new listing identities. It is degraded rather than exhausted.
+_Avoid_: Completed partition, natural exhaustion, duplicate page
 
 **Detail Run Cap**:
 The maximum distinct job details that one detail run may attempt before completing normally.
@@ -86,9 +98,29 @@ _Avoid_: Governance queue, taxonomy release, manual review backlog
 A Job entered directly by an operator rather than collected from an external Source. It participates in the Published Job Corpus and shared intelligence workflows without making manual intake a Source.
 _Avoid_: Manual Source Job, fourth Source
 
+**Job Origin**:
+The route by which a Job entered the Published Job Corpus: collection from a Source or Manual Entry by an operator.
+_Avoid_: Source when the value may be Manual Entry
+
 **Operator-Authored Job Fact**:
 A Job value explicitly supplied by the operator during manual intake. It is authoritative for that Job and is not silently replaced by automated enrichment.
 _Avoid_: AI suggestion, inferred value
+
+**Job Evidence Finding**:
+An assessment of whether a retained source passage supports a stated Job attribute. It is review evidence, not a confirmed correction or proof of real-world truth.
+_Avoid_: Verified Job fact, automatic correction
+
+**Suspected Duplicate Association**:
+A reviewable relationship between separately retained Job records that may describe the same vacancy. It does not establish shared identity or replace either source record.
+_Avoid_: Merged Job, confirmed duplicate
+
+**Stale Job Intelligence**:
+Previously generated Job Intelligence whose supporting Job facts have since changed. It remains traceable but does not represent the current Job until successful replacement.
+_Avoid_: Current enrichment, failed enrichment
+
+**Company Enrichment Run Limit**:
+The operator-requested maximum number of eligible Companies frozen into one Company-description run. It controls run scope, not execution concurrency.
+_Avoid_: Concurrency, page size, global maximum
 
 **Employment Type**:
 One governed value describing the employment relationship offered by a Job. A Job may have zero or more Employment Types from Full-time, Part-time, Permanent, Contract, Temporary, Internship, and Freelance.

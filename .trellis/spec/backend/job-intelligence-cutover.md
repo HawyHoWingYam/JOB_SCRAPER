@@ -42,17 +42,21 @@ Retain exactly:
 - complete Job Employment Type assignments and raw label evidence; the
   canonical `employment_types` parent registry itself is bootstrap-authoritative
   and is not exported or imported;
-- current Company Industry and Skill nodes, aliases, mappings, assignments,
-  Candidates, Mentions, and projections; legacy rows with `taxonomy=job` are
-  excluded from shared current-taxonomy tables;
-- required Company Industry and Skill audit/idempotency evidence after excluding
-  Job-taxonomy domains and recursively removing application
-  revision/release/version keys.
+- current Skill nodes, aliases, assignments, Candidates, Mentions and
+  projections; current taxonomy tables accept only `taxonomy=skill`;
+- required Skill audit/idempotency evidence after excluding retired domains and
+  recursively removing application revision/release/version keys.
 
 Delete exactly:
 
 - crawl, automation, dispatch, schedule, manual-action, enrichment,
   classification-batch, and embedding run history;
+- Jev runtime settings and credentials, cumulative allowance state, budget
+  reservations, bounded runs, work items, attempt receipts, online Skill
+  classifications, maintenance batches, duplicate associations, crawl-quality
+  observations/evaluations, search-rerank evaluations, and incident-triage
+  clusters/evaluations; these records are intentionally excluded from the
+  transient retained artifact;
 - Event Outbox rows;
 - all application release/revision/active-pointer/review tables;
 - Redis Streams, consumer groups, pending entries, and dead letters;
@@ -86,7 +90,10 @@ does not treat them as restorable data.
   assignments reference those bootstrapped parents.
 - Pre-start verification re-exports every retained table, compares exact
   count/hash, and requires runtime tables (including Job embeddings) to be
-  empty. It also requires the exact canonical Employment Type registry. After
+  empty. This includes every table named in `RUNTIME_TABLE_NAMES`, including
+  all current `jev_*` tables, so neither credentials nor Jev runtime/audit state
+  cross the destructive sandbox cutover. It also requires
+  the exact canonical Employment Type registry. After
   service startup and embedding regeneration, `finalize` repeats
   exact checks for immutable retained tables. It permits startup-authoritative
   changes only in Source Classifications, OfferToday taxonomy snapshots, and

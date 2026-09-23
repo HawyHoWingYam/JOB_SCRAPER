@@ -7,23 +7,18 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
-from app.api import jobs as jobs_api
 from app.api import ai as ai_api
-from app.api.companies import get_company, list_companies
 from app.api.jobs import (
-    _apply_structured_filters,
     _build_export_rows,
     get_job,
 )
-from app.database import Base, get_db
+from app.database import Base
 from app.job_intelligence.foundation import Provenance
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.job_intelligence.source_attributes import (
@@ -34,13 +29,13 @@ from app.job_intelligence.source_attributes import (
 from app.models.company import Company
 from app.models.current_taxonomy import (
     CURRENT_TAXONOMY_TABLES,
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
     CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.event_outbox import EventOutbox
+from app.models.jev import JevOnlineSkillClassification, JevRun
 from app.models.job import Job
 from app.models.job_embedding import EMBEDDING_DIMENSIONS, JobEmbedding
 from app.models.source_job_attributes import (
@@ -51,7 +46,6 @@ from app.schemas.job_intelligence_product import (
     JobIntelligenceProductFixtureSchema,
 )
 from app.schemas.job import JobDetailSchema
-from app.schemas.job_search import JobSearchFiltersSchema
 from app.schemas.recommendations import JobRecommendationSchema
 from app.services.job_recommendation_service import JobRecommendationService
 
@@ -92,6 +86,8 @@ def product_contract_db():
         Company.__table__,
         Job.__table__,
         JobEmbedding.__table__,
+        JevRun.__table__,
+        JevOnlineSkillClassification.__table__,
         EventOutbox.__table__,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
         *CURRENT_TAXONOMY_TABLES,
@@ -168,13 +164,6 @@ def _seed_summary_state(db) -> dict[str, object]:
     }
 
 
-def _job_search_client(db) -> TestClient:
-    app = FastAPI()
-    app.include_router(jobs_api.router, prefix="/api")
-    app.dependency_overrides[get_db] = lambda: db
-    return TestClient(app)
-
-
 def _seed_rich_job_detail_state(db) -> dict[str, object]:
     state = _seed_summary_state(db)
     now = state["now"]
@@ -183,7 +172,6 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
         source_site="jobsdb",
         source_company_id="product-company-rich",
         name="Product Company Rich",
-        industry="Legacy evidence only",
     )
     job = Job(
         job_id="product-job-rich",
@@ -225,27 +213,11 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
     )
     SourceJobAttributes(db).project(job.id, source_evidence)
 
-    current_industry_section_code = "J"
-    current_industry_node_code = "58"
     current_skill_category_code = "programming"
     current_skill_technology_code = "programming.python-ecosystem"
     current_skill_code = "python"
     db.add_all(
         [
-            CurrentTaxonomyNodeRecord(
-                taxonomy="company_industry",
-                code=current_industry_section_code,
-                parent_code=None,
-                level="section",
-                labels={
-                    "en": "Information and communications",
-                    "zh_hant": "資訊及通訊",
-                    "zh_hans": "资讯及通讯",
-                },
-                sort_order=1,
-                is_assignable=False,
-                is_active=True,
-            ),
             CurrentTaxonomyNodeRecord(
                 taxonomy="skill",
                 code=current_skill_category_code,
@@ -261,20 +233,6 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
     db.flush()
     db.add_all(
         [
-            CurrentTaxonomyNodeRecord(
-                taxonomy="company_industry",
-                code=current_industry_node_code,
-                parent_code=current_industry_section_code,
-                level="division",
-                labels={
-                    "en": "Publishing activities",
-                    "zh_hant": "出版活動",
-                    "zh_hans": "出版活动",
-                },
-                sort_order=2,
-                is_assignable=True,
-                is_active=True,
-            ),
             CurrentTaxonomyNodeRecord(
                 taxonomy="skill",
                 code=current_skill_technology_code,
@@ -304,37 +262,6 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
     )
     db.flush()
 
-    current_industry_assignment = CurrentCompanyIndustryAssignment(
-        company_id=company.id,
-        taxonomy="company_industry",
-        taxonomy_code=current_industry_node_code,
-        method="authoritative_code",
-        provenance={"method": "source-hsic-code"},
-        evidence_hash="5" * 64,
-        breadcrumb={
-            "section": {
-                "code": current_industry_section_code,
-                "level": "section",
-                "labels": {
-                    "en": "Information and communications",
-                    "zh_hant": "資訊及通訊",
-                    "zh_hans": "资讯及通讯",
-                },
-            },
-            "division": {
-                "code": current_industry_node_code,
-                "level": "division",
-                "labels": {
-                    "en": "Publishing activities",
-                    "zh_hant": "出版活動",
-                    "zh_hans": "出版活动",
-                },
-            },
-        },
-        is_primary=True,
-        primary_basis="authoritative_source",
-        captured_at=now,
-    )
     current_matching_mention = CurrentJobSkillMention(
         job_id=job.id,
         taxonomy="skill",
@@ -377,7 +304,6 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
     )
     db.add_all(
         [
-            current_industry_assignment,
             current_matching_mention,
             current_candidate_mention,
             current_skill_projection,
@@ -388,8 +314,6 @@ def _seed_rich_job_detail_state(db) -> dict[str, object]:
         **state,
         "job_id": job.id,
         "company_id": company.id,
-        "current_industry_section_code": current_industry_section_code,
-        "current_industry_node_code": current_industry_node_code,
         "current_skill_code": current_skill_code,
     }
 
@@ -493,20 +417,6 @@ def test_product_surface_fixture_uses_current_backend_response_models() -> None:
         "Full-time",
         "Permanent",
     ]
-    assert fixture.companies[0].company_industries is not None
-    assert [
-        assignment.is_primary
-        for assignment in fixture.companies[0].company_industries.assignments
-    ] == [True, False]
-    assert fixture.companies[1].company_industries is not None
-    assert fixture.companies[1].company_industries.assignments == []
-    assert fixture.companies[2].company_industries is None
-    assert (
-        fixture.companies[2].company_industry_availability.unavailable_code
-        == "COMPANY_INDUSTRY_TAXONOMY_NOT_ACTIVE"
-    )
-    assert fixture.job_detail.company_industries is not None
-    assert fixture.job_detail.company_industries.assignments[0].is_primary is True
     assert fixture.job_detail.skill_state is not None
     assert [skill.code for skill in fixture.job_detail.skill_state.skills] == ["python"]
     assert [
@@ -694,7 +604,6 @@ def test_job_detail_contract_rejects_missing_composed_governed_states() -> None:
     payload = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))["job_detail"]
 
     for required_field in (
-        "company_industries",
         "skill_state",
         "job_intelligence_availability",
     ):
@@ -717,18 +626,10 @@ def test_job_detail_composes_independent_governed_states_without_fabrication(
             "available": False,
             "unavailable_code": "SOURCE_JOB_ATTRIBUTES_NOT_PROJECTED",
         },
-        "company_industries": {
-            "available": True,
-            "unavailable_code": None,
-        },
         "skills": {
             "available": True,
             "unavailable_code": None,
         },
-    }
-    assert payload["company_industries"] == {
-        "company_id": payload["company_id"],
-        "assignments": [],
     }
     assert payload["skill_state"] == {
         "job_id": str(state["job_one_id"]),
@@ -820,21 +721,9 @@ def test_job_detail_uses_structured_governed_knowledge_over_legacy_evidence(
         domain: {"available": True, "unavailable_code": None}
         for domain in (
             "source_attributes",
-            "company_industries",
             "skills",
         )
     }
-    assert payload["company_industry"] == "Legacy evidence only"
-    assert [
-        (assignment["taxonomy_code"], assignment["is_primary"])
-        for assignment in payload["company_industries"]["assignments"]
-    ] == [(state["current_industry_node_code"], True)]
-    assert (
-        payload["company_industries"]["assignments"][0]["breadcrumb"]["section"][
-            "code"
-        ]
-        == "J"
-    )
     assert payload["skills"] == ["Python"]
     assert [skill["code"] for skill in payload["skill_state"]["skills"]] == [
         state["current_skill_code"]
@@ -869,114 +758,13 @@ def test_manual_job_snapshot_uses_the_same_composed_read_model(
         domain: {"available": True, "unavailable_code": None}
         for domain in (
             "source_attributes",
-            "company_industries",
             "skills",
         )
     }
-    assert payload["company_industries"]["assignments"][0]["is_primary"] is True
     assert payload["skills"] == ["Python"]
     assert [mention["raw_name"] for mention in payload["skill_candidate_mentions"]] == [
         "Rust"
     ]
-
-
-def test_company_detail_exposes_governed_industries_without_promoting_legacy_text(
-    product_contract_db,
-) -> None:
-    state = _seed_rich_job_detail_state(product_contract_db)
-
-    response = asyncio.run(get_company(state["company_id"], product_contract_db))
-    payload = response.model_dump(mode="json")
-
-    assert payload["industry"] == "Legacy evidence only"
-    assert payload["company_industry_availability"] == {
-        "available": True,
-        "unavailable_code": None,
-    }
-    assert payload["company_industries"]["company_id"] == str(state["company_id"])
-    assert [
-        (assignment["taxonomy_code"], assignment["is_primary"])
-        for assignment in payload["company_industries"]["assignments"]
-    ] == [(state["current_industry_node_code"], True)]
-
-
-def test_company_list_batches_the_same_governed_industry_contract(
-    product_contract_db,
-) -> None:
-    state = _seed_rich_job_detail_state(product_contract_db)
-
-    response = asyncio.run(
-        list_companies(
-            q=None,
-            status="all",
-            page=1,
-            page_size=100,
-            db=product_contract_db,
-        )
-    )
-    rich_company = next(
-        item for item in response["items"] if item.id == state["company_id"]
-    )
-    payload = rich_company.model_dump(mode="json")
-
-    assert payload["company_industry_availability"]["available"] is True
-    assert payload["company_industries"]["assignments"][0]["taxonomy_code"] == state[
-        "current_industry_node_code"
-    ]
-
-
-def test_job_browser_filters_use_company_industry_descendants(
-    product_contract_db,
-) -> None:
-    state = _seed_rich_job_detail_state(product_contract_db)
-    filters = JobSearchFiltersSchema(
-        company_industry_node_ids=[state["current_industry_section_code"]],
-    )
-
-    query = product_contract_db.query(Job).join(
-        Company,
-        Company.id == Job.company_id,
-    )
-    matches = _apply_structured_filters(query, filters).all()
-
-    assert [job.id for job in matches] == [state["job_id"]]
-    assert filters.company_industry_node_ids == [state["current_industry_section_code"]]
-
-
-def test_job_browser_rejects_legacy_company_industry_filter_authority() -> None:
-    with pytest.raises(
-        ValidationError,
-        match="industry is retired; use company_industry_node_ids",
-    ):
-        JobSearchFiltersSchema(industry="Legacy evidence only")
-
-
-def test_get_job_browser_rejects_legacy_company_industry_filter_with_http_422() -> None:
-    response = _job_search_client(None).get(
-        "/api/jobs/search",
-        params={"industry": "Legacy evidence only"},
-    )
-
-    assert response.status_code == 422
-    assert "industry is retired; use company_industry_node_ids" in response.text
-
-
-def test_get_job_browser_filters_by_company_industry_node_ids(
-    product_contract_db,
-) -> None:
-    state = _seed_rich_job_detail_state(product_contract_db)
-
-    response = _job_search_client(product_contract_db).get(
-        "/api/jobs/search",
-        params={
-            "company_industry_node_ids": state["current_industry_section_code"],
-        },
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["total"] == 1
-    assert [job["id"] for job in payload["jobs"]] == [str(state["job_id"])]
 
 
 def test_job_browser_export_reads_current_skills_without_legacy_relationships(

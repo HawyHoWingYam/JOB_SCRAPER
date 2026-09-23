@@ -7,6 +7,7 @@ import pytest
 from app.services.crawl_cancellation_token import CrawlCancellationToken
 from app.services.crawl_job_cancellation_service import CrawlJobCancellationService
 from app.services.crawl_job_dispatch_service import CrawlJobDispatchService
+from app.services.crawl_job_runtime import CrawlJobRuntime
 
 
 class _Db:
@@ -33,6 +34,10 @@ class _CrawlRepository:
 
     def append_event(self, _db, **kwargs) -> None:
         self.events.append(kwargs)
+
+    def record_runtime_event(self, _db, **kwargs):
+        self.events.append(kwargs)
+        return self.job
 
 
 class _ExecutionRepository:
@@ -190,3 +195,39 @@ class _CancellationDb:
 
     def close(self) -> None:
         return None
+
+
+def test_failed_detail_run_releases_owned_rows_and_records_recovery() -> None:
+    job = SimpleNamespace(id="job-id", dispatch_plan_id="plan-id")
+    repository = _CrawlRepository(job)
+    db = _CancellationDb()
+    runtime = CrawlJobRuntime(
+        db_session_factory=lambda: db,
+        crawl_job_repository=repository,
+    )
+    def release_rows(*_args, **kwargs):
+        return [
+            {
+                "listing_id": "listing-id",
+                "after_status": "pending",
+                "outcome": kwargs["outcome"],
+            }
+        ]
+
+    runtime.cancellation_service.release_running_detail_rows = release_rows
+
+    runtime.mark_detail_run_failed(
+        crawl_job_id=job.id,
+        source_site="jobsdb",
+        error_message="deterministic interface drift",
+        payload={"crawl_phase": "detail"},
+    )
+
+    assert [event["event_type"] for event in repository.events] == [
+        "crawl.failed",
+        "crawl.detail_failed_recovered",
+    ]
+    assert repository.events[0]["payload"]["released_detail_rows"] == 1
+    assert repository.events[1]["payload"]["records"][0]["outcome"] == (
+        "failed_retryable"
+    )

@@ -26,11 +26,9 @@ from app.messaging.topics import (
 )
 from app.models.company import Company
 from app.models.current_taxonomy import (
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentJobSkillMention,
     CurrentSkillCandidate,
-    CurrentSourceTaxonomyMapping,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
 )
@@ -96,18 +94,11 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
             last_observed_at=now,
         )
         db.add(source_root)
-        db.add_all(
-            (
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="company_industry", code="technology", parent_code=None,
-                    level="section", labels={"en": "Technology"}, sort_order=1,
-                    is_assignable=True, is_active=True,
-                ),
-                CurrentTaxonomyNodeRecord(
-                    taxonomy="skill", code="python", parent_code=None,
-                    level="skill", labels={"en": "Python"}, sort_order=1,
-                    is_assignable=True, is_active=True,
-                ),
+        db.add(
+            CurrentTaxonomyNodeRecord(
+                taxonomy="skill", code="python", parent_code=None,
+                level="skill", labels={"en": "Python"}, sort_order=1,
+                is_assignable=True, is_active=True,
             )
         )
         db.flush()
@@ -120,13 +111,6 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
                     taxonomy="skill", node_code="python", alias="Py",
                     normalized_alias="py",
                 ),
-                CurrentCompanyIndustryAssignment(
-                    company_id=company.id, taxonomy="company_industry",
-                    taxonomy_code="technology", method="source", provenance={},
-                    evidence_hash="b" * 64,
-                    breadcrumb={"section": {"code": "technology", "label": "Technology"}},
-                    is_primary=True, primary_basis="source", captured_at=now,
-                ),
                 CurrentJobSkillAssignment(
                     job_id=job.id, skill_code="python", taxonomy="skill",
                     source="ai", confidence=0.9, provenance={}, mention_count=1,
@@ -137,11 +121,6 @@ def _seed_retained_and_runtime_cycle(engine) -> dict[str, str]:
                     canonical_raw_name="New Tool", raw_variants=["New Tool"],
                     occurrence_count=5, distinct_job_count=5, evidence_summary={},
                     first_seen_at=now, last_seen_at=now, created_at=now, updated_at=now,
-                ),
-                CurrentSourceTaxonomyMapping(
-                    taxonomy="company_industry", source_site="offertoday",
-                    source_key="offertoday:100", target_code="technology",
-                    source_label="Technology", role="deterministic", evidence={},
                 ),
                 GovernanceAuditEvent(
                     id=audit_id, domain="skill", subject_type="candidate",

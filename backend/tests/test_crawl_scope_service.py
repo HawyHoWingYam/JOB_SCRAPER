@@ -9,7 +9,16 @@ from sqlalchemy.orm import sessionmaker
 from app.crawl_control.contracts import AuthoredCrawlScopeV1, ListingSettingsV1
 from app.crawl_control.errors import ScopeRuleInvalidError, WorkloadCapExceededError
 from app.crawl_control.scope_service import CrawlScopeService
-from app.models.source_classification import SourceClassification
+from app.models.offertoday_coverage import OFFERTODAY_COVERAGE_TABLES
+from app.models.source_classification import (
+    SOURCE_CLASSIFICATION_TABLES,
+    SourceClassification,
+)
+from app.models.offertoday_coverage import OfferTodayKeywordEntry
+from app.services.offertoday_taxonomy_resolver import OfferTodayTaxonomyResolver
+from app.source_classifications.adapters.offertoday import (
+    OfferTodaySourceClassificationAdapter,
+)
 from app.services.source_classification_registry import (
     ObservedSourceClassification,
     SourceClassificationRegistry,
@@ -36,19 +45,17 @@ class OfferTodayAdapter:
 
     @staticmethod
     def compile(node):
-        return tuple(
+        return (
             SourceQueryTarget(
                 adapter="offertoday.category",
                 classification_id=node.classification_id,
                 payload={
                     "category_code": int(node.native_id),
-                    "search_family": "classification_keyword_sweep",
-                    "endpoint": "search",
-                    "keyword": keyword,
-                    "rcd_type": None,
+                    "endpoint": "browse",
+                    "keyword": "",
+                    "rcd_type": 7,
                 },
-            )
-            for keyword in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            ),
         )
 
 
@@ -60,14 +67,15 @@ def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
 @pytest.fixture()
 def scope_db():
     engine = create_engine("sqlite:///:memory:")
-    SourceClassification.__table__.create(engine)
+    tables = (*SOURCE_CLASSIFICATION_TABLES, *OFFERTODAY_COVERAGE_TABLES)
+    SourceClassification.metadata.create_all(engine, tables=tables)
     factory = sessionmaker(bind=engine)
     db = factory()
     try:
         yield db
     finally:
         db.close()
-        SourceClassification.__table__.drop(engine)
+        SourceClassification.metadata.drop_all(engine, tables=reversed(tables))
         engine.dispose()
 
 
@@ -104,25 +112,82 @@ def _seed(db):
 
 
 def _seed_offertoday(db):
-    SourceClassificationRegistry(db).synchronize(
-        "offertoday",
+    payload = {
+        "code": 0,
+        "data": {
+            "en": {
+                "POSITION": {
+                    "children": [
+                        {
+                            "code": 118000,
+                            "name": "Information Technology",
+                            "level": 1,
+                            "parentCode": 0,
+                            "children": [
+                                {
+                                    "code": 118000,
+                                    "name": "All Information Technology",
+                                    "level": 2,
+                                    "parentCode": 118000,
+                                    "children": [],
+                                },
+                                {
+                                    "code": 118001,
+                                    "name": "Developers",
+                                    "level": 2,
+                                    "parentCode": 118000,
+                                    "children": [],
+                                },
+                            ],
+                        },
+                        {
+                            "code": 119000,
+                            "name": "Sales",
+                            "level": 1,
+                            "parentCode": 0,
+                            "children": [
+                                {
+                                    "code": 119000,
+                                    "name": "All Sales",
+                                    "level": 2,
+                                    "parentCode": 119000,
+                                    "children": [],
+                                }
+                            ],
+                        },
+                    ]
+                }
+            }
+        },
+    }
+    adapter = OfferTodaySourceClassificationAdapter(
+        taxonomy_payload_provider=lambda: payload
+    )
+    OfferTodayTaxonomyResolver(db, adapter=adapter).refresh_or_last_verified()
+    root = db.query(SourceClassification).filter_by(
+        classification_id="offertoday:118000"
+    ).one()
+    db.add_all(
         (
-            ObservedSourceClassification(
-                classification_id="offertoday:118000",
-                native_id="118000",
-                label="Information Technology",
-                depth=0,
-                query_metadata={"queryable": True, "supports_exact": True},
+            OfferTodayKeywordEntry(
+                source_classification_id=root.id,
+                keyword="Python",
+                normalized_keyword="python",
+                enabled=True,
+                notes="",
+                created_by="test",
+                updated_by="test",
             ),
-            ObservedSourceClassification(
-                classification_id="offertoday:119000",
-                native_id="119000",
-                label="Sales",
-                depth=0,
-                query_metadata={"queryable": True, "supports_exact": True},
+            OfferTodayKeywordEntry(
+                source_classification_id=root.id,
+                keyword="Java",
+                normalized_keyword="java",
+                enabled=True,
+                notes="",
+                created_by="test",
+                updated_by="test",
             ),
-        ),
-        complete=True,
+        )
     )
     db.commit()
 
@@ -252,14 +317,26 @@ def test_offertoday_requires_one_root_and_uses_operator_cap_above_generic_ceilin
         selected_scope,
         listing_settings=ListingSettingsV1(
             crawl_mode="headless",
-            page_depth=200,
-            run_page_cap=7200,
+            page_depth=2000,
+            run_page_cap=8000,
         ),
     )
 
-    assert preview.resolved_scope.query_target_count == 36
+    assert preview.resolved_scope.query_target_count == 4
+    assert [
+        target.parameters.target_kind
+        for target in preview.resolved_scope.query_targets
+    ] == ["native_top_level", "native_child", "keyword", "keyword"]
+    assert [
+        target.classification_id for target in preview.resolved_scope.query_targets
+    ] == [
+        "offertoday:118000",
+        "offertoday:118001",
+        "offertoday:118000",
+        "offertoday:118000",
+    ]
     assert preview.listing_workload is not None
-    assert preview.listing_workload.estimated_max_pages == 7200
+    assert preview.listing_workload.estimated_max_pages == 8000
     assert preview.listing_workload.system_run_page_cap == 1_000_000_000
     assert preview.listing_workload.dispatchable is True
 
@@ -268,8 +345,8 @@ def test_offertoday_requires_one_root_and_uses_operator_cap_above_generic_ceilin
             selected_scope,
             listing_settings=ListingSettingsV1(
                 crawl_mode="headless",
-                page_depth=200,
-                run_page_cap=7199,
+                page_depth=2000,
+                run_page_cap=7999,
             ),
         )
     with pytest.raises(ScopeRuleInvalidError, match="technical aggregate"):
@@ -277,7 +354,7 @@ def test_offertoday_requires_one_root_and_uses_operator_cap_above_generic_ceilin
             selected_scope,
             listing_settings=ListingSettingsV1(
                 crawl_mode="headless",
-                page_depth=(1_000_000_000 // 36) + 1,
+                page_depth=(1_000_000_000 // 4) + 1,
                 run_page_cap=1_000_000_000,
             ),
         )

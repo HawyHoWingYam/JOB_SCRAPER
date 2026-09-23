@@ -1,0 +1,158 @@
+[
+  {
+    "id": 2,
+    "repo": "typesafe-ai/system-one-adapter-python",
+    "sha": "e1d4cc938204b22fc5a3c3aca7044072fe3f712d",
+    "error": null
+  },
+  {
+    "id": 4,
+    "repo": "typesafe-ai/typesafe-sdk-python",
+    "sha": "0ffd094c72ed9445223060b24ffd7a56aa781fb4",
+    "error": null
+  },
+  {
+    "id": 14,
+    "repo": "jomatsu/zod-jev",
+    "sha": "700bd256fe94541a2d21044027cc2dbf5036b396",
+    "error": null
+  },
+  {
+    "id": 96,
+    "repo": "chopratejas/invalidate",
+    "sha": "d6ed0ea4e72660408dc175cd20caf6cb8658e9b0",
+    "error": null
+  },
+  {
+    "id": 107,
+    "repo": "WiktorB2004/llama-index-jev",
+    "sha": "72c73dc50bca4b7ea6928ef65ea09f1a7ee4a01e",
+    "error": null
+  },
+  {
+    "id": 117,
+    "repo": "typakon4/jev-layer",
+    "sha": "b6a3cf455d0b855903b6e5140ed3a764e663e910",
+    "error": null
+  },
+  {
+    "id": 287,
+    "repo": "browser-use/jev-ultrafast",
+    "sha": "1231850a0bf1a0c0341fe408ef1668dbbfdfac46",
+    "error": null
+  },
+  {
+    "id": 333,
+    "repo": "krw82/jev-playwright-mcp",
+    "sha": "db7762fd2ef66af7b38362c98982692bc81f57b7",
+    "error": null
+  },
+  {
+    "id": 339,
+    "repo": "kyotofin/tax-doc-classifier",
+    "sha": "3e95a77f763c6becb78472f8b2ce2f54237f9214",
+    "error": null
+  },
+  {
+    "id": 351,
+    "repo": "misbahsy/doc-router",
+    "sha": "8977d2ba1fd672fbbc85f01e630a2d5de6a406aa",
+    "error": null
+  },
+  {
+    "id": 356,
+    "repo": "reachjalil/jevlogs",
+    "sha": "217d2b70bfb327a0038b21851c1c9c143eb80469",
+    "error": null
+  },
+  {
+    "id": 358,
+    "repo": "hev/reranker",
+    "sha": "1eb47266270b32b2a3667f9fb89646378ca9c9d6",
+    "error": null
+  },
+  {
+    "id": 369,
+    "repo": "keltokhy/jselect",
+    "sha": "dc6b725c85229da5c55b88954da749bf66d89db9",
+    "error": null
+  },
+  {
+    "id": 372,
+    "repo": "MarissaFamularo/citation-verifier",
+    "sha": "f9058642274033e62855d3066988418fefa2e272",
+    "error": null
+  },
+  {
+    "id": 373,
+    "repo": "reachjalil/jev-tree",
+    "sha": "95bff63bd653fee4dc71f33f9431dce0f81e2ca3",
+    "error": null
+  },
+  {
+    "id": 377,
+    "repo": "keltokhy/jlink",
+    "sha": "4d7ccb7609a8302271697e63fef4c7c34da6b090",
+    "error": null
+  },
+  {
+    "id": 383,
+    "repo": "qddegtya/qualm",
+    "sha": "e1aacf6844f312ba95eb6a1bd26fad15575a7173",
+    "error": null
+  },
+  {
+    "id": 539,
+    "repo": "abhixhek/jevcal",
+    "sha": "ae8f3144d69c9cb0e5e0a2c17f70b9d14714cb9f",
+    "error": null
+  },
+  {
+    "id": 547,
+    "repo": "zhuyansen/jev-search-rerank-eval",
+    "sha": "c896f14e944182e17a002dd7546f06ba3788d586",
+    "error": null
+  },
+  {
+    "id": 548,
+    "repo": "scienthoon/jev-ood-calibration",
+    "sha": "914d87ab16517f14e833cff63d73b51235b14bd6",
+    "error": null
+  },
+  {
+    "id": 551,
+    "repo": "AntonioCoppe/jev-harness",
+    "sha": "2934d12e18157881440362d747d31b688a1c6ed6",
+    "error": null
+  },
+  {
+    "id": 552,
+    "repo": "DECRUX9812/openjev",
+    "sha": "7bcf388dc4789b55ce22b37a6b5ace003913d9bb",
+    "error": null
+  },
+  {
+    "id": 553,
+    "repo": "RINNECODER/jev-behavior-study",
+    "sha": "e4a1d7ec691a91f33d3b5879a780e6f27328f173",
+    "error": null
+  },
+  {
+    "id": 603,
+    "repo": "jujumilk3/jev-calibration-audit",
+    "sha": "daab9e2c2d5d5683bf07f3482deb653c26856219",
+    "error": null
+  },
+  {
+    "id": 609,
+    "repo": "yodablocks/jev-orderby-bench",
+    "sha": "523979540d0fad2786208ba07cc8d0fe2711f9ed",
+    "error": null
+  },
+  {
+    "id": 632,
+    "repo": "nexibeo/jev-cookbook",
+    "sha": "c1238b8529d0d275d54bc6eb4c39d4f39062238f",
+    "error": null
+  }
+]

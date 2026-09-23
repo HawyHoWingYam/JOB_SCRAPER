@@ -210,15 +210,15 @@ class EnrichmentRunService:
             )
         if normalized.source_classification_ids:
             predicate = Job.source_classification_paths.any(
-                    JobSourceClassificationPath.nodes.any(
-                        and_(
-                            JobSourceClassificationPathNode.source_position == 0,
-                            JobSourceClassificationPathNode.source_classification_id.in_(
-                                normalized.source_classification_ids
-                            ),
-                        )
+                JobSourceClassificationPath.nodes.any(
+                    and_(
+                        JobSourceClassificationPathNode.source_position == 0,
+                        JobSourceClassificationPathNode.source_classification_id.in_(
+                            normalized.source_classification_ids
+                        ),
                     )
                 )
+            )
             query = query.filter(
                 or_(func.lower(Job.source_site) == MANUAL_ORIGIN, predicate)
                 if manual_selected
@@ -226,15 +226,15 @@ class EnrichmentRunService:
             )
         if normalized.source_subclassification_ids:
             predicate = Job.source_classification_paths.any(
-                    JobSourceClassificationPath.nodes.any(
-                        and_(
-                            JobSourceClassificationPathNode.source_position > 0,
-                            JobSourceClassificationPathNode.source_classification_id.in_(
-                                normalized.source_subclassification_ids
-                            ),
-                        )
+                JobSourceClassificationPath.nodes.any(
+                    and_(
+                        JobSourceClassificationPathNode.source_position > 0,
+                        JobSourceClassificationPathNode.source_classification_id.in_(
+                            normalized.source_subclassification_ids
+                        ),
                     )
                 )
+            )
             query = query.filter(
                 or_(func.lower(Job.source_site) == MANUAL_ORIGIN, predicate)
                 if manual_selected
@@ -271,7 +271,9 @@ class EnrichmentRunService:
     def preview_pending_jobs(
         self, *, filters: PendingJobFilters, limit: int
     ) -> dict[str, object]:
-        return self.inspect_pending_selection(filters=filters, limit=limit).to_preview_payload()
+        return self.inspect_pending_selection(
+            filters=filters, limit=limit
+        ).to_preview_payload()
 
     def count_pending_jobs(
         self,
@@ -361,7 +363,9 @@ class EnrichmentRunService:
                 JobSourceClassificationPathNode.source_classification_id,
                 JobSourceClassificationPathNode.label,
             )
-            .join(candidate_ids, candidate_ids.c.id == JobSourceClassificationPath.job_id)
+            .join(
+                candidate_ids, candidate_ids.c.id == JobSourceClassificationPath.job_id
+            )
             .join(
                 JobSourceClassificationPathNode,
                 JobSourceClassificationPathNode.path_id
@@ -388,21 +392,29 @@ class EnrichmentRunService:
                 }
             )
         values = list(paths.values())
-        manual_pending = self._query_pending_candidates(func.count(Job.id)).filter(
-            func.lower(Job.source_site) == MANUAL_ORIGIN
-        ).scalar()
+        manual_pending = (
+            self._query_pending_candidates(func.count(Job.id))
+            .filter(func.lower(Job.source_site) == MANUAL_ORIGIN)
+            .scalar()
+        )
         if int(manual_pending or 0) > 0:
             values.append({"source_site": MANUAL_ORIGIN, "nodes": []})
         return values
 
     def get_job_queue_counts(self) -> dict[str, int]:
-        total_jobs, enriched_jobs = self.db.query(
-            func.count(Job.id),
-            func.count(Job.ai_enriched_at),
-        ).filter(Job.is_deleted.is_(False)).one()
-        eligible_enriched_jobs = self._query_ai_actionable_jobs(
-            func.count(Job.id)
-        ).filter(Job.ai_enriched_at.is_not(None)).scalar()
+        total_jobs, enriched_jobs = (
+            self.db.query(
+                func.count(Job.id),
+                func.count(Job.ai_enriched_at),
+            )
+            .filter(Job.is_deleted.is_(False))
+            .one()
+        )
+        eligible_enriched_jobs = (
+            self._query_ai_actionable_jobs(func.count(Job.id))
+            .filter(Job.ai_enriched_at.is_not(None))
+            .scalar()
+        )
         ai_eligible_jobs = self._query_ai_actionable_jobs(func.count(Job.id)).scalar()
         pending_jobs = int(
             self._query_pending_candidates(func.count(Job.id)).scalar() or 0
@@ -558,6 +570,24 @@ class EnrichmentRunService:
             source_type="manual_pending",
             job_ids=[str(job.id) for job in selected_jobs],
             excluded_reasons_by_job_id=excluded_reasons_by_job_id,
+        )
+
+    def create_jev_skill_backfill_run(
+        self,
+        *,
+        limit: int,
+    ) -> Optional[EnrichmentRun]:
+        """Freeze one bounded historical Jev Skill classification slice."""
+        from app.services.jev_skill_backfill import JevSkillBackfillPlanner
+
+        self._require_active_slot()
+        plan = JevSkillBackfillPlanner(self.db).inspect(limit=limit)
+        if not plan.selected_job_ids:
+            return None
+        return self._create_run(
+            source_type="jev_skill_backfill",
+            job_ids=list(plan.selected_job_ids),
+            run_snapshot={"jev_skill_backfill_plan": plan.to_payload()},
         )
 
     def get_crawl_auto_run(self, crawl_job_id: str) -> Optional[EnrichmentRun]:
@@ -1434,9 +1464,7 @@ class EnrichmentRunService:
             self._enqueue_job_enriched_event(run=run, item=item)
         elif result.get("status") == "excluded":
             item.status = "excluded"
-            item.error_message = str(
-                result.get("error") or "job_enrichment_excluded"
-            )
+            item.error_message = str(result.get("error") or "job_enrichment_excluded")
             item.error_code = result.get("error_code")
         else:
             item.status = "failed"
@@ -1537,13 +1565,13 @@ class EnrichmentRunService:
         self,
         run_id: str,
         enrichment_service=None,
+        backfill_service=None,
         *,
         claim: bool = True,
     ) -> EnrichmentRun:
         """Execute a persisted run and update item/run status from enrichment results."""
         from app.services.ai_enrichment_service import get_ai_enrichment_service
-
-        service = enrichment_service or get_ai_enrichment_service()
+        from app.services.jev_skill_backfill import get_jev_skill_backfill_service
 
         if claim:
             claimed_run = self.claim_run(run_id)
@@ -1554,6 +1582,11 @@ class EnrichmentRunService:
                 return run
 
         run = self.db.query(EnrichmentRun).filter(EnrichmentRun.id == run_id).one()
+        service = (
+            backfill_service or get_jev_skill_backfill_service()
+            if run.source_type == "jev_skill_backfill"
+            else enrichment_service or get_ai_enrichment_service()
+        )
         items = (
             self.db.query(EnrichmentRunItem)
             .filter(EnrichmentRunItem.run_id == run.id)
@@ -1594,15 +1627,16 @@ class EnrichmentRunService:
                         item_queue.task_done()
                         continue
 
-                    inspection = JobEnrichmentEvidence(self.db).inspect(job)
-                    if not inspection.supported:
-                        self._update_item_excluded(
-                            run_id,
-                            item.id,
-                            inspection.reason or "job_enrichment_not_supported",
-                        )
-                        item_queue.task_done()
-                        continue
+                    if run.source_type != "jev_skill_backfill":
+                        inspection = JobEnrichmentEvidence(self.db).inspect(job)
+                        if not inspection.supported:
+                            self._update_item_excluded(
+                                run_id,
+                                item.id,
+                                inspection.reason or "job_enrichment_not_supported",
+                            )
+                            item_queue.task_done()
+                            continue
 
                     job_title = self._get_job_title(item.job_id)
                     if self._update_item_started(run_id, item.id, job_title) is None:
@@ -1704,4 +1738,34 @@ class EnrichmentRunService:
         return self._create_run(
             source_type="retry_failed",
             job_ids=[str(item.job_id) for item in failed_items],
+        )
+
+    def create_resume_run_from_cancelled_backfill(
+        self, run_id: str
+    ) -> Optional[EnrichmentRun]:
+        """Create a new durable continuation for cancelled Jev backfill items."""
+        self._require_active_slot()
+        source = self.get_run(run_id)
+        if source is None:
+            return None
+        if source.source_type != "jev_skill_backfill" or source.status != "cancelled":
+            raise ValueError("only a cancelled Jev Skill backfill can be resumed")
+        cancelled_items = (
+            self.db.query(EnrichmentRunItem)
+            .filter(
+                EnrichmentRunItem.run_id == source.id,
+                EnrichmentRunItem.status == "cancelled",
+            )
+            .order_by(EnrichmentRunItem.position, EnrichmentRunItem.id)
+            .all()
+        )
+        if not cancelled_items:
+            raise ValueError("cancelled Jev Skill backfill has no remaining items")
+        return self._create_run(
+            source_type="jev_skill_backfill",
+            job_ids=[str(item.job_id) for item in cancelled_items],
+            run_snapshot={
+                "resumed_from_run_id": source.id,
+                "previous_snapshot": dict(source.run_snapshot or {}),
+            },
         )

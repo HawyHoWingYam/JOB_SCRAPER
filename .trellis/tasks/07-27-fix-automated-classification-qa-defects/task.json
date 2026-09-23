@@ -25,7 +25,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Implementation committed in 71fce2c9 and approved on 2026-07-28. Aggregate evidence posted to https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/34#issuecomment-5098334255 and https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/32#issuecomment-5098334278. Browser manual QA explicitly deferred; keep child and umbrella issues open.",
+  "notes": "Implementation committed in 71fce2c9 and approved on 2026-07-28. Aggregate evidence is preserved in GitHub #34 and #32. The user waived a separate human browser pass; #36/#37 close on automated regression and the current full E2E gate. #38 closes as superseded because Company Industry was later removed from the product. The umbrella may now archive without misrepresenting the retired Company scenario as tested.",
   "meta": {
     "github_issue": 32,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/32"

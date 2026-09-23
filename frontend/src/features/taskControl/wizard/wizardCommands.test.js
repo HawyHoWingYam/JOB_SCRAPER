@@ -48,7 +48,7 @@ describe('wizard command builders', () => {
     expect(buildOneOffRun(ct, ctClassifications).listing_settings.crawl_mode).toBe('headless');
   });
 
-  it('accepts one OfferToday category only when the cap covers all 36 targets', () => {
+  it('accepts one OfferToday category and leaves adaptive cap review to the server', () => {
     const offerClassifications = {
       sourceSite: 'offertoday',
       classifications: [
@@ -78,10 +78,10 @@ describe('wizard command builders', () => {
       ...offerDraft,
       scope: { mode: 'all', classification_ids: [] },
     }, offerClassifications)).toThrow(/exactly one/);
-    expect(() => buildOneOffRun({
+    expect(buildOneOffRun({
       ...offerDraft,
       execution: { ...offerDraft.execution, run_page_cap: 3599 },
-    }, offerClassifications)).toThrow(/36 keywords/);
+    }, offerClassifications).listing_settings.run_page_cap).toBe(3599);
   });
 
   it('paired detail draft copies no plan or runtime authority', () => {

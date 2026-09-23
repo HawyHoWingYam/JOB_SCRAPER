@@ -5,9 +5,11 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import Column, MetaData, String, Table, Text, create_engine
 from sqlalchemy.exc import IntegrityError
 
 from app.logging_config import redact_url
+from app.models.job import Job
 from app.services.crawl_job_runtime import ListingBatchPersistResult
 from app.services.offertoday_detail_pipeline import (
     OfferTodayDetailPipeline,
@@ -740,7 +742,6 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 ) -> None:
     runtime = _OneTargetRuntime(source_site="jobsdb")
     projection_calls = []
-    industry_projection_calls = []
 
     class FakeDetailScraper:
         async def fetch_job_detail(self, _source_job_id):
@@ -760,9 +761,6 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 
         def _build_job_data(self, canonical, _company_id):
             return dict(canonical)
-
-        def project_company_industry(self, _db, company, canonical):
-            industry_projection_calls.append((company.id, dict(canonical)))
 
         def project_source_attributes(self, _db, job, canonical):
             projection_calls.append((job.id, dict(canonical)))
@@ -804,18 +802,6 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
 
     messages = _messages(caplog)
     assert result["completed"] == 1
-    assert industry_projection_calls == [
-        (
-            "company-1",
-            {
-                "raw_data": {
-                    "title": "Engineer",
-                    "description": "full-job-description-secret",
-                    "cookie": "cookie-secret",
-                }
-            },
-        )
-    ]
     assert projection_calls == [
         (
             "published-1",
@@ -837,6 +823,56 @@ async def test_jobsdb_every_detail_target_has_start_result_and_done(
     assert "cumulative_saved=1" in messages
     assert "cookie-secret" not in messages
     assert "full-job-description-secret" not in messages
+
+
+@pytest.mark.asyncio
+async def test_jobsdb_persistence_error_aborts_before_later_target(monkeypatch) -> None:
+    runtime = _OneTargetRuntime(source_site="jobsdb")
+    runtime.add_second_target()
+    fetch_calls: list[str] = []
+
+    class FakeDetailScraper:
+        async def fetch_job_detail(self, source_job_id):
+            fetch_calls.append(source_job_id)
+            return {"title": "Engineer"}
+
+    @asynccontextmanager
+    async def fake_detail_context(_args):
+        yield FakeDetailScraper()
+
+    class BrokenIngestService:
+        def _build_company_data(self, _canonical):
+            raise AttributeError("deterministic interface drift")
+
+    monkeypatch.setattr(jobsdb_crawl, "SessionLocal", _FakeDb)
+    monkeypatch.setattr(jobsdb_crawl, "_detail_scraper_context", fake_detail_context)
+    monkeypatch.setattr(jobsdb_crawl, "IngestWorkerService", BrokenIngestService)
+    monkeypatch.setattr(
+        jobsdb_crawl,
+        "build_jobsdb_canonical_job",
+        lambda detail, **_kwargs: SimpleNamespace(
+            to_dict=lambda: {"raw_data": dict(detail)}
+        ),
+    )
+
+    with pytest.raises(jobsdb_crawl.DetailPersistenceError):
+        await jobsdb_crawl.run_detail_phase(
+            SimpleNamespace(
+                crawl_job_id="jobsdb-fatal-detail",
+                crawl_mode="headless",
+                source_listing_crawl_job_id="listing-task",
+                category_ids=[1200],
+                detail_limit=10,
+                detail_statuses=["pending"],
+                skip_existing=False,
+                is_resume=False,
+                resume_strategy="fresh_profile",
+            ),
+            runtime,
+        )
+
+    assert fetch_calls == ["job-1"]
+    assert runtime.detail_transitions == ["running", "failed"]
 
 
 @pytest.mark.asyncio
@@ -921,6 +957,309 @@ async def test_ctgoodjobs_every_detail_target_has_start_result_and_done(
     assert "cumulative_saved=1" in messages
     assert "csrf-secret" not in messages
     assert "full-job-description-secret" not in messages
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_persist_uses_current_projection_contract(monkeypatch) -> None:
+    projection_calls = []
+    company_payloads = []
+
+    class FakeIngestService:
+        def _build_company_data(self, _canonical):
+            return {"name": "Example", "location": "Job-owned location"}
+
+        def _build_job_data(self, canonical, _company_id):
+            return dict(canonical)
+
+        def project_source_attributes(self, _db, job, canonical):
+            projection_calls.append((job.id, dict(canonical)))
+
+    class FakeCompanyRepository:
+        def upsert_company(self, _db, company_data, **_kwargs):
+            company_payloads.append(dict(company_data))
+            return SimpleNamespace(id="company-1"), "created"
+
+    class FakeJobRepository:
+        def upsert_source_job(self, *_args, **_kwargs):
+            return SimpleNamespace(id="published-1"), "created"
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "SessionLocal", _FakeDb)
+    monkeypatch.setattr(ctgoodjobs_crawl, "IngestWorkerService", FakeIngestService)
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "CompanyRepository",
+        FakeCompanyRepository,
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "JobRepository", FakeJobRepository)
+
+    canonical = {"source_job_id": "job-1", "raw_data": {"title": "Engineer"}}
+    saved_job_id = await ctgoodjobs_crawl._persist_ctgoodjobs_job(
+        canonical_job=canonical,
+    )
+
+    assert saved_job_id == "published-1"
+    assert company_payloads == [{"name": "Example"}]
+    assert projection_calls == [("published-1", canonical)]
+
+
+def test_job_location_uses_unbounded_text_storage() -> None:
+    assert isinstance(Job.__table__.c.location.type, Text)
+
+    metadata = MetaData()
+    table = Table(
+        "job_location_probe",
+        metadata,
+        Column("location", Job.__table__.c.location.type, nullable=True),
+    )
+    engine = create_engine("sqlite:///:memory:")
+    metadata.create_all(engine)
+    location = "Hong Kong multi-location evidence; " * 20
+    assert len(location) > 255
+    with engine.begin() as connection:
+        connection.execute(table.insert().values(location=location))
+        persisted = connection.execute(table.select()).scalar_one()
+
+    assert persisted == location
+
+
+def test_ctgoodjobs_rejects_location_exceeding_deployed_column_limit() -> None:
+    metadata = MetaData()
+    Table(
+        "jobs",
+        metadata,
+        Column("location", String(255), nullable=True),
+    )
+    engine = create_engine("sqlite:///:memory:")
+    metadata.create_all(engine)
+    db = SimpleNamespace(get_bind=lambda: engine)
+    location = "Hong Kong multi-location evidence; " * 20
+
+    with pytest.raises(InvalidIngestPayloadError) as exc_info:
+        ctgoodjobs_crawl._validate_ctgoodjobs_storage_contract(
+            db,
+            {"location": location},
+        )
+
+    assert exc_info.value.reason == "persistence_value_too_long"
+    assert "field=location" in str(exc_info.value)
+    assert "limit=255" in str(exc_info.value)
+    assert f"value_length={len(location)}" in str(exc_info.value)
+    assert location not in str(exc_info.value)
+
+
+def test_ctgoodjobs_accepts_long_location_when_deployed_column_is_text() -> None:
+    metadata = MetaData()
+    Table(
+        "jobs",
+        metadata,
+        Column("location", Text, nullable=True),
+    )
+    engine = create_engine("sqlite:///:memory:")
+    metadata.create_all(engine)
+    db = SimpleNamespace(get_bind=lambda: engine)
+
+    ctgoodjobs_crawl._validate_ctgoodjobs_storage_contract(
+        db,
+        {"location": "Hong Kong multi-location evidence; " * 20},
+    )
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_storage_contract_rejection_continues_later_target(
+    monkeypatch,
+) -> None:
+    runtime = _OneTargetRuntime(source_site="ctgoodjobs")
+    runtime.add_second_target()
+    category = SimpleNamespace(
+        source_classification_id="ct-it",
+        name="Information Technology",
+        slug="information-technology",
+    )
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "_categories_by_id",
+        lambda: {"ct-it": category},
+    )
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "parse_detail_page",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "merge_ctgoodjobs_job", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "build_ctgoodjobs_canonical_job",
+        lambda _merged: SimpleNamespace(to_dict=lambda: {"raw_data": {}}),
+    )
+    calls = 0
+
+    async def persist_sequence(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise InvalidIngestPayloadError(
+                "persistence_value_too_long",
+                "Persistence value exceeds deployed storage contract: "
+                "field=location limit=255 value_length=300",
+            )
+        return "published-2"
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "_persist_ctgoodjobs_job", persist_sequence)
+
+    class FakeBrowser:
+        async def fetch_page_html(self, *_args, **_kwargs):
+            return "<html><main>detail</main></html>"
+
+    result = await ctgoodjobs_crawl._run_detail_phase(
+        SimpleNamespace(
+            crawl_job_id="ctgoodjobs-storage-contract-partial",
+            crawl_mode="headed",
+            category_ids=["ct-it"],
+            detail_limit=10,
+            detail_statuses=["failed", "pending"],
+            skip_existing=False,
+            resume_strategy="fresh_profile",
+        ),
+        runtime,
+        FakeBrowser(),
+        source_listing_crawl_job_id="listing-task",
+        detail_scope="listing_batch",
+    )
+
+    assert calls == 2
+    assert result["failed"] == 1
+    assert result["completed"] == 1
+    assert runtime.detail_transitions == [
+        "running",
+        "failed",
+        "running",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_unknown_detail_error_aborts_before_later_target(
+    monkeypatch,
+) -> None:
+    runtime = _OneTargetRuntime(source_site="ctgoodjobs")
+    runtime.add_second_target()
+    category = SimpleNamespace(
+        source_classification_id="ct-it",
+        name="Information Technology",
+        slug="information-technology",
+    )
+    fetch_calls: list[str] = []
+
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "_categories_by_id",
+        lambda: {"ct-it": category},
+    )
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "parse_detail_page",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "merge_ctgoodjobs_job", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "build_ctgoodjobs_canonical_job",
+        lambda _merged: SimpleNamespace(to_dict=lambda: {"raw_data": {}}),
+    )
+
+    async def broken_persist(**_kwargs):
+        raise RuntimeError("programming failure")
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "_persist_ctgoodjobs_job", broken_persist)
+
+    class FakeBrowser:
+        async def fetch_page_html(self, url, **_kwargs):
+            fetch_calls.append(url)
+            return "<html>detail</html>"
+
+    with pytest.raises(RuntimeError, match="programming failure"):
+        await ctgoodjobs_crawl._run_detail_phase(
+            SimpleNamespace(
+                crawl_job_id="ctgoodjobs-unknown-detail-error",
+                crawl_mode="headed",
+                category_ids=["ct-it"],
+                detail_limit=10,
+                detail_statuses=["pending"],
+                skip_existing=False,
+                resume_strategy="fresh_profile",
+            ),
+            runtime,
+            FakeBrowser(),
+            source_listing_crawl_job_id="listing-task",
+            detail_scope="listing_batch",
+        )
+
+    assert len(fetch_calls) == 1
+    assert runtime.detail_transitions == ["running", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_ctgoodjobs_persistence_error_aborts_before_later_target(
+    monkeypatch,
+) -> None:
+    runtime = _OneTargetRuntime(source_site="ctgoodjobs")
+    runtime.add_second_target()
+    category = SimpleNamespace(
+        source_classification_id="ct-it",
+        name="Information Technology",
+        slug="information-technology",
+    )
+    fetch_calls: list[str] = []
+
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "_categories_by_id",
+        lambda: {"ct-it": category},
+    )
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "parse_detail_page",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(ctgoodjobs_crawl, "merge_ctgoodjobs_job", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        ctgoodjobs_crawl,
+        "build_ctgoodjobs_canonical_job",
+        lambda _merged: SimpleNamespace(to_dict=lambda: {"raw_data": {}}),
+    )
+
+    async def broken_persist(**_kwargs):
+        raise ctgoodjobs_crawl.DetailPersistenceError(
+            source_site="ctgoodjobs",
+            source_job_id="job-1",
+        )
+
+    monkeypatch.setattr(ctgoodjobs_crawl, "_persist_ctgoodjobs_job", broken_persist)
+
+    class FakeBrowser:
+        async def fetch_page_html(self, url, **_kwargs):
+            fetch_calls.append(url)
+            return "<html>detail</html>"
+
+    with pytest.raises(ctgoodjobs_crawl.DetailPersistenceError):
+        await ctgoodjobs_crawl._run_detail_phase(
+            SimpleNamespace(
+                crawl_job_id="ctgoodjobs-fatal-detail",
+                crawl_mode="headed",
+                category_ids=["ct-it"],
+                detail_limit=10,
+                detail_statuses=["pending"],
+                skip_existing=False,
+                resume_strategy="fresh_profile",
+            ),
+            runtime,
+            FakeBrowser(),
+            source_listing_crawl_job_id="listing-task",
+            detail_scope="listing_batch",
+        )
+
+    assert len(fetch_calls) == 1
+    assert runtime.detail_transitions == ["running", "failed"]
 
 
 @pytest.mark.asyncio

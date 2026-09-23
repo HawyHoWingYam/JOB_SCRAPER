@@ -8,7 +8,7 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 
 - DB: `enrichment_runs.cancelled_items INTEGER NOT NULL DEFAULT 0`; `enrichment_runs.excluded_items INTEGER NOT NULL DEFAULT 0`; `stop_requested_at TIMESTAMP NULL`; `manual_job_evidence(job_id, evidence_hash, enriched_evidence_hash, operator_authored_fields, captured_at, updated_at)`.
 - DB backstop: partial unique index `ux_enrichment_runs_one_active` over a constant where status is `pending`, `running`, or `stopping`.
-- Service: `create_manual_pending_run(limit, filters)`, `preview_pending_jobs(filters, limit)`, `request_stop(run_id)`, `promote_next_ready_waiting_run()`.
+- Service: `create_manual_pending_run(limit, filters)`, `preview_pending_jobs(filters, limit)`, `create_jev_skill_backfill_run(limit)`, `request_stop(run_id)`, `promote_next_ready_waiting_run()`.
 - API: `GET /ai/pending/filter-options`, `POST /ai/pending/preview`, `POST /ai/runs`, `POST /ai/runs/{id}/stop`, `POST /ai/runs/{id}/retry-failed`.
 - Evidence seam: `JobEnrichmentEvidence(db).inspect(job) -> JobEnrichmentInspection(status="supported" | "needs_job_description" | "excluded", reason, enrichment_input)`.
 
@@ -35,6 +35,12 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
   values fill only omitted min/max fields; conflicting extracted values are
   appended to `experience_evidence` and do not replace operator values.
 - Create orders candidates by `jobs.created_at ASC, jobs.id ASC`. Preview does not reserve IDs.
+- Jev Skill historical backfill is an explicit `jev_skill_backfill` run. Its
+  preview is a free database read, orders oldest first, freezes at most the saved
+  limit, skips Jobs reserved by another enrichment run, and skips an exact
+  current Jev input fingerprint. Execution uses the normal outbox and worker but
+  dispatches the dedicated Skill-only executor; it must not rerun summary or
+  experience extraction.
 - Preview returns `selected_item_count`, `effective_item_count`, `excluded_item_count`, and grouped `excluded_items` details containing source classification ID/name, count, reason, and job IDs. The selection limit applies before exclusions; excluded jobs do not trigger implicit replacement candidates.
 - A created run persists excluded jobs as `enrichment_run_items.status = "excluded"` with the stable reason in `error_message`; `pending_items` counts only supported jobs. Run projections expose `excluded_items` and `excluded_details`.
 - Run execution publishes `enrichment.run.requested` only when `request_run_execution()` returns true. An all-excluded run is terminal `completed_with_exclusions`, has `execution_result = "no_supported_items"`, and never dispatches a worker event.

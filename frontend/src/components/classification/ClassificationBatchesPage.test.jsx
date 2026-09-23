@@ -3,188 +3,181 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ClassificationBatchesPage from './ClassificationBatchesPage';
+import { fetchCurrentSkillTree } from '../../api/currentTaxonomies';
 import {
-  fetchClassificationRuns,
-  previewClassificationBatch,
-  retryClassificationRun,
-  startClassificationBatch,
-  stopClassificationRun,
-} from '../../api/classificationBatches';
+  approveSkillMaintenance,
+  decideSkillCandidate,
+  fetchSkillCandidates,
+  fetchSkillMaintenanceStatus,
+  previewJevSkillBackfill,
+  runSkillMaintenanceNow,
+  startJevSkillBackfill,
+} from '../../api/skillCandidates';
 
-vi.mock('../../api/classificationBatches', () => ({
-  fetchClassificationRuns: vi.fn(),
-  previewClassificationBatch: vi.fn(),
-  retryClassificationRun: vi.fn(),
-  startClassificationBatch: vi.fn(),
-  stopClassificationRun: vi.fn(),
+vi.mock('../../api/currentTaxonomies', () => ({ fetchCurrentSkillTree: vi.fn() }));
+vi.mock('../../api/skillCandidates', () => ({
+  approveSkillMaintenance: vi.fn(),
+  decideSkillCandidate: vi.fn(),
+  fetchSkillCandidates: vi.fn(),
+  fetchSkillMaintenanceStatus: vi.fn(),
+  previewJevSkillBackfill: vi.fn(),
+  runSkillMaintenanceNow: vi.fn(),
+  startJevSkillBackfill: vi.fn(),
 }));
+
+const candidate = {
+  id: 'candidate-1', canonical_raw_name: 'React', normalized_key: 'react',
+  raw_variants: ['React.js'], occurrence_count: 12, distinct_job_count: 10,
+  recommendations: [{ code: 'typescript', name: 'TypeScript', category: 'Frontend', technology: 'Web', score: 0.72 }],
+  evidence: [{
+    job_id: 'job-1', title: 'Frontend Engineer', source_site: 'jobsdb',
+    evidence_excerpt: 'React is preferred for this role.',
+    jev: {
+      status: 'answered', model: 'typesafe/jev-1.13', request_id: 'gen-1',
+      decision: { route: 'candidate', confidence: 0.82 },
+    },
+  }],
+};
+const tree = { nodes: [
+  { code: 'frontend', level: 'category', labels: { en: 'Frontend' }, is_assignable: false },
+  { code: 'web', level: 'technology', parent_code: 'frontend', labels: { en: 'Web' }, is_assignable: false },
+  { code: 'typescript', level: 'skill', parent_code: 'web', labels: { en: 'TypeScript' }, is_assignable: true },
+] };
 
 describe('ClassificationBatchesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    window.location.hash = '#classification';
-    fetchClassificationRuns.mockResolvedValue({ items: [] });
-    previewClassificationBatch.mockResolvedValue({
-      domain: 'skill',
-      selected_item_count: 12,
-      items: [],
+    fetchSkillCandidates.mockResolvedValue({ threshold: 10, recommendation_limit: 5, evidence_limit: 5, items: [candidate] });
+    fetchCurrentSkillTree.mockResolvedValue(tree);
+    fetchSkillMaintenanceStatus.mockResolvedValue({
+      eligibility: { enabled: true, eligible_count: 1, minimum_count: 50, can_start: false, reason: 'insufficient_candidates' },
+      latest_batch: null,
     });
-    startClassificationBatch.mockResolvedValue({ id: 'run-new' });
-    stopClassificationRun.mockResolvedValue({});
-    retryClassificationRun.mockResolvedValue({});
+    runSkillMaintenanceNow.mockResolvedValue({ dispatched: false, reason: 'insufficient_candidates', batch: null });
+    previewJevSkillBackfill.mockResolvedValue({ eligible_count: 12, already_current_count: 30, reserved_count: 2, selected_item_count: 12 });
+    startJevSkillBackfill.mockResolvedValue({ id: 'backfill-run-1', total_items: 12 });
+    approveSkillMaintenance.mockResolvedValue({ status: 'applied', applied_changes: [], held_for_approval_count: 0 });
+    decideSkillCandidate.mockResolvedValue({ resolved_skill_code: 'typescript' });
   });
 
-  it('defaults invalid routes to Skills without mutating a batch', async () => {
-    render(
-      <ClassificationBatchesPage
-        routeHash="#classification?target=not-a-domain"
-      />,
-    );
-
-    expect(screen.getByRole('tab', { name: 'Skills' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
-    await waitFor(() => {
-      expect(fetchClassificationRuns).toHaveBeenCalledWith('skill');
-    });
-    expect(previewClassificationBatch).not.toHaveBeenCalled();
-    expect(startClassificationBatch).not.toHaveBeenCalled();
+  it('renders a compact candidate list and evidence panel', async () => {
+    render(<ClassificationBatchesPage />);
+    expect(await screen.findByRole('heading', { name: '待确认 Skill' })).toBeInTheDocument();
+    expect(screen.getByText('Frontend Engineer')).toBeInTheDocument();
+    expect(screen.getByText('React is preferred for this role.')).toBeInTheDocument();
+    expect(screen.getByText('Jev 建议保留 Candidate')).toBeInTheDocument();
+    expect(screen.getByText('置信 82%')).toBeInTheDocument();
+    expect(screen.getByText('receipt gen-1')).toBeInTheDocument();
+    expect(screen.getByText('最多 1 个')).toBeInTheDocument();
+    expect(screen.getByLabelText('搜索 Candidate')).toBeInTheDocument();
   });
 
-  it('serializes retained domain tab changes through navigation', async () => {
-    const onNavigateTarget = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <ClassificationBatchesPage
-        routeHash="#classification"
-        onNavigateTarget={onNavigateTarget}
-      />,
-    );
-
-    await user.click(screen.getByRole('tab', { name: 'Company Industry' }));
-    expect(onNavigateTarget).toHaveBeenCalledWith('company_industry');
-  });
-
-  it('previews and starts a bounded Skill candidate batch', async () => {
+  it('confirms a recommended existing Skill and removes the candidate', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-
-    const start = screen.getByRole('button', { name: '开始处理' });
-    expect(start).toBeDisabled();
-    await user.clear(screen.getByLabelText('Classification batch limit'));
-    await user.type(screen.getByLabelText('Classification batch limit'), '25');
-    await user.click(screen.getByRole('button', { name: '预览' }));
-
-    expect(await screen.findByText('这次会处理 12 项。')).toBeInTheDocument();
-    expect(previewClassificationBatch).toHaveBeenCalledWith(
-      'skill',
-      { filters: {}, limit: 25 },
-      { signal: expect.any(AbortSignal) },
-    );
-    await user.click(start);
-    expect(startClassificationBatch).toHaveBeenCalledWith(
-      'skill',
-      { filters: {}, limit: 25 },
-    );
+    await screen.findByRole('heading', { name: '待确认 Skill' });
+    await user.click(await screen.findByRole('button', { name: /TypeScript/ }));
+    await user.click(screen.getByRole('button', { name: '保存并下一个' }));
+    await waitFor(() => expect(decideSkillCandidate).toHaveBeenCalledWith('candidate-1', {
+      action: 'match_existing', skill_code: 'typescript',
+    }));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'React' })).not.toBeInTheDocument());
   });
 
-  it('keeps Company Industry source filters and mapping readiness', async () => {
-    previewClassificationBatch.mockResolvedValueOnce({
-      domain: 'company_industry',
-      selected_item_count: 3,
-      mapped_item_count: 1,
-      unmapped_item_count: 1,
-      excluded_item_count: 1,
-      items: [],
-    });
-    const user = userEvent.setup();
-    render(
-      <ClassificationBatchesPage
-        routeHash="#classification?target=company_industry"
-      />,
-    );
-
-    await user.click(screen.getByRole('checkbox', { name: 'jobsdb' }));
-    await user.click(screen.getByRole('button', { name: '预览' }));
-
-    expect(await screen.findByText(/已选 3 家 Company/)).toBeInTheDocument();
-    expect(screen.getByText(/可映射 1/)).toBeInTheDocument();
-    expect(screen.getByText(/未映射 1/)).toBeInTheDocument();
-    expect(screen.getByText(/规则排除 1/)).toBeInTheDocument();
-    expect(previewClassificationBatch).toHaveBeenCalledWith(
-      'company_industry',
-      { filters: { source_sites: ['jobsdb'] }, limit: 100 },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(screen.getByRole('button', { name: '开始处理' })).toBeEnabled();
-  });
-
-  it('invalidates and aborts a preview when the limit changes', async () => {
-    previewClassificationBatch.mockReturnValueOnce(new Promise(() => {}));
+  it('requires a structured reason for generic and rejection decisions', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-
-    await user.click(screen.getByRole('button', { name: '预览' }));
-    await waitFor(() => {
-      expect(previewClassificationBatch).toHaveBeenCalledTimes(1);
+    await screen.findByRole('heading', { name: '待确认 Skill' });
+    await user.click(screen.getByRole('button', { name: '通用词' }));
+    expect(screen.getByRole('button', { name: '保存并下一个' })).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText('原因'), 'general_capability');
+    await user.click(screen.getByRole('button', { name: '保存并下一个' }));
+    expect(decideSkillCandidate).toHaveBeenCalledWith('candidate-1', {
+      action: 'generic', generic_tag: 'general_capability',
     });
-    const { signal } = previewClassificationBatch.mock.calls[0][2];
-    expect(signal.aborted).toBe(false);
-
-    await user.clear(screen.getByLabelText('Classification batch limit'));
-
-    expect(signal.aborted).toBe(true);
-    expect(screen.getByText('还没有预览。')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '开始处理' })).toBeDisabled();
   });
 
-  it('shows Skill Candidate failure evidence and retries only failures', async () => {
-    fetchClassificationRuns.mockResolvedValue({
-      items: [
-        {
-          id: 'run-failed',
-          status: 'completed_with_failures',
-          total_items: 2,
-          completed_items: 1,
-          failed_items: 1,
-          cancelled_items: 0,
-          items: [
-            {
-              id: 'item-2',
-              subject_id: 'candidate-2',
-              subject_label: 'MysteryDB',
-              status: 'failed',
-              error_message: 'Skill candidate placement is uncertain',
-            },
-          ],
-        },
-      ],
-    });
+  it('supports creating under existing Technology with explicit aliases', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);
-
-    await screen.findByText('completed_with_failures');
-    await user.click(screen.getByText('查看失败原因'));
-    expect(
-      screen.getByText(/Skill candidate placement is uncertain/),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '只重试失败项 (1)' }));
-
-    await waitFor(() => {
-      expect(retryClassificationRun).toHaveBeenCalledWith('run-failed');
-    });
+    await screen.findByRole('heading', { name: '待确认 Skill' });
+    await user.click(screen.getByRole('button', { name: '创建新 Skill' }));
+    await user.click(screen.getByRole('option', { name: 'Frontend → Web' }));
+    await user.click(screen.getByLabelText('React.js'));
+    await user.click(screen.getByRole('button', { name: '保存并下一个' }));
+    expect(decideSkillCandidate).toHaveBeenCalledWith('candidate-1', expect.objectContaining({
+      action: 'create', category_code: 'frontend', technology_code: 'web', name: 'React', aliases: ['React.js'],
+    }));
   });
 
-  it('does not show source filters for Skill processing', async () => {
+  it('reports an unavailable taxonomy clearly', async () => {
+    fetchCurrentSkillTree.mockResolvedValueOnce({ nodes: [] });
+    render(<ClassificationBatchesPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('taxonomy 尚未就绪');
+  });
+
+  it('paginates the candidate queue instead of relying on page scrolling', async () => {
+    const user = userEvent.setup();
+    fetchSkillCandidates
+      .mockResolvedValueOnce({ threshold: 10, total_count: 30, items: [candidate] })
+      .mockResolvedValueOnce({ threshold: 10, total_count: 30, items: [{ ...candidate, id: 'candidate-2', canonical_raw_name: 'Python' }] });
+    render(<ClassificationBatchesPage />);
+    expect(await screen.findByRole('button', { name: '下一页' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: '下一页' }));
+    await waitFor(() => expect(fetchSkillCandidates).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 25, offset: 25 })));
+    expect(await screen.findByRole('heading', { name: 'Python' })).toBeInTheDocument();
+  });
+
+  it('runs a free maintenance eligibility path without treating it as approval', async () => {
+    const user = userEvent.setup();
+    render(<ClassificationBatchesPage />);
+    await screen.findByRole('heading', { name: '待确认 Skill' });
+
+    await user.click(screen.getByRole('button', { name: 'Run maintenance now' }));
+
+    await waitFor(() => expect(runSkillMaintenanceNow).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('status')).toHaveTextContent('No provider call: insufficient_candidates.');
+  });
+
+  it('shows the complete new-Skill diff before aggregate approval', async () => {
+    fetchSkillMaintenanceStatus.mockResolvedValueOnce({
+      eligibility: { enabled: true, eligible_count: 1, minimum_count: 1, can_start: true },
+      latest_batch: {
+        id: 'batch-1', status: 'ready_for_approval', auto_applied_count: 0,
+        held_for_approval_count: 1, taxonomy_snapshot_sha256: 'abcdef1234567890',
+        settings_snapshot: { model: 'strong/model' },
+        proposals: [{
+          candidate_id: 'candidate-1', candidate_name: 'NovelDB', action: 'propose_new',
+          technology_code: 'backend.databases', confidence: 0.97, parent_confidence: 0.94,
+        }],
+      },
+    });
+
     render(<ClassificationBatchesPage />);
 
-    expect(screen.getByText(/达到 Settings 次数门槛/)).toBeInTheDocument();
-    expect(
-      screen.queryByRole('checkbox', { name: 'jobsdb' }),
-    ).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(fetchClassificationRuns).toHaveBeenCalledWith('skill');
-    });
+    const diff = await screen.findByLabelText('Proposed Skill changes');
+    expect(diff).toHaveTextContent('Batch batch-1 · taxonomy abcdef123456');
+    expect(diff).toHaveTextContent('NovelDB');
+    expect(diff).toHaveTextContent('Create under backend.databases');
+    expect(diff).toHaveTextContent('confidence 97%');
+    expect(diff).toHaveTextContent('parent confidence 94%');
+    expect(screen.getByRole('button', { name: 'Approve proposed Skills' })).toBeVisible();
+  });
+
+  it('previews a free bounded historical backfill before queueing it', async () => {
+    const user = userEvent.setup();
+    render(<ClassificationBatchesPage />);
+    await screen.findByRole('heading', { name: '待确认 Skill' });
+
+    await user.clear(screen.getByLabelText('Jev Skill backfill limit'));
+    await user.type(screen.getByLabelText('Jev Skill backfill limit'), '12');
+    await user.click(screen.getByRole('button', { name: 'Preview backfill' }));
+
+    await waitFor(() => expect(previewJevSkillBackfill).toHaveBeenCalledWith(12));
+    expect(screen.getByText(/12 eligible · 30 already current · 2 reserved · 12 selected/)).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('free database read');
+    await user.click(screen.getByRole('button', { name: 'Start bounded backfill' }));
+    await waitFor(() => expect(startJevSkillBackfill).toHaveBeenCalledWith(12));
+    expect(await screen.findByRole('status')).toHaveTextContent('backfill-run-1');
   });
 });

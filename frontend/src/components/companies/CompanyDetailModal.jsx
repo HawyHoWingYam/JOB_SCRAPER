@@ -1,15 +1,5 @@
 import React from 'react';
 import { X } from 'lucide-react';
-import {
-    formatCompanyIndustryBreadcrumb,
-    getCompanyIndustryDisplay,
-} from './companyIndustryDisplay';
-
-function humanizeIndustryValue(value) {
-    return value
-        ? String(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase())
-        : 'Unknown';
-}
 
 function CompanyDetailModal({ company, statusLabel, statusClassName, descriptionText, onClose }) {
     const handleOverlayClick = (event) => {
@@ -22,8 +12,6 @@ function CompanyDetailModal({ company, statusLabel, statusClassName, description
         return null;
     }
 
-    const industryDisplay = getCompanyIndustryDisplay(company);
-
     return (
         <div className="modal-overlay" onClick={handleOverlayClick}>
             <div className="modal-content company-detail-modal" role="dialog" aria-modal="true" aria-labelledby="company-detail-title">
@@ -33,36 +21,9 @@ function CompanyDetailModal({ company, statusLabel, statusClassName, description
 
                 <div className="modal-header">
                     <h2 id="company-detail-title">{company.name}</h2>
-                    <p className="modal-company">{industryDisplay.summary}</p>
+                    <p className="modal-company">{company.location || 'Location unavailable'}</p>
                     <p className="modal-location">{company.location || 'Location unavailable'}</p>
                 </div>
-
-                <section className="modal-section company-industry-section" aria-labelledby="company-detail-industries">
-                    <h3 id="company-detail-industries">Company Industries</h3>
-                    {industryDisplay.state === 'unavailable' ? (
-                        <p className="company-industry-empty">
-                            Unavailable ({industryDisplay.unavailableCode})
-                        </p>
-                    ) : industryDisplay.assignments.length > 0 ? (
-                        <ul className="company-industry-list">
-                            {industryDisplay.assignments.map((assignment) => (
-                                <li key={assignment.id}>
-                                    <strong>{formatCompanyIndustryBreadcrumb(assignment.breadcrumb)}</strong>
-                                    <span>
-                                        {assignment.is_primary
-                                            ? 'Primary Company Industry'
-                                            : 'Additional Company Industry'}
-                                    </span>
-                                    <span>
-                                        Basis: {humanizeIndustryValue(assignment.primary_basis || assignment.method)}
-                                    </span>
-                                </li>
-                            ))}
-                        </ul>
-                    ) : (
-                        <p className="company-industry-empty">No governed Company Industry assignment</p>
-                    )}
-                </section>
 
                 <div className="company-detail-meta">
                     <div className="modal-section">

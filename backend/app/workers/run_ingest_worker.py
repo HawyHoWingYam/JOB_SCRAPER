@@ -15,9 +15,6 @@ from app.job_intelligence.source_attributes import (
     SourceJobAttributeEvidence,
     SourceJobAttributes,
 )
-from app.job_intelligence.current_taxonomies.company_projection import (
-    project_current_company_industry,
-)
 from app.messaging.event_envelope import build_event_envelope
 from app.messaging.outbox_publisher import OutboxPublisher
 from app.messaging.redis_stream_bus import RedisStreamBus, StreamMessage
@@ -170,7 +167,6 @@ class IngestWorkerService:
             company_data,
             auto_commit=False,
         )
-        self.project_company_industry(db, company, canonical_job)
 
         job_data = self._build_job_data(canonical_job, company.id)
         job, job_action = self.job_repository.upsert_source_job(
@@ -314,20 +310,6 @@ class IngestWorkerService:
                     if depth <= node.native_depth
                 }
             registry.observe_path(job_id, evidence.source_site, observations)
-
-    def project_company_industry(self, db, company, canonical_job: dict[str, Any]):
-        try:
-            return project_current_company_industry(
-                db,
-                company.id,
-                canonical_job,
-                outbox_repository=self.event_outbox_repository,
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            raise InvalidIngestPayloadError(
-                "invalid_company_industry_evidence",
-                f"Invalid Company Industry evidence: {exc}",
-            ) from exc
 
     def _resolve_skip_existing(self, db, *, crawl_job_id: str | None) -> bool:
         if not crawl_job_id:

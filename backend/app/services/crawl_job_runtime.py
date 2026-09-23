@@ -20,6 +20,7 @@ from app.database import SessionLocal
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.repositories.crawl_job_repository import CrawlJobRepository, _UNSET as CRAWL_JOB_REPOSITORY_UNSET
 from app.repositories.job_repository import JobRepository
+from app.services.crawl_job_cancellation_service import CrawlJobCancellationService
 from app.sources.offertoday.completeness import is_complete_offertoday_job
 from app.sources.offertoday.detail_identity import (
     OfferTodayDetailIdentity,
@@ -276,11 +277,16 @@ class CrawlJobRuntime:
         crawl_job_repository: CrawlJobRepository | None = None,
         crawl_job_listing_repository: CrawlJobListingRepository | None = None,
         job_repository: JobRepository | None = None,
+        cancellation_service: CrawlJobCancellationService | None = None,
     ) -> None:
         self.session_factory = db_session_factory
         self.crawl_job_repository = crawl_job_repository or CrawlJobRepository()
         self.crawl_job_listing_repository = crawl_job_listing_repository or CrawlJobListingRepository()
         self.job_repository = job_repository or JobRepository()
+        self.cancellation_service = cancellation_service or CrawlJobCancellationService(
+            session_factory=db_session_factory,
+            crawl_job_repository=self.crawl_job_repository,
+        )
 
     def write_progress_event(
         self,
@@ -391,6 +397,63 @@ class CrawlJobRuntime:
             error_message=error_message,
             metrics=metrics or {},
         )
+
+    def mark_detail_run_failed(
+        self,
+        *,
+        crawl_job_id,
+        source_site: str,
+        error_message: str,
+        payload: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+        emitted_by: str | None = None,
+    ) -> None:
+        db = self.session_factory()
+        try:
+            crawl_job = self.crawl_job_repository.get_crawl_job_by_id_for_update(
+                db,
+                crawl_job_id,
+            )
+            if crawl_job is None:
+                raise ValueError(f"Crawl job not found: {crawl_job_id}")
+            timestamp = utc_now()
+            recovered_records = self.cancellation_service.release_running_detail_rows(
+                db,
+                crawl_job_id=crawl_job_id,
+                dispatch_plan_id=getattr(crawl_job, "dispatch_plan_id", None),
+                timestamp=timestamp,
+                outcome="failed_retryable",
+            )
+            failure_payload = dict(payload or {})
+            failure_payload.setdefault("error", error_message)
+            failure_payload["released_detail_rows"] = len(recovered_records)
+            self.crawl_job_repository.record_runtime_event(
+                db,
+                crawl_job_id=crawl_job_id,
+                status="failed",
+                event_type="crawl.failed",
+                payload=failure_payload,
+                emitted_by=emitted_by or f"{source_site}-crawl",
+                completed_at=timestamp,
+                error_message=error_message,
+                metrics=metrics or {},
+                auto_commit=False,
+            )
+            if recovered_records:
+                self.crawl_job_repository.append_event(
+                    db,
+                    crawl_job_id=crawl_job_id,
+                    event_type="crawl.detail_failed_recovered",
+                    payload={"records": recovered_records},
+                    emitted_by=emitted_by or f"{source_site}-crawl",
+                    auto_commit=False,
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     def stage_listing_batch(
         self,

@@ -32,10 +32,7 @@ class CurrentTaxonomyNodeRecord(Base):
             name="fk_current_taxonomy_node_parent",
             ondelete="RESTRICT",
         ),
-        CheckConstraint(
-            "taxonomy IN ('company_industry', 'skill')",
-            name="ck_current_taxonomy_node_taxonomy",
-        ),
+        CheckConstraint("taxonomy = 'skill'", name="ck_current_taxonomy_node_taxonomy"),
         CheckConstraint("length(code) > 0", name="ck_current_taxonomy_node_code"),
         CheckConstraint("sort_order >= 0", name="ck_current_taxonomy_node_order"),
         Index(
@@ -65,10 +62,7 @@ class CurrentTaxonomyAliasRecord(Base):
             name="fk_current_taxonomy_alias_node",
             ondelete="CASCADE",
         ),
-        CheckConstraint(
-            "taxonomy IN ('company_industry', 'skill')",
-            name="ck_current_taxonomy_alias_taxonomy",
-        ),
+        CheckConstraint("taxonomy = 'skill'", name="ck_current_taxonomy_alias_taxonomy"),
         Index(
             "ix_current_taxonomy_alias_lookup",
             "taxonomy",
@@ -80,44 +74,6 @@ class CurrentTaxonomyAliasRecord(Base):
     node_code = Column(String(255), primary_key=True)
     alias = Column(String(255), primary_key=True)
     normalized_alias = Column(String(255), nullable=False)
-
-
-class CurrentCompanyIndustryAssignment(Base):
-    __tablename__ = "current_company_industry_assignments"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["taxonomy", "taxonomy_code"],
-            ["current_taxonomy_nodes.taxonomy", "current_taxonomy_nodes.code"],
-            name="fk_current_company_industry_assignment_node",
-            ondelete="RESTRICT",
-        ),
-        CheckConstraint(
-            "taxonomy = 'company_industry'",
-            name="ck_current_company_assignment_taxonomy",
-        ),
-        UniqueConstraint(
-            "company_id",
-            "taxonomy_code",
-            name="uq_current_company_industry_assignment",
-        ),
-    )
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    company_id = Column(
-        Uuid(as_uuid=True),
-        ForeignKey("companies.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    taxonomy = Column(String(32), nullable=False, default="company_industry")
-    taxonomy_code = Column(String(255), nullable=False, index=True)
-    method = Column(String(32), nullable=False)
-    provenance = Column(JSON, nullable=False, default=dict)
-    evidence_hash = Column(String(64), nullable=False)
-    breadcrumb = Column(JSON, nullable=False)
-    is_primary = Column(Boolean, nullable=False, default=False)
-    primary_basis = Column(String(32), nullable=True)
-    captured_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
 
 
 class CurrentJobSkillAssignment(Base):
@@ -279,42 +235,10 @@ class CurrentJobSkillMention(Base):
     superseded_at = Column(DateTime(timezone=True), nullable=True)
 
 
-class CurrentSourceTaxonomyMapping(Base):
-    __tablename__ = "current_source_taxonomy_mappings"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["taxonomy", "target_code"],
-            ["current_taxonomy_nodes.taxonomy", "current_taxonomy_nodes.code"],
-            name="fk_current_source_taxonomy_mapping_target",
-            ondelete="CASCADE",
-        ),
-        CheckConstraint(
-            "role IN ('deterministic', 'allowed')",
-            name="ck_current_source_taxonomy_mapping_role",
-        ),
-        Index(
-            "ix_current_source_taxonomy_mapping_lookup",
-            "taxonomy",
-            "source_site",
-            "source_key",
-        ),
-    )
-
-    taxonomy = Column(String(32), primary_key=True)
-    source_site = Column(String(32), primary_key=True)
-    source_key = Column(String(500), primary_key=True)
-    target_code = Column(String(255), primary_key=True)
-    source_label = Column(String(500), nullable=True)
-    role = Column(String(32), nullable=False)
-    evidence = Column(JSON, nullable=False, default=dict)
-
-
 CURRENT_TAXONOMY_TABLES = (
     CurrentTaxonomyNodeRecord.__table__,
     CurrentTaxonomyAliasRecord.__table__,
-    CurrentCompanyIndustryAssignment.__table__,
     CurrentJobSkillAssignment.__table__,
     CurrentSkillCandidate.__table__,
     CurrentJobSkillMention.__table__,
-    CurrentSourceTaxonomyMapping.__table__,
 )

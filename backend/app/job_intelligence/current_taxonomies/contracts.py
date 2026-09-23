@@ -6,7 +6,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 
-TaxonomyKind = Literal["company_industry", "skill"]
+TaxonomyKind = Literal["skill"]
 
 
 @dataclass(frozen=True)
@@ -61,24 +61,6 @@ class CurrentTaxonomySnapshot:
             "nodes": [node.to_payload() for node in self.nodes],
             "aliases": [alias.to_payload() for alias in self.aliases],
         }
-
-
-@dataclass(frozen=True)
-class CurrentCompanyIndustryInput:
-    taxonomy_code: str
-    method: str
-    provenance: dict[str, object]
-    evidence_hash: str
-    breadcrumb: dict[str, object]
-    is_primary: bool
-    primary_basis: str | None
-    captured_at: datetime
-
-
-@dataclass(frozen=True)
-class ReplaceCurrentCompanyIndustriesCommand:
-    company_id: UUID
-    assignments: tuple[CurrentCompanyIndustryInput, ...]
 
 
 @dataclass(frozen=True)

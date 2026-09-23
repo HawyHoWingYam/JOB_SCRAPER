@@ -1,108 +1,94 @@
 # Ordinary Current Taxonomy Contracts
 
-## Scenario: Read and write Company Industry and Skill state
+## Scenario: Read and write governed Skill state
 
 ### 1. Scope / Trigger
 
-Use this contract when changing current taxonomy nodes, aliases, Company
-Industry assignments/mappings, governed Job Skills, Skill Candidates/Mentions,
-their product reads, or the current-taxonomy HTTP API.
-
-The project does not own a cross-Source Job taxonomy. Job classification stays
-as Source-qualified `Source Classification Path` evidence. Company Industry and
-Skill each have one ordinary current state without releases or review queues.
+Use this contract when changing current Skill nodes, aliases, governed Job
+Skills, Candidate/Mention evidence, product reads, or taxonomy HTTP APIs.
+Company Industry has been removed from the current product and database schema.
 
 ### 2. Signatures
 
 ```python
 CurrentTaxonomyStore(db).synchronize(snapshot) -> None
-CurrentTaxonomyStore(db).replace_company_industries(command) -> None
 CurrentTaxonomyStore(db).replace_job_skills(command) -> None
-CurrentTaxonomyReader(db).get_tree("company_industry" | "skill")
-CurrentTaxonomyReader(db).get_company_industry_state(company_id)
+CurrentTaxonomyReader(db).get_tree("skill")
 CurrentTaxonomyReader(db).get_job_skills(job_id)
 CurrentSkillEnrichment(db).replace_job_skills(...)
-project_current_company_industry(db, company_id, evidence)
 ```
 
 ```text
-GET /api/job-intelligence/company-industries/tree
-GET /api/job-intelligence/companies/{company_id}/industries
 GET /api/job-intelligence/skills/tree
 GET /api/job-intelligence/jobs/{job_id}/skills
 ```
 
 Persistence is owned by `current_taxonomy_nodes`,
-`current_taxonomy_aliases`, `current_company_industry_assignments`,
-`current_job_skill_assignments`, `current_skill_candidates`,
-`current_job_skill_mentions`, and `current_source_taxonomy_mappings`.
-`taxonomy` is restricted to `company_industry` or `skill`.
+`current_taxonomy_aliases`, `current_job_skill_assignments`,
+`current_skill_candidates`, and `current_job_skill_mentions`.
+`taxonomy` is restricted to `skill`.
 
 ### 3. Contracts
 
-- Stable node `code` values are identity; no payload carries a release,
-  revision, active pointer, or lock version.
-- Company Industry preserves the current HSIC hierarchy. Skills preserve
-  Category / Technology / Skill nodes and aliases.
+- Stable Skill node `code` values are identity; taxonomy has Category →
+  Technology → Skill levels and aliases.
 - Resolved governed Skills live in `current_job_skill_assignments` and power
   Job filtering, export, analytics, embeddings, and Related Jobs scoring.
-- Unknown normalized terms remain visible evidence through
-  `current_skill_candidates` and active `current_job_skill_mentions`.
-  Candidate evidence is not silently promoted into ordinary Skill reads.
-- Repeated Candidates may be automatically classified and promoted; promotion
-  resolves Mentions and rebuilds affected Job Skill projections atomically.
-- Governed local generic/rejected dispositions run before Candidate upsert.
-- Company Industry Source mappings are Source-qualified and deterministic;
-  display-label guessing is forbidden.
-- Shared taxonomy infrastructure must not be deleted when removing one domain.
+- Unknown terms remain visible as Candidate/Mention evidence and are not
+  silently promoted into ordinary Skill reads or filters.
+- Exact names, aliases, and explicit generic/rejected rules are deterministic;
+  new governed Skills require operator confirmation.
+- Taxonomy bootstrap is idempotent and never overwrites operator-owned nodes.
+- Baseline manifest upgrades are additive on a non-empty sandbox: missing
+  governed nodes and aliases are installed, while existing/operator-owned
+  nodes remain unchanged. Startup then reruns deterministic reconciliation so
+  historical exact-name and alias candidates do not remain in the review queue.
+- LLM placement is advisory only and is reached after exact/alias and local
+  curation rules. It cannot invent a Category or Technology parent or write a
+  governed Skill without an explicit operator decision.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
-| `taxonomy` is not `company_industry` or `skill` | Reject before write |
-| Parent code is absent from the same taxonomy | Reject snapshot |
-| Assignment target is unknown, inactive, or not assignable | Reject and roll back caller transaction |
-| Company mapping is absent or drifts from its manifest | Leave unassigned or fail the batch item; never infer |
-| Unknown Skill repeats | Recompute Candidate/Mention evidence; do not expose it as governed Skill |
-| Known generic/rejected term appears | Retain terminal Mention evidence; create no Candidate or assignment |
-| Unknown owner UUID is read | Return an empty current state |
+| `taxonomy` is not `skill` | Reject before write |
+| Parent code is absent from Skill taxonomy | Reject snapshot |
+| Assignment target is unknown, inactive, or not assignable | Roll back caller transaction |
+| Unknown Skill repeats | Recompute Candidate/Mention evidence; keep it non-governed |
+| Known generic/rejected term appears | Retain terminal Mention evidence; create no Candidate/assignment |
+| Candidate decision succeeds | Resolve Mentions and rebuild affected Job projections atomically |
 
 ### 5. Good / Base / Bad Cases
 
 - **Good:** `Py` resolves through an alias to governed Python and appears in
   ordinary Skill filtering and recommendations.
-- **Good:** visible `Rust` Candidate evidence remains on Job Detail until
-  promotion resolves it.
-- **Base:** a Company has no supported Source Industry mapping and remains
-  unassigned without a fabricated classification.
-- **Bad:** combine Source Classification labels into a project Job hierarchy.
-- **Bad:** hide Candidate evidence merely because it is not governed yet.
+- **Good:** unresolved `Rust` remains visible as collapsed Job Detail evidence
+  until an operator resolves it.
+- **Base:** no reliable recommendation; operator searches or chooses a
+  structured generic/reject reason.
+- **Bad:** expose Candidate evidence as a canonical Skill filter or invent a
+  parent Category/Technology.
 
 ### 6. Tests Required
 
-- Current taxonomy tests cover Company/Skill transforms, constraints, reads,
-  writes, Candidate aggregation, local dispositions, and four retained APIs.
-- Product contracts cover Company Industry and Skill composition, visible
-  Candidate evidence, embeddings, filters, CSV, and Related Jobs.
-- Frontend tests keep Candidate evidence and Skill failure reasons visible.
-- Architecture searches reject Job-taxonomy tables, APIs, schemas, filters,
-  prompts, assignments, stats, and fixtures outside legacy cutover detection.
+- Current taxonomy tests cover Skill transforms, constraints, reads, writes,
+  Candidate aggregation, local dispositions, and retained APIs.
+- Candidate API tests cover threshold, recommendations/evidence bounds,
+  decisions, invalid placement, and idempotency.
+- Frontend tests cover governed Skill display, pending evidence, compact review,
+  Settings, and taxonomy-unavailable states.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```python
-global_job_category = infer_from_source_label(path.label)
+job.skills = candidate_mentions
 ```
 
 #### Correct
 
 ```python
-source_paths = source_attribute_reader.get_paths(job.id)
 skills = CurrentTaxonomyReader(db).get_job_skills(job.id)
+pending = skills.candidate_mentions
 ```
-
-Source classification remains Source-owned; only Company Industry and Skill
-use project-owned current taxonomies.

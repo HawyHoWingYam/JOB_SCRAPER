@@ -6,6 +6,7 @@ import pytest
 
 from app.scraper.offertoday_browser_runtime import OfferTodayBrowserRuntime
 from app.services.crawl_cancellation_token import CrawlCancellationRequested
+from app.sources.offertoday.response_policy import OfferTodayTransportError
 
 
 @pytest.mark.asyncio
@@ -35,6 +36,36 @@ async def test_offertoday_cancellation_gate_runs_immediately_before_fetch() -> N
         )
 
     assert page.evaluate_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_offertoday_browser_request_has_a_deadline_that_aborts_body_read() -> None:
+    page = SimpleNamespace(url="https://www.offertoday.com/hk/search")
+
+    async def evaluate(script, argument=None):
+        if "document.cookie" in script:
+            return None
+        assert "AbortController" in script
+        assert "await response.text()" in script
+        assert argument["requestTimeoutMs"] == 25
+        raise RuntimeError("Page.evaluate: AbortError: The operation was aborted")
+
+    page.evaluate = evaluate
+    runtime = OfferTodayBrowserRuntime(
+        headed=False,
+        request_timeout_ms=25,
+    )
+    runtime._page = page
+
+    with pytest.raises(OfferTodayTransportError) as raised:
+        await runtime._fetch_json_response(
+            "https://www.offertoday.com/wapi/geek/recommend/search/list",
+            method="POST",
+            payload={"page": 29},
+        )
+
+    assert raised.value.error_kind == "network"
+    assert "timed out" in str(raised.value).lower()
 
 
 async def _no_csrf_token() -> None:

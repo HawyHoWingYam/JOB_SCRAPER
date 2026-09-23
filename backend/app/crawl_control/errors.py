@@ -131,6 +131,17 @@ class DetailRunConflictError(CrawlControlError):
         )
 
 
+class DetailPersistenceError(RuntimeError):
+    """Unexpected authoritative detail persistence failure."""
+
+    def __init__(self, *, source_site: str, source_job_id: str) -> None:
+        self.source_site = source_site
+        self.source_job_id = source_job_id
+        super().__init__(
+            f"{source_site} detail persistence failed for source_job_id={source_job_id}"
+        )
+
+
 class CrawlTaskNotFoundError(CrawlControlError):
     def __init__(self, crawl_job_id: Any) -> None:
         super().__init__(

@@ -205,3 +205,97 @@ Manual JobsDB, CTGoodJobs, and OfferToday listing staging now skips source ident
 ### Next Steps
 
 - None - task complete
+
+
+## Session 63: Retry transient JobsDB listing disconnects
+
+**Date**: 2026-08-12
+**Task**: Retry transient JobsDB listing disconnects
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Added bounded cancellation-aware retries for transient JobsDB listing transport failures, regression coverage, structured retry logging, and backend error-handling contracts. Focused 89 tests and broader 524-test backend suite passed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `84a68307` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 64: Complete phased Jev research and offline evaluations
+
+**Date**: 2026-09-23
+**Task**: Research Jev use cases and prioritize JOB_SCRAPER integration
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed the Jev roadmap from the 640-entry ecosystem screening through native
+OpenRouter System One integration, UI-adjustable settings and cumulative budget
+accounting, bounded Skill/duplicate/crawl/search/incident evaluations, and an
+isolated browser E2E. Phase 2 Skill review was intentionally not implemented
+because its independent bilingual reference gate was not met. Canonical GitHub
+issues were closed with that distinction preserved, and duplicate sync issues
+were closed as duplicates.
+
+### Main Changes
+
+- Added native typed Jev requests, strict receipts, provider-cost settlement,
+  persistent microdollar reservations, frozen runs, and secret-safe failures.
+- Added Settings UI controls for model, endpoint, masked key, allowance, sample
+  limits, concurrency, retries, timeouts, and evidence/recommendation thresholds.
+- Added controlled fixtures, read-only export contracts, full-denominator
+  metrics, and reports for Skill, duplicate, crawl-quality, search, and incident
+  evaluation slices without product writes.
+- Added Playwright Settings-to-loopback-provider E2E and excluded `e2e/**` from
+  Vitest so unit and browser runners remain isolated.
+- Archived the parent and all child tasks. Phase 2 is recorded as not proceeding;
+  completed evaluation tasks do not imply production rollout authorization.
+
+### Git Commits
+
+No commit was created in this session. The shared branch has extensive unrelated
+uncommitted work, so Jev changes were left uncommitted rather than bundling other
+tasks into an unsafe commit.
+
+### Testing
+
+- Backend Jev-focused regression: 80 passed, 1 skipped.
+- Ruff, Black check, and Python compileall: passed for Jev-owned Python scope.
+- Settings component test: 20 passed.
+- Frontend build: passed. ESLint: 0 errors, 1 unrelated warning.
+- Playwright Jev browser E2E: 1 passed.
+- Full frontend Vitest after runner-boundary fix: 205 passed, 16 unrelated
+  Company Industry/current-taxonomy failures.
+- Full backend collection remains blocked by seven unrelated OfferToday/current-
+  taxonomy collection errors, including an import-time stress script.
+- `git diff --check`, JSON validation, and scoped secret scan: passed.
+
+### Status
+
+[OK] **Completed with rollout gates enforced**
+
+### Next Steps
+
+- Commit the Jev scope separately after disentangling shared-file changes from
+  the other active worktree tasks.
+- Reopen Phase 2 only through a new authorized task after independent English
+  and Traditional-Chinese real-case references exist.

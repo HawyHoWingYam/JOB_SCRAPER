@@ -22,7 +22,7 @@ TERMINAL_STATUSES = (
     "cancelled",
 )
 ITEM_TERMINAL_STATUSES = ("completed", "failed", "cancelled")
-SUPPORTED_DOMAINS = ("company_industry", "skill")
+SUPPORTED_DOMAINS = ("skill",)
 
 
 class ClassificationBatchError(ValueError):
@@ -158,10 +158,6 @@ class ClassificationBatchRuntime:
     ) -> ClassificationBatchRun:
         preview = self.preview(domain, filters=filters, limit=limit)
         self._require_no_active_run(domain)
-        if domain == "company_industry" and not preview.mapped_item_count:
-            raise ClassificationBatchError(
-                "Selected Companies have no usable mapped evidence from Source Industry Labels"
-            )
         run = self._create_run(
             domain=domain,
             filters=filters,

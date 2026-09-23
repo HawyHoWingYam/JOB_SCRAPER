@@ -5,12 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.job_intelligence.current_taxonomies.contracts import (
     CurrentTaxonomySnapshot,
-    ReplaceCurrentCompanyIndustriesCommand,
     ReplaceCurrentJobSkillsCommand,
     TaxonomyKind,
 )
 from app.models.current_taxonomy import (
-    CurrentCompanyIndustryAssignment,
     CurrentJobSkillAssignment,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
@@ -91,37 +89,6 @@ class CurrentTaxonomyStore:
                 )
             )
         )
-
-    def replace_company_industries(
-        self,
-        command: ReplaceCurrentCompanyIndustriesCommand,
-    ) -> None:
-        codes = tuple(row.taxonomy_code for row in command.assignments)
-        self._require_unique_codes(codes, label="Company Industry")
-        self._require_assignable_codes("company_industry", codes)
-        if sum(row.is_primary for row in command.assignments) > 1:
-            raise ValueError("Company Industry assignments contain multiple primaries")
-        self.db.execute(
-            delete(CurrentCompanyIndustryAssignment).where(
-                CurrentCompanyIndustryAssignment.company_id == command.company_id
-            )
-        )
-        self.db.add_all(
-            CurrentCompanyIndustryAssignment(
-                company_id=command.company_id,
-                taxonomy="company_industry",
-                taxonomy_code=row.taxonomy_code,
-                method=row.method,
-                provenance=dict(row.provenance),
-                evidence_hash=row.evidence_hash,
-                breadcrumb=dict(row.breadcrumb),
-                is_primary=row.is_primary,
-                primary_basis=row.primary_basis,
-                captured_at=row.captured_at,
-            )
-            for row in command.assignments
-        )
-        self.db.flush()
 
     def replace_job_skills(self, command: ReplaceCurrentJobSkillsCommand) -> None:
         codes = tuple(row.skill_code for row in command.skills)

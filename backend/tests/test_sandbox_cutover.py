@@ -460,21 +460,25 @@ def test_current_metadata_has_no_release_revision_review_or_legacy_taxonomy_tabl
 
 def test_target_verification_requires_all_runtime_history_tables_empty() -> None:
     metadata = MetaData()
-    runtime = Table(
-        "crawl_jobs",
-        metadata,
-        Column("id", Integer, primary_key=True),
-    )
+    runtime_tables = {
+        name: Table(name, metadata, Column("id", Integer, primary_key=True))
+        for name in ("crawl_jobs", "jev_runtime_settings", "jev_runs")
+    }
     engine = create_engine("sqlite:///:memory:")
     metadata.create_all(engine)
 
     assert verify_target_state(db_engine=engine, metadata=metadata).clean
     with engine.begin() as connection:
-        connection.execute(runtime.insert(), {"id": 1})
+        for runtime in runtime_tables.values():
+            connection.execute(runtime.insert(), {"id": 1})
 
     report = verify_target_state(db_engine=engine, metadata=metadata)
     assert not report.clean
-    assert report.issues == ("runtime table is not empty: crawl_jobs (1)",)
+    assert report.issues == (
+        "runtime table is not empty: crawl_jobs (1)",
+        "runtime table is not empty: jev_runs (1)",
+        "runtime table is not empty: jev_runtime_settings (1)",
+    )
 
 
 def test_target_verification_requires_canonical_employment_type_registry() -> None:

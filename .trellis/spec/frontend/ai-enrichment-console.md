@@ -42,6 +42,10 @@ Use this contract when changing `AIEnrichmentPage`, its API payloads, run cards,
 - Filter-option failure -> retain prior options if present and show degraded feedback.
 - Preview failure -> retain controls, disable launch, and do not guess a count.
 - `409 active_run_exists` -> show active run ID and refresh monitor/overview.
+- `409` with a safe string readiness detail from `POST /api/ai/runs` -> show
+  that detail, tell the operator to configure and successfully test the Jobs
+  profile before retrying, and link to `#settings`; do not weaken the backend
+  readiness gate.
 - Storage read/write failure -> fall back to in-memory defaults; operations remain usable.
 - Exclusion detail missing or malformed -> retain the count/status and render an empty detail list; never reinterpret the count as failed.
 - A large bounded exclusion deep link keeps its exact Job IDs; never widen an

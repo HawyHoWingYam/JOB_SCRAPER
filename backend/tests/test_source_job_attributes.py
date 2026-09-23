@@ -11,7 +11,6 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm.attributes import set_committed_value
 
 from app.database import Base
 from app.api.jobs import (
@@ -20,6 +19,10 @@ from app.api.jobs import (
     get_filter_options,
 )
 from app.job_intelligence.foundation import Provenance
+from app.job_intelligence.product_read_model import (
+    JobIntelligenceDomainAvailabilityView,
+    JobIntelligenceJobDetailView,
+)
 from app.job_intelligence.source_attributes import (
     EMPLOYMENT_TYPE_SEEDS,
     JobsDBSourceEvidenceAdapter,
@@ -689,11 +692,28 @@ def test_job_detail_schema_serializes_complete_source_attribute_arrays(
     SourceJobAttributes(source_attribute_db).project(job.id, evidence)
     source_attribute_db.expire_all()
     reloaded = source_attribute_db.get(Job, job.id)
-    set_committed_value(reloaded, "job_skill_mentions", [])
-    set_committed_value(reloaded, "governed_job_skills", [])
-    set_committed_value(reloaded, "governed_skill_mentions", [])
-
-    payload = JobDetailSchema.model_validate(reloaded).model_dump(mode="json")
+    source_view = SourceJobAttributes(source_attribute_db).get(job.id)
+    detail_view = JobIntelligenceJobDetailView(
+        source_attributes=source_view,
+        source_attributes_availability=JobIntelligenceDomainAvailabilityView(
+            available=True,
+            unavailable_code=None,
+        ),
+        skill_state=None,
+        skill_availability=JobIntelligenceDomainAvailabilityView(
+            available=False,
+            unavailable_code="SKILL_TAXONOMY_NOT_ACTIVE",
+        ),
+    )
+    payload = JobDetailSchema.model_validate(
+        {
+            **{
+                column.name: getattr(reloaded, column.name)
+                for column in Job.__table__.columns
+            },
+            **detail_view.to_payload(),
+        }
+    ).model_dump(mode="json")
 
     assert {
         "paths": [

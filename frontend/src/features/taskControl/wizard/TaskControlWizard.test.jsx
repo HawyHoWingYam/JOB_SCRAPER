@@ -243,7 +243,7 @@ describe('TaskControlWizard', () => {
     expect(await screen.findByRole('button', { name: 'Choose one major category' })).toBeInTheDocument();
   });
 
-  it('shows the editable OfferToday 36-target estimate and budget validity', async () => {
+  it('shows editable OfferToday limits and delegates adaptive workload to review', async () => {
     const offerDraft = {
       ...draft({ flow: 'one_off', sourceSite: 'offertoday', step: 'execution' }),
       scope: { mode: 'selected', classification_ids: ['offertoday:118000'] },
@@ -257,10 +257,9 @@ describe('TaskControlWizard', () => {
     const depth = await screen.findByLabelText('Page Depth per Query Target');
     expect(depth).toHaveValue(100);
     expect(depth).not.toHaveAttribute('max');
-    expect(screen.getByText(/36 keywords × 100 =/)).toHaveTextContent('3600');
+    expect(screen.getByText(/Server review resolves the current root/)).toBeInTheDocument();
     fireEvent.change(depth, { target: { value: '101' } });
-    expect(screen.getByText(/Run Page Cap must cover/)).toHaveTextContent('3636');
-    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
 
   it('keeps the recoverable draft when the server rejects stale review authority', async () => {

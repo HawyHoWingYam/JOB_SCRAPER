@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader, Search } from 'lucide-react';
 
 import { apiPath } from '../../api/base';
-import { getCompanyIndustryDisplay } from '../companies/companyIndustryDisplay';
 import './AddJobPage.css';
 
 const EMPTY_DETAILS = {
@@ -55,7 +54,6 @@ export default function ManualJobForm({
   const [newCompany, setNewCompany] = useState({
     name: initialValue?.company?.name || '',
     website: initialValue?.company?.website || '',
-    industry: initialValue?.company?.industry || '',
     location: initialValue?.company?.location || '',
   });
   const [details, setDetails] = useState({
@@ -135,7 +133,6 @@ export default function ManualJobForm({
           mode: 'new',
           name: newCompany.name.trim(),
           website: newCompany.website.trim() || null,
-          industry: newCompany.industry.trim() || null,
           location: newCompany.location.trim() || null,
         }
       : null;
@@ -270,8 +267,7 @@ export default function ManualJobForm({
                       onClick={() => chooseSuggestion(company)}>
                       <span className="add-job-suggestion-name">{company.name}</span>
                       <span className="add-job-suggestion-industry">
-                        {getCompanyIndustryDisplay(company).summary}
-                        {company.location ? ` · ${company.location}` : ''}
+                        {company.location || 'Location unavailable'}
                       </span>
                     </button>
                   </li>
@@ -288,10 +284,6 @@ export default function ManualJobForm({
             <div className="add-job-field"><label htmlFor="new-company-website" className="add-job-label">Website</label>
               <input id="new-company-website" className="add-job-input" value={newCompany.website}
                 placeholder="example.com" onChange={(event) => setNewCompany({ ...newCompany, website: event.target.value })} /></div>
-            <div className="add-job-field"><label htmlFor="new-company-industry" className="add-job-label">Company Industry evidence</label>
-              <input id="new-company-industry" className="add-job-input" value={newCompany.industry}
-                onChange={(event) => setNewCompany({ ...newCompany, industry: event.target.value })} />
-              <p className="add-job-field-note">Free text is stored as Company Industry evidence.</p></div>
             <div className="add-job-field"><label htmlFor="new-company-location" className="add-job-label">Company Location</label>
               <input id="new-company-location" className="add-job-input" value={newCompany.location}
                 onChange={(event) => setNewCompany({ ...newCompany, location: event.target.value })} /></div>

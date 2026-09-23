@@ -121,11 +121,51 @@ class OfferTodayKeywordQueryTargetParametersV1(FrozenContract):
     rcd_type: None = None
 
 
+class OfferTodayAdaptiveQueryTargetParametersV1(FrozenContract):
+    category_code: int = Field(ge=1, strict=True)
+    search_family: Literal[
+        "native_classification",
+        "classification_keyword_pack",
+    ]
+    endpoint: Literal["search"]
+    keyword: str = Field(max_length=255, strict=True)
+    rcd_type: None = None
+    target_kind: Literal["native_top_level", "native_child", "keyword"]
+    top_level_classification_id: str = Field(min_length=3, max_length=255)
+    normalized_keyword: str | None = Field(default=None, max_length=255)
+    taxonomy_snapshot_fingerprint: str = Field(pattern=SHA256_PATTERN)
+    keyword_catalog_fingerprint: str = Field(pattern=SHA256_PATTERN)
+    keyword_catalog_updated_at: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def validate_adaptive_target(self) -> OfferTodayAdaptiveQueryTargetParametersV1:
+        if self.search_family == "native_classification":
+            if (
+                self.target_kind not in {"native_top_level", "native_child"}
+                or self.keyword != ""
+                or self.normalized_keyword is not None
+            ):
+                raise ValueError("Native OfferToday Query Target shape is invalid")
+        elif (
+            self.target_kind != "keyword"
+            or not self.keyword.strip()
+            or not self.normalized_keyword
+        ):
+            raise ValueError("Keyword-pack OfferToday Query Target shape is invalid")
+        if not is_source_qualified_classification_id(
+            self.top_level_classification_id,
+            "offertoday",
+        ):
+            raise ValueError("OfferToday top-level classification identity is invalid")
+        return self
+
+
 QueryTargetParametersV1: TypeAlias = (
     JobsDBQueryTargetParametersV1
     | CTgoodjobsQueryTargetParametersV1
     | OfferTodayQueryTargetParametersV1
     | OfferTodayKeywordQueryTargetParametersV1
+    | OfferTodayAdaptiveQueryTargetParametersV1
 )
 
 
@@ -143,6 +183,7 @@ class QueryTargetSnapshotV1(FrozenContract):
             "offertoday.category": (
                 OfferTodayQueryTargetParametersV1,
                 OfferTodayKeywordQueryTargetParametersV1,
+                OfferTodayAdaptiveQueryTargetParametersV1,
             ),
         }.get(self.adapter)
         if expected_parameter_type is None or not isinstance(
@@ -161,6 +202,13 @@ class QueryTargetSnapshotV1(FrozenContract):
         )
         if self.query_target_fingerprint != expected:
             raise ValueError("Query Target fingerprint does not match its payload")
+        if isinstance(self.parameters, OfferTodayAdaptiveQueryTargetParametersV1):
+            owner = self.parameters.top_level_classification_id
+            if self.parameters.target_kind in {"native_top_level", "keyword"}:
+                if self.classification_id != owner:
+                    raise ValueError("OfferToday top-level Query Target owner differs")
+            elif self.classification_id == owner:
+                raise ValueError("OfferToday child Query Target must use its child identity")
         return self
 
     @classmethod

@@ -5,7 +5,7 @@ from typing import Optional
 
 SUPPORTED_CRAWL_MODES = {"headless", "headed"}
 DEFAULT_CRAWL_MODE_BY_SOURCE = {
-    "jobsdb": "headed",
+    "jobsdb": "headless",
     "ctgoodjobs": "headless",
     "offertoday": "headless",
 }

@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pathlib import Path
 from typing import Optional
 
@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     )
     offertoday_headed_browser_executable_path: Optional[str] = None
     offertoday_headed_navigation_timeout_ms: int = 60000
+    offertoday_browser_request_timeout_ms: int = 60000
+    crawl_execution_heartbeat_stale_seconds: int = 120
+    crawl_execution_watchdog_interval_seconds: float = 5.0
     jobsdb_headed_worker_lock_port: int = 47651
     jobsdb_headed_worker_stale_seconds: int = 60
     manual_action_helper_host: str = "127.0.0.1"
@@ -69,9 +72,12 @@ class Settings(BaseSettings):
     scheduler_heartbeat_interval_seconds: int = 15
     scheduler_reconcile_interval_seconds: int = 30
     scheduler_heartbeat_stale_seconds: int = 60
+    jev_maintenance_poll_interval_seconds: int = 3600
 
     # LLM Configuration
-    llm_provider: str = "gemini"  # Options: anthropic, claude, custom, gemini, zhipu, mock
+    llm_provider: str = (
+        "gemini"  # Options: anthropic, claude, custom, gemini, zhipu, mock
+    )
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-sonnet-4-5"
     anthropic_base_url: Optional[str] = None  # For API proxies
@@ -88,25 +94,41 @@ class Settings(BaseSettings):
     recommendation_api_url: Optional[str] = None
 
     @field_validator(
-        'anthropic_base_url',
-        'anthropic_api_key',
-        'custom_api_key',
-        'custom_base_url',
-        'retrieval_api_url',
-        'recommendation_api_url',
-        'jobsdb_headed_browser_user_data_dir',
-        'jobsdb_headed_browser_executable_path',
-        'offertoday_headed_browser_user_data_dir',
-        'offertoday_headed_browser_executable_path',
-        'ctgoodjobs_proxy_static_url',
-        'ctgoodjobs_proxy_pool_api_base_url',
-        'ctgoodjobs_proxy_pool_delete_path',
-        'ctgoodjobs_proxy_provider_auth_header',
-        mode='before',
+        "anthropic_base_url",
+        "anthropic_api_key",
+        "custom_api_key",
+        "custom_base_url",
+        "retrieval_api_url",
+        "recommendation_api_url",
+        "jobsdb_headed_browser_user_data_dir",
+        "jobsdb_headed_browser_executable_path",
+        "offertoday_headed_browser_user_data_dir",
+        "offertoday_headed_browser_executable_path",
+        "ctgoodjobs_proxy_static_url",
+        "ctgoodjobs_proxy_pool_api_base_url",
+        "ctgoodjobs_proxy_pool_delete_path",
+        "ctgoodjobs_proxy_provider_auth_header",
+        mode="before",
     )
     @classmethod
     def empty_str_to_none(cls, v):
         return None if v == "" else v
+
+    @model_validator(mode="after")
+    def validate_crawl_execution_timeouts(self):
+        if self.offertoday_browser_request_timeout_ms <= 0:
+            raise ValueError("OfferToday browser request timeout must be positive")
+        if self.crawl_execution_watchdog_interval_seconds <= 0:
+            raise ValueError("Crawl execution watchdog interval must be positive")
+        if (
+            self.crawl_execution_heartbeat_stale_seconds * 1000
+            <= self.offertoday_browser_request_timeout_ms
+        ):
+            raise ValueError(
+                "Crawl execution heartbeat stale threshold must exceed the "
+                "OfferToday browser request timeout"
+            )
+        return self
 
     # Google Custom Search
     google_api_key: Optional[str] = None
@@ -139,5 +161,6 @@ class Settings(BaseSettings):
         "http://localhost:5174,"
         "http://127.0.0.1:5174"
     )
+
 
 settings = Settings()

@@ -72,6 +72,14 @@ class CrawlJobExecutionRepository:
             .all()
         )
 
+    def list_active(self, db: Session) -> list[CrawlJobExecution]:
+        return (
+            db.query(CrawlJobExecution)
+            .filter(CrawlJobExecution.status.in_(list(ACTIVE_EXECUTION_STATUSES)))
+            .order_by(CrawlJobExecution.created_at.asc())
+            .all()
+        )
+
     def mark_running(
         self,
         execution: CrawlJobExecution,
@@ -106,13 +114,23 @@ class CrawlJobExecutionRepository:
 
     @staticmethod
     def snapshot(execution: CrawlJobExecution) -> dict[str, Any]:
+        now = utc_now()
+        heartbeat_at = execution.heartbeat_at
+        if heartbeat_at is not None and heartbeat_at.tzinfo is None:
+            heartbeat_at = heartbeat_at.replace(tzinfo=now.tzinfo)
         return {
-            "generation": str(execution.generation),
-            "crawl_job_id": str(execution.crawl_job_id),
+            "generation": execution.generation,
+            "crawl_job_id": execution.crawl_job_id,
             "status": execution.status,
             "pid": execution.pid,
             "process_create_time": execution.process_create_time,
             "command": list(execution.command or []),
+            "heartbeat_at": heartbeat_at,
+            "heartbeat_age_seconds": (
+                max((now - heartbeat_at).total_seconds(), 0.0)
+                if heartbeat_at is not None
+                else None
+            ),
             "stop_requested_at": execution.stop_requested_at,
         }
 

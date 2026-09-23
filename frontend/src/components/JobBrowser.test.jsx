@@ -2,7 +2,6 @@ import { StrictMode } from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import taxonomyFixture from '../fixtures/current_taxonomy_responses.json';
 import productFixture from '../fixtures/job_intelligence_product_surfaces.json';
 
 const api = vi.hoisted(() => ({
@@ -66,15 +65,6 @@ function searchFacets() {
       (option) => ({ ...option, id: option.code, count: 2 }),
     ),
     source_classifications: sourceClassifications,
-    company_industries: [
-      {
-        id: taxonomyFixture.company_tree.nodes[0].code,
-        label: taxonomyFixture.company_tree.nodes[0].labels.en,
-        parent_id: null,
-        level: taxonomyFixture.company_tree.nodes[0].level,
-        count: 2,
-      },
-    ],
   };
 }
 
@@ -100,20 +90,6 @@ function jobSearchPayload(overrides = {}) {
   };
 }
 
-function currentCompanyIndustryTree() {
-  return {
-    taxonomy: 'company_industry',
-    nodes: taxonomyFixture.company_tree.nodes.map((node) => ({
-      code: node.code,
-      parent_code: null,
-      level: node.level,
-      labels: node.labels,
-      order: node.order,
-      is_assignable: true,
-    })),
-  };
-}
-
 describe('JobBrowser governed filters', () => {
   beforeEach(() => {
     window.location.hash = '#jobs';
@@ -130,9 +106,6 @@ describe('JobBrowser governed filters', () => {
       const path = String(url);
       if (path.includes('/jobs/filters')) {
         return Promise.resolve(productFixture.job_filters);
-      }
-      if (path.includes('/company-industries/tree')) {
-        return Promise.resolve(currentCompanyIndustryTree());
       }
       return Promise.reject(new Error(`Unexpected API read: ${path}`));
     });
@@ -165,7 +138,7 @@ describe('JobBrowser governed filters', () => {
     vi.restoreAllMocks();
   });
 
-  it('uses progressively loaded search facets for every governed selector', async () => {
+  it('uses progressively loaded search facets for governed selectors', async () => {
     const user = userEvent.setup();
     render(<JobBrowser />);
 
@@ -176,12 +149,6 @@ describe('JobBrowser governed filters', () => {
     await user.click(employmentTypes);
     expect(screen.getByRole('checkbox', {
       name: 'Full-time (2 jobs)',
-    })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', {
-      name: 'Company Industry, 0 selected',
-    }));
-    expect(screen.getByRole('checkbox', {
-      name: 'J · Information and communications (2 jobs)',
     })).toBeInTheDocument();
     await user.click(screen.getByRole('button', {
       name: 'Source Classification Paths, 0 selected',
@@ -239,9 +206,8 @@ describe('JobBrowser governed filters', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('submits every governed multi-value filter through the Job Browser scope', async () => {
+  it('submits governed multi-value filters through the Job Browser scope', async () => {
     const user = userEvent.setup();
-    const industryNode = taxonomyFixture.company_tree.nodes[0];
 
     render(<JobBrowser />);
 
@@ -258,12 +224,6 @@ describe('JobBrowser governed filters', () => {
     await user.click(screen.getByRole('checkbox', {
       name: 'JobsDB · Information Technology (3 jobs)',
     }));
-    await user.click(screen.getByRole('button', {
-      name: 'Company Industry, 0 selected',
-    }));
-    await user.click(screen.getByRole('checkbox', {
-      name: 'J · Information and communications (2 jobs)',
-    }));
     await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
 
     await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
@@ -273,9 +233,7 @@ describe('JobBrowser governed filters', () => {
       expect.objectContaining({
         employment_type_codes: ['full_time', 'permanent'],
         source_classification_ids: ['jobsdb:6281'],
-        company_industry_node_ids: [industryNode.code],
         employment_type: '',
-        industry: '',
       }),
     );
   });
@@ -468,6 +426,89 @@ describe('JobBrowser governed filters', () => {
     expect(request.page).toBe(2);
     expect(request.include_facets).toBe(false);
     expect(facetSearchCalls()).toHaveLength(1);
+  });
+
+  it('previews explicitly, applies one Jev rerank, and carries it into search', async () => {
+    const user = userEvent.setup();
+    const baselineJobs = productFixture.job_search.jobs.slice(0, 3);
+    globalThis.fetch = vi.fn((input, options = {}) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(searchFacets()),
+        });
+      }
+      if (url.pathname === '/api/jobs/search/rerank/preview') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            id: 'rerank-1',
+            enabled: true,
+            status: 'preview',
+            eligible_count: 3,
+            selected_count: 3,
+          }),
+        });
+      }
+      if (url.pathname === '/api/jobs/search/rerank/evaluations/rerank-1') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            id: 'rerank-1',
+            status: 'completed',
+            request_id: 'request-rerank-1',
+            provider: 'local-test',
+            cost_usd: 0.00005,
+          }),
+        });
+      }
+      const request = JSON.parse(options.body);
+      const jobs = request.jev_rerank_evaluation_id
+        ? [...baselineJobs].reverse()
+        : baselineJobs;
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(jobSearchPayload({
+          jobs,
+          total: 3,
+          total_pages: 1,
+          applied_scope: request.scope,
+          facets: null,
+        })),
+      });
+    });
+
+    render(<JobBrowser />);
+    const advisory = await screen.findByRole('region', {
+      name: 'Jev search relevance advisory',
+    });
+    expect(fetchCallsFor('/api/jobs/search/rerank/preview')).toHaveLength(0);
+    expect(fetchCallsFor('/api/jobs/search/rerank/evaluations/rerank-1')).toHaveLength(0);
+
+    await user.click(within(advisory).getByRole('button', {
+      name: 'Preview rerank candidates',
+    }));
+    expect(await within(advisory).findByRole('status')).toHaveTextContent(
+      'Free database preview: 3 selected / 3 eligible. Candidate membership is frozen. No Jev request was sent.',
+    );
+    expect(fetchCallsFor('/api/jobs/search/rerank/evaluations/rerank-1')).toHaveLength(0);
+
+    await user.click(within(advisory).getByRole('button', {
+      name: 'Evaluate with Jev',
+    }));
+    expect(await within(advisory).findByTestId('jev-search-rerank-receipt')).toHaveTextContent(
+      'Latest: completed · receipt request-rerank-1 · local-test · cost USD 0.00005',
+    );
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    const rerankedRequest = JSON.parse(jobSearchCalls()[1][1].body);
+    expect(rerankedRequest).toEqual(expect.objectContaining({
+      page: 1,
+      include_facets: false,
+      jev_rerank_evaluation_id: 'rerank-1',
+    }));
+    expect(screen.getByText('3', { selector: '.query-console-results strong' }))
+      .toBeInTheDocument();
   });
 
   it('keeps an in-flight facet refresh active while changing pages', async () => {

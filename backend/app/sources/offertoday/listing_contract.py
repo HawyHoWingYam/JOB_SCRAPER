@@ -734,6 +734,7 @@ def parse_offertoday_listing_page_result(
     response: dict[str, Any],
     *,
     require_cursor: bool,
+    allow_absent_cursor: bool = False,
     expected_session_id: str | None = None,
     expected_effective_page_size: int | None = None,
     endpoint_contract_id: str | None = None,
@@ -807,6 +808,11 @@ def parse_offertoday_listing_page_result(
         response_page_size = _exact_positive_int(raw_page_size, "page_size")
     if require_cursor and response_page_size is None:
         raise OfferTodayCursorContractError("missing_page_size")
+    if (
+        expected_effective_page_size is not None
+        and response_page_size != expected_effective_page_size
+    ):
+        raise OfferTodayCursorContractError("page_size_drift")
 
     cursor_field_names = (
         "sessionId",
@@ -818,7 +824,12 @@ def parse_offertoday_listing_page_result(
         name in data and data.get(name) is not None for name in cursor_field_names
     ]
     cursor: OfferTodayListingCursor | None = None
-    if require_cursor or any(cursor_fields_present):
+    absent_cursor_allowed = (
+        require_cursor
+        and allow_absent_cursor
+        and not any(cursor_fields_present)
+    )
+    if (require_cursor and not absent_cursor_allowed) or any(cursor_fields_present):
         if not all(cursor_fields_present):
             raise OfferTodayCursorContractError("incomplete_cursor")
         session_id = data.get("sessionId")
@@ -838,11 +849,6 @@ def parse_offertoday_listing_page_result(
         )
         if expected_session_id is not None and cursor.session_id != expected_session_id:
             raise OfferTodayCursorContractError("session_rollover")
-        if (
-            expected_effective_page_size is not None
-            and cursor.effective_page_size != expected_effective_page_size
-        ):
-            raise OfferTodayCursorContractError("page_size_drift")
 
     raw_has_more = data.get("hasMore")
     if raw_has_more is not None and type(raw_has_more) is not bool:

@@ -1,0 +1,31 @@
+{
+  "catalog_url": "https://github.com/heyjunpenn/awesome-jev",
+  "catalog_commit": "24279e3fb0a949ae87abd0d772530c1227cf86a7",
+  "screened_at": "2026-09-23",
+  "entries": 640,
+  "readme_retrieved": 630,
+  "readme_unavailable": 10,
+  "source_repositories_cloned": 26,
+  "evidence_levels": {
+    "readme-skim": 233,
+    "code-reviewed": 15,
+    "unavailable": 10,
+    "readme-excerpt-screened": 380,
+    "readme-reviewed": 2
+  },
+  "categories": {
+    "Official": 6,
+    "SDKs & clients": 50,
+    "Jev-like models": 18,
+    "Frameworks & integrations": 53,
+    "Agent tooling": 158,
+    "Browser & computer use": 51,
+    "Applications": 72,
+    "Games & simulations": 56,
+    "Demos & playgrounds": 46,
+    "Benchmarks & research": 99,
+    "Other lists": 31
+  },
+  "live_experiments": 0,
+  "note": "Coverage counts are not full-repository audits. Recommendation fit is an analyst inference. Most scouts encountered 429; completed and partial scout findings plus main-thread screening were used."
+}

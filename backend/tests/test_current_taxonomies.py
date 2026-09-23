@@ -10,35 +10,26 @@ from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.orm import sessionmaker
 
 from app.api.current_taxonomies import (
-    read_company_industry_state,
-    read_company_industry_tree,
     read_job_skills,
     read_skill_tree,
     router as current_taxonomy_router,
 )
 from app.job_intelligence.current_taxonomies import (
-    CurrentCompanyIndustryInput,
     CurrentJobSkillInput,
     CurrentSkillEnrichment,
     CurrentTaxonomyReader,
     CurrentTaxonomyStore,
-    ReplaceCurrentCompanyIndustriesCommand,
     ReplaceCurrentJobSkillsCommand,
-    project_current_company_industry,
-    transform_company_industry_taxonomy,
     transform_skill_taxonomy,
 )
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.models.current_taxonomy import (
-    CurrentCompanyIndustryAssignment,
-    CurrentJobSkillMention,
     CurrentJobSkillAssignment,
+    CurrentJobSkillMention,
     CurrentSkillCandidate,
-    CurrentSourceTaxonomyMapping,
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
 )
-from app.models.event_outbox import EventOutbox
 from app.services.current_embedding_document_builder import (
     CurrentEmbeddingDocumentBuilder,
 )
@@ -52,21 +43,17 @@ def _load(name: str):
 
 
 def test_committed_taxonomies_flatten_to_stable_current_codes():
-    industry = transform_company_industry_taxonomy(_load("hsic_v2.json"))
     skill = transform_skill_taxonomy(_load("skill_taxonomy.json"))
 
-    assert len(industry.nodes) == 21 + 88 + 221 + 483 + 1001
-    assert sum(node.level == "subclass" and node.is_assignable for node in industry.nodes) == 1001
-    assert len(skill.nodes) == 8 + 33 + 91
-    assert len(skill.aliases) == 142
-    assert sum(node.level == "skill" and node.is_assignable for node in skill.nodes) == 91
+    assert len(skill.nodes) == 8 + 43 + 174
+    assert len(skill.aliases) == 271
+    assert sum(node.level == "skill" and node.is_assignable for node in skill.nodes) == 174
 
-    for snapshot in (industry, skill):
-        payload = snapshot.to_payload()
-        assert "version" not in payload
-        assert "revision" not in payload
-        assert "release" not in payload
-        assert len({node.code for node in snapshot.nodes}) == len(snapshot.nodes)
+    payload = skill.to_payload()
+    assert "version" not in payload
+    assert "revision" not in payload
+    assert "release" not in payload
+    assert len({node.code for node in skill.nodes}) == len(skill.nodes)
 
 
 def test_current_store_synchronizes_hierarchy_and_aliases_without_revisions():
@@ -88,8 +75,8 @@ def test_current_store_synchronizes_hierarchy_and_aliases_without_revisions():
         store.synchronize(snapshot)
         store.synchronize(snapshot)
 
-        assert len(store.list_nodes("skill")) == 132
-        assert db.scalar(select(func.count()).select_from(CurrentTaxonomyAliasRecord)) == 142
+        assert len(store.list_nodes("skill")) == 225
+        assert db.scalar(select(func.count()).select_from(CurrentTaxonomyAliasRecord)) == 271
         react = db.get(CurrentTaxonomyNodeRecord, ("skill", "frontend.javascript.react"))
         assert react.parent_code == "frontend.javascript"
         assert react.is_assignable is True
@@ -99,13 +86,11 @@ def test_current_store_synchronizes_hierarchy_and_aliases_without_revisions():
         engine.dispose()
 
 
-def test_current_assignment_and_mapping_tables_have_no_release_identity():
+def test_current_skill_tables_have_no_release_identity():
     tables = (
-        CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
         CurrentJobSkillMention.__table__,
-        CurrentSourceTaxonomyMapping.__table__,
     )
     forbidden = {
         "revision_id",
@@ -159,43 +144,22 @@ def test_current_skill_evidence_keeps_candidates_and_mentions_without_review_ver
     }.issubset(mention.columns.keys())
 
 
-def test_current_reader_returns_company_assignments_and_active_job_skills():
+def test_current_reader_returns_active_job_skills():
     engine = create_engine("sqlite:///:memory:")
     for table in (
         CurrentTaxonomyNodeRecord.__table__,
         CurrentTaxonomyAliasRecord.__table__,
-        CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
         CurrentJobSkillMention.__table__,
     ):
         table.create(engine)
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    company_id = uuid4()
     job_id = uuid4()
     candidate_id = uuid4()
     try:
         store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_company_industry_taxonomy(_load("hsic_v2.json")))
         store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
-        industry_code = next(
-            node.code
-            for node in store.list_nodes("company_industry")
-            if node.is_assignable
-        )
-        db.add(
-            CurrentCompanyIndustryAssignment(
-                company_id=company_id,
-                taxonomy="company_industry",
-                taxonomy_code=industry_code,
-                method="accepted",
-                provenance={"source": "existing-assignment"},
-                evidence_hash="i" * 64,
-                breadcrumb={"subclass": {"code": industry_code, "label": "Industry"}},
-                is_primary=True,
-                primary_basis="accepted",
-            )
-        )
         db.add(
             CurrentJobSkillAssignment(
                 job_id=job_id,
@@ -237,53 +201,29 @@ def test_current_reader_returns_company_assignments_and_active_job_skills():
         db.flush()
 
         reader = CurrentTaxonomyReader(db)
-        company_state = reader.get_company_industry_state(company_id)
         skill_state = reader.get_job_skills(job_id)
 
-        assert len(company_state.assignments) == 1
-        assert company_state.assignments[0].is_primary is True
-        assert company_state.assignments[0].taxonomy_code == industry_code
         assert [skill.name for skill in skill_state.skills] == ["React"]
         assert skill_state.skills[0].mention_count == 2
         assert [mention.raw_name for mention in skill_state.candidate_mentions] == [
             "Rust"
         ]
         assert skill_state.candidate_mentions[0].candidate_id == candidate_id
-        assert reader.get_company_industry_state(uuid4()).assignments == ()
         assert reader.get_job_skills(uuid4()).skills == ()
         assert reader.get_job_skills(uuid4()).candidate_mentions == ()
 
-        missing_company_id = uuid4()
         missing_job_id = uuid4()
-        company_states = reader.get_company_industry_states(
-            (company_id, missing_company_id)
-        )
         skill_states = reader.get_job_skill_states((job_id, missing_job_id))
-        assert company_states[company_id].assignments[0].taxonomy_code == industry_code
-        assert company_states[missing_company_id].assignments == ()
         assert skill_states[job_id].skills[0].code == "frontend.javascript.react"
         assert skill_states[job_id].candidate_mentions[0].normalized_key == "rust"
         assert skill_states[missing_job_id].skills == ()
         assert skill_states[missing_job_id].candidate_mentions == ()
 
         product = JobIntelligenceProductReadModel(db)
-        company_payload = product.get_company_details(
-            (company_id, missing_company_id)
-        )
         skill_payload = product.get_governed_skill_name_states(
             (job_id, missing_job_id)
         )
-        serialized = json.dumps(
-            {
-                "companies": list(company_payload.values()),
-                "skills": list(skill_payload.values()),
-            },
-            default=str,
-            sort_keys=True,
-        )
-        assert company_payload[company_id]["company_industries"]["assignments"][0][
-            "taxonomy_code"
-        ] == industry_code
+        serialized = json.dumps(list(skill_payload.values()), default=str, sort_keys=True)
         assert skill_payload[job_id]["governed_skill_names"] == ["React"]
         assert "revision" not in serialized
         assert "review_item" not in serialized
@@ -407,74 +347,11 @@ def test_current_skill_enrichment_resolves_localized_generic_aliases_before_cand
         engine.dispose()
 
 
-def test_current_company_projection_assigns_mapped_evidence_without_review_queue():
-    engine = create_engine("sqlite:///:memory:")
-    for table in (
-        CurrentTaxonomyNodeRecord.__table__,
-        CurrentTaxonomyAliasRecord.__table__,
-        CurrentSourceTaxonomyMapping.__table__,
-        CurrentCompanyIndustryAssignment.__table__,
-        EventOutbox.__table__,
-    ):
-        table.create(engine)
-    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    company_id = uuid4()
-    try:
-        store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_company_industry_taxonomy(_load("hsic_v2.json")))
-        target = next(
-            node.code
-            for node in store.list_nodes("company_industry")
-            if node.is_assignable
-        )
-        evidence = SimpleNamespace(
-            source_site="offertoday",
-            source_job_id="offer-1",
-            raw_data={"company_industry": "Software Companies"},
-            captured_at="2026-07-26T12:00:00Z",
-        )
-
-        missing = project_current_company_industry(db, company_id, evidence)
-        assert missing.state == "unassigned"
-        assert missing.changed is False
-        assert CurrentTaxonomyReader(db).get_company_industry_state(
-            company_id
-        ).assignments == ()
-
-        db.add(
-            CurrentSourceTaxonomyMapping(
-                taxonomy="company_industry",
-                source_site="offertoday",
-                source_key="label:software companies",
-                target_code=target,
-                source_label="Software Companies",
-                role="deterministic",
-                evidence={},
-            )
-        )
-        db.flush()
-        assigned = project_current_company_industry(db, company_id, evidence)
-        state = CurrentTaxonomyReader(db).get_company_industry_state(company_id)
-
-        assert assigned.state == "assigned"
-        assert assigned.changed is True
-        assert [row.taxonomy_code for row in state.assignments] == [target]
-        assert state.assignments[0].is_primary is True
-        payload = json.dumps(state.assignments[0].provenance, sort_keys=True)
-        assert "revision" not in payload
-        assert db.scalar(select(func.count()).select_from(EventOutbox)) == 1
-    finally:
-        db.rollback()
-        db.close()
-        engine.dispose()
-
-
 def test_current_store_runtime_writes_have_no_versions():
     engine = create_engine("sqlite:///:memory:")
     for table in (
         CurrentTaxonomyNodeRecord.__table__,
         CurrentTaxonomyAliasRecord.__table__,
-        CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
         CurrentJobSkillMention.__table__,
@@ -483,33 +360,9 @@ def test_current_store_runtime_writes_have_no_versions():
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     now = datetime(2026, 7, 26, tzinfo=UTC)
     job_id = uuid4()
-    company_id = uuid4()
     try:
         store = CurrentTaxonomyStore(db)
-        company_snapshot = transform_company_industry_taxonomy(_load("hsic_v2.json"))
-        store.synchronize(company_snapshot)
         store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
-        company_code = next(
-            node.code for node in company_snapshot.nodes if node.is_assignable
-        )
-
-        store.replace_company_industries(
-            ReplaceCurrentCompanyIndustriesCommand(
-                company_id=company_id,
-                assignments=(
-                    CurrentCompanyIndustryInput(
-                        taxonomy_code=company_code,
-                        method="operator",
-                        provenance={},
-                        evidence_hash="b" * 64,
-                        breadcrumb={"subclass": {"code": company_code}},
-                        is_primary=True,
-                        primary_basis="operator",
-                        captured_at=now,
-                    ),
-                ),
-            )
-        )
         store.replace_job_skills(
             ReplaceCurrentJobSkillsCommand(
                 job_id=job_id,
@@ -526,7 +379,6 @@ def test_current_store_runtime_writes_have_no_versions():
             )
         )
 
-        assert db.scalar(select(func.count()).select_from(CurrentCompanyIndustryAssignment)) == 1
         assert db.get(
             CurrentJobSkillAssignment,
             (job_id, "frontend.javascript.react"),
@@ -543,8 +395,6 @@ def test_current_taxonomy_api_contract_has_no_revision_or_review_routes():
     paths = {route.path for route in current_taxonomy_router.routes}
 
     assert paths == {
-        "/job-intelligence/company-industries/tree",
-        "/job-intelligence/companies/{company_id}/industries",
         "/job-intelligence/skills/tree",
         "/job-intelligence/jobs/{job_id}/skills",
     }
@@ -558,7 +408,6 @@ def test_current_taxonomy_api_serializes_only_current_state():
     for table in (
         CurrentTaxonomyNodeRecord.__table__,
         CurrentTaxonomyAliasRecord.__table__,
-        CurrentCompanyIndustryAssignment.__table__,
         CurrentJobSkillAssignment.__table__,
         CurrentSkillCandidate.__table__,
         CurrentJobSkillMention.__table__,
@@ -567,10 +416,8 @@ def test_current_taxonomy_api_serializes_only_current_state():
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     now = datetime(2026, 7, 26, tzinfo=UTC)
     job_id = uuid4()
-    company_id = uuid4()
     try:
         store = CurrentTaxonomyStore(db)
-        store.synchronize(transform_company_industry_taxonomy(_load("hsic_v2.json")))
         store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
         store.replace_job_skills(
             ReplaceCurrentJobSkillsCommand(
@@ -589,8 +436,6 @@ def test_current_taxonomy_api_serializes_only_current_state():
         )
 
         payloads = (
-            read_company_industry_tree(db),
-            read_company_industry_state(company_id, db),
             read_skill_tree(db),
             read_job_skills(job_id, db),
         )

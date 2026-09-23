@@ -1,0 +1,29 @@
+{
+  "id": "troubleshoot-offertoday-cursor-contract-failures",
+  "name": "troubleshoot-offertoday-cursor-contract-failures",
+  "title": "Prevent isolated crawl failures from aborting recoverable work",
+  "description": "Handle the verified OfferToday listing collection window and CTgoodjobs item-specific detail persistence failures without losing valid work or overstating completion.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-08-24",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "Implemented and regression-tested the OfferToday page-46 source_collection_window partial-and-continue boundary, CTgoodjobs Job/Company location ownership isolation, and deployed-column oversize classification. On 2026-08-25 the user-approved jobs.location VARCHAR(255) to TEXT cutover completed safely after backup SHA-256 2e9a96d1bf0bf1466a62a58f77d4020b1d3e244397d096aa481c6fb1f76953b2, zero-active-work checks, transactional validation, unchanged row counts, and service health recovery. Remaining scope is narrowly defined: controlled OfferToday live verification and one new CTgoodjobs retry. The 95 MB local database backup is operational evidence and must remain untracked, not a Git artifact.",
+  "meta": {
+    "github_issue": 60,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/60"
+  }
+}

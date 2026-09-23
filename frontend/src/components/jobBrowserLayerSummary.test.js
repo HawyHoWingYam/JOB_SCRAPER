@@ -11,19 +11,16 @@ describe('Job Browser applied layer summaries', () => {
       structured_filters: {
         source_site: 'jobsdb',
         employment_type_codes: ['full_time'],
-        company_industry_node_ids: ['J'],
         posted_date_from: '2026-07-01',
         experience_years_to: '3',
       },
     }, {
       sources: [{ id: 'jobsdb', label: 'JobsDB' }],
       employment_types: [{ id: 'full_time', label: 'Full-time' }],
-      company_industries: [{ id: 'J', label: 'Information and communications' }],
     })).toEqual(expect.arrayContaining([
       'Text: platform engineer',
       'Source: JobsDB',
       'Employment Type: Full-time',
-      'Company Industry: Information and communications',
       'Posted from: 2026-07-01',
       'Experience: up to 3 years',
     ]));
