@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Approved Scheduler board/authoring workflow improvements implemented. Quality gate passed; work remains uncommitted and not deployed. Issue #75 remains open pending manual QA. Siblings #76 and #77 remain planning.
+Approved Scheduler board/authoring workflow improvements implemented. Quality gate passed; work committed as `43b245e1` (implementation) and `d09ec64b` (planning). Not pushed or deployed. Issue #75 remains open pending manual QA. Siblings #76 and #77 remain planning.
 
 ## Automated checks
 

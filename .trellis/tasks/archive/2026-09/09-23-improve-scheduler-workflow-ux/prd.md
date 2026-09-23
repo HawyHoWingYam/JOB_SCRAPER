@@ -37,4 +37,4 @@ Parent: https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/74
 
 ## Verification
 
-Automated acceptance passed; see `verification.md` for evidence and limits. Manual QA, commit, and deployment are pending.
+Automated acceptance passed; see `verification.md` for evidence and limits. Committed as `43b245e1`; manual QA and deployment are pending.
