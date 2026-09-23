@@ -1,0 +1,33 @@
+{
+  "id": "improve-operations-workflow-ux",
+  "name": "improve-operations-workflow-ux",
+  "title": "Improve Scheduler, Crawl Tasks, and AI Enrichment workflows",
+  "description": "Coordinate UI/UX improvement for three operational pages and their complete downstream workflows.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": "frontend",
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-23-improve-scheduler-workflow-ux",
+    "09-23-improve-crawl-tasks-workflow-ux",
+    "09-23-improve-ai-enrichment-workflow-ux"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "User requested tasks and issues only. All children remain planning; no implementation started.",
+  "meta": {
+    "github_issue": 74,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/74"
+  }
+}

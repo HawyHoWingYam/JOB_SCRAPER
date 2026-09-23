@@ -1,0 +1,29 @@
+{
+  "id": "improve-scheduler-workflow-ux",
+  "name": "improve-scheduler-workflow-ux",
+  "title": "Improve Scheduler page and end-to-end workflow UX",
+  "description": "Make the Scheduler page and its downstream authoring, review, dispatch, and monitoring workflow easier to understand and operate.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "frontend",
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-23",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-23-improve-operations-workflow-ux",
+  "relatedFiles": [],
+  "notes": "User approved interaction restructuring. Scheduler implemented and quality gate passed: 242 frontend tests, lint/build, five isolated browser scenarios. Awaiting commit and manual QA; not deployed.",
+  "meta": {
+    "github_issue": 75,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/75"
+  }
+}
