@@ -400,3 +400,37 @@ Created parent issue #74 and workflow children #75/#76/#77. Implemented approved
 ### Next Steps
 
 - None - task complete
+
+
+## Session 67: Complete operational UX workflows and Settings delivery
+
+**Date**: 2026-09-23
+**Task**: Complete operational UX workflows and Settings delivery
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed Crawl Tasks context-preserving monitoring/events/recovery, AI preview authority and exact-run history/outcomes, and Settings draft/save/test/navigation/return workflows. Scheduler previously delivered as 43b245e1. User approved two work commits and archive of three children plus parent. Verification: frontend 260 tests; lint/build; all 748 backend cases across isolated PostgreSQL/Redis runs; 15 isolated browser and 22 fake-provider integration tests. Screenshot evidence and verification archived with tasks. GitHub issues 74-78 remain open for manual QA. No push, live crawl, or real provider call.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3b460795` | (see git log) |
+| `5c4bd0c0` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
