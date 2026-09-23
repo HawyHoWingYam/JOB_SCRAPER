@@ -10,7 +10,7 @@ export function fetchOfferTodayKeywordPacks(options) {
 export async function downloadOfferTodayKeywordPacksCsv() {
   const response = await fetch(apiPath(`${ROOT}/csv`));
   if (!response.ok) {
-    throw new ApiRequestError('CSV 下载失败', { status: response.status });
+    throw new ApiRequestError('Could not download the CSV. Please retry.', { status: response.status });
   }
   return response.blob();
 }

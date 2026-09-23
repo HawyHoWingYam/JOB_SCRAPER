@@ -55,6 +55,27 @@ describe("Dashboard", () => {
     vi.restoreAllMocks();
   });
 
+  it("distinguishes initial loading and failure from a successfully loaded empty corpus", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    globalThis.fetch = vi.fn(() => gate.then(() => { throw new Error("Overview offline"); }));
+    const user = userEvent.setup();
+    render(<Dashboard />);
+    expect(screen.getByText("Loading operational overview…")).toBeVisible();
+    expect(screen.queryByText("No AI-eligible Jobs are in the current corpus.")).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByRole("button", { name: "Retry overview" })).toBeVisible();
+    expect(screen.queryByText("No AI-eligible Jobs are in the current corpus.")).not.toBeInTheDocument();
+    globalThis.fetch.mockImplementation((input) => {
+      if (String(input).includes("/stats/overview")) return jsonResponse(Object.fromEntries(Object.keys(stats).map((key) => [key, 0])));
+      if (String(input).includes("/ai/overview")) return jsonResponse(aiOverview);
+      return jsonResponse({ ...skills, processed_total: 0, matched_job_total: 0, skills: [], candidate_backlog: {} });
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("No AI-eligible Jobs are in the current corpus.")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("renders real chart contracts and all three independently fetched sections", async () => {
     const user = userEvent.setup();
     const onNavigateToJobs = vi.fn();

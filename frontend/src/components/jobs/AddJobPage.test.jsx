@@ -34,6 +34,19 @@ function installBaseFetch(onManualSubmit) {
 describe('AddJobPage manual persistence', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('explains required fields without submitting an incomplete draft', async () => {
+    const submit = vi.fn();
+    installBaseFetch(submit);
+    const user = userEvent.setup();
+    render(<AddJobPage />);
+    await user.click(screen.getByRole('button', { name: 'Add Job' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Job title is required.');
+    await user.type(screen.getByLabelText('Job Title *'), 'Engineer');
+    await user.click(screen.getByRole('button', { name: 'Add Job' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Company is required.');
+    expect(submit).not.toHaveBeenCalled();
+  });
+
   it('submits an existing Company with governed fields and an idempotency key', async () => {
     const submissions = [];
     installBaseFetch((init) => {
@@ -66,7 +79,11 @@ describe('AddJobPage manual persistence', () => {
     expect(payload).not.toHaveProperty('employment_type');
     expect(submissions[0].headers['Idempotency-Key']).toBeTruthy();
     expect(await screen.findByRole('status')).toHaveTextContent('was added successfully');
+    expect(screen.getByRole('link', { name: 'Open AI Enrichment' })).toHaveAttribute('href', '#ai');
+    expect(screen.getByRole('link', { name: 'Browse jobs' })).toHaveAttribute('href', '#jobs');
     expect(screen.queryByText(/AI Summary/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add another Job' }));
+    expect(screen.getByLabelText('Job Title *')).toHaveValue('');
   });
 
   it('keeps a New Company draft local and submits it atomically with the Job', async () => {
@@ -130,5 +147,30 @@ describe('AddJobPage manual persistence', () => {
     await waitFor(() => expect(keys).toHaveLength(2));
     expect(keys[1]).toBe(keys[0]);
     expect(bodies[1].duplicate_confirmation).toBe('a'.repeat(64));
+  });
+
+  it('keeps the draft and idempotency key when a failed save is retried', async () => {
+    const submissions = [];
+    let finishRequest;
+    installBaseFetch((init) => {
+      submissions.push(init);
+      return new Promise((resolve) => { finishRequest = resolve; });
+    });
+    const user = userEvent.setup();
+    render(<AddJobPage />);
+    await user.type(screen.getByLabelText('Job Title *'), 'Platform Engineer');
+    await user.click(screen.getByLabelText('New Company'));
+    await user.type(screen.getByLabelText('Company Name *'), 'Draft Company');
+    await user.click(screen.getByRole('button', { name: 'Add Job' }));
+    expect(screen.getByRole('button', { name: /Saving/ })).toBeDisabled();
+    finishRequest(await jsonResponse({ detail: 'Service temporarily unavailable' }, { ok: false, status: 503 }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Service temporarily unavailable');
+    expect(screen.getByLabelText('Job Title *')).toHaveValue('Platform Engineer');
+    expect(screen.getByLabelText('Company Name *')).toHaveValue('Draft Company');
+    await user.click(screen.getByRole('button', { name: 'Add Job' }));
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1].headers['Idempotency-Key']).toBe(submissions[0].headers['Idempotency-Key']);
+    finishRequest(await jsonResponse({ ...productFixture.job_detail, title: 'Platform Engineer' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('was added successfully');
   });
 });

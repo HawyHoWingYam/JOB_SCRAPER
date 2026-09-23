@@ -72,6 +72,26 @@ describe('ClassificationBatchesPage', () => {
     expect(screen.getByLabelText('Search Candidates')).toBeInTheDocument();
   });
 
+  it.each(['empty', 'failed'])('distinguishes initial loading from a %s Candidate queue', async (outcome) => {
+    let finish;
+    fetchSkillCandidates.mockImplementation(() => new Promise((resolve, reject) => {
+      finish = () => outcome === 'empty'
+        ? resolve({ items: [], total: 0, threshold: 10 })
+        : reject(new Error('Candidate queue unavailable'));
+    }));
+    render(<ClassificationBatchesPage />);
+    expect(screen.getByText('Loading…')).toBeVisible();
+    expect(screen.queryByText('There are no Skills to review.')).not.toBeInTheDocument();
+    finish();
+    if (outcome === 'empty') {
+      expect(await screen.findByText('There are no Skills to review.')).toBeVisible();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } else {
+      expect(await screen.findByRole('alert')).toHaveTextContent('Candidate queue unavailable');
+      expect(screen.queryByText('There are no Skills to review.')).not.toBeInTheDocument();
+    }
+  });
+
   it('confirms a recommended existing Skill and removes the candidate', async () => {
     const user = userEvent.setup();
     render(<ClassificationBatchesPage />);

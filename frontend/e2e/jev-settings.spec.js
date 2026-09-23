@@ -567,6 +567,13 @@ test("reranks one frozen lexical search prefix without changing membership", asy
   await expect(advisory.getByTestId("jev-search-rerank-receipt")).toContainText(
     /receipt e2e-request-\d+ · local-e2e · cost USD 0\.00005/,
   );
+  await expect.poll(async () => {
+    const titles = await page.locator(".job-card .job-title").allTextContents();
+    return {
+      reordered: JSON.stringify(titles) !== JSON.stringify(baselineTitles),
+      members: [...titles].sort(),
+    };
+  }).toEqual({ reordered: true, members: [...baselineTitles].sort() });
   const rerankedTitles = await page.locator(".job-card .job-title").allTextContents();
   expect(rerankedTitles).not.toEqual(baselineTitles);
   expect([...rerankedTitles].sort()).toEqual([...baselineTitles].sort());
@@ -640,6 +647,7 @@ test("keeps the frozen lexical baseline when search reranking is unavailable", a
   );
   await query.fill("rerank-batch-2");
   await page.getByRole("button", { name: "Search all jobs" }).click();
+  await expect(page.locator(".job-card .job-title")).toHaveText(seeded.titles);
   const baselineTitles = await page.locator(".job-card .job-title").allTextContents();
   expect(baselineTitles).toEqual(seeded.titles);
 
@@ -656,9 +664,7 @@ test("keeps the frozen lexical baseline when search reranking is unavailable", a
   await expect(advisory.getByTestId("jev-search-rerank-fallback")).toContainText(
     "baseline order retained",
   );
-  expect(await page.locator(".job-card .job-title").allTextContents()).toEqual(
-    baselineTitles,
-  );
+  await expect(page.locator(".job-card .job-title")).toHaveText(baselineTitles);
 
   const after = await request.get("http://127.0.0.1:18001/fake/requests");
   expect((await after.json()).count).toBe(beforeCount + 1);

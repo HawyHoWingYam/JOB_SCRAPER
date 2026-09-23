@@ -409,6 +409,23 @@ describe("AISettingsPage", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps the settings form unavailable while loading or when its initial request fails", async () => {
+    const originalFetch = globalThis.fetch.getMockImplementation();
+    let finish;
+    globalThis.fetch.mockImplementation((input, init) => {
+      if (String(input).includes('/api/settings/ai')) {
+        return new Promise((resolve) => { finish = resolve; });
+      }
+      return originalFetch(input, init);
+    });
+    render(<AISettingsPage />);
+    expect(screen.getByText('Loading runtime configuration...')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Save settings' })).not.toBeInTheDocument();
+    finish(await mockJsonResponse({}, { ok: false, status: 503 }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to load AI settings (503)');
+    expect(screen.queryByRole('button', { name: 'Save settings' })).not.toBeInTheDocument();
+  });
+
   it("loads ai runtime settings on mount and renders the shell with masked provider details", async () => {
     render(<AISettingsPage />);
 

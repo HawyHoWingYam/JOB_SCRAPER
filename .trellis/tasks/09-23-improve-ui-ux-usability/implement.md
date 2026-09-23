@@ -1,6 +1,6 @@
 # UI/UX Usability Implementation Plan
 
-Status: implementation approved and activated; code, automated checks, and evidence collection completed; commit review pending. Existing live deployment mismatch recorded in verification.md.
+Status: implementation approved and activated; UI implementation committed as 6d686d00. Additional browser acceptance checks passed. User authorized replacing the old services while retaining business data; coordinated cutover and live acceptance are complete.
 
 ## Sequence and Dependencies
 
@@ -14,7 +14,7 @@ One coordinated task, implemented directly by the main session. Complete slices 
 6. [x] Implement R5 AI queue/run feedback and presentation. Exercise empty eligible queue, API failure, active/completed/partial failure, retry, and cooperative stop with mocks.
 7. [x] Implement R6 consistency improvements across remaining pages using observed findings. Preserve all form validation, review, settings, and detail capabilities. Record any page requiring no local change after shared improvements.
 8. [x] Run trellis-check, frontend checks, relevant backend contract tests, and browser regression at both target sizes. Capture before/after evidence and complete AC1–AC10. Add tests only for meaningful behavior changes and regression risks, not cosmetic implementation details.
-9. [ ] Present final results and limitations; follow the repository finish workflow after verification. Do not treat passing unit tests alone as visual acceptance.
+9. [x] Present final results and limitations; follow the repository finish workflow after verification. Do not treat passing unit tests alone as visual acceptance.
 
 ## Specs to Load for Relevant Slices
 
@@ -56,3 +56,17 @@ At both target viewports, verify: direct navigation and deep links; no accidenta
 ## Risk and Rollback
 
 Shared CSS has the broadest regression risk; scoped overrides and representative screenshots must be checked before later slices. Job Browser DOM reorganization must not remount or reset draft/applied state. Collection action labels must not alter action selection or permissions. AI presentation must not change queue eligibility or replay real runs. Retain changes in separable logical slices; roll back a faulty presentation slice without database operations. Reopen design if a fix requires backend changes or different business semantics.
+
+## Authorized environment replacement
+
+The user explicitly chose replacement of the old services with business data retained, permitting an empty database only if preservation proves impossible. Real-data rehearsal has shown preservation is possible; no empty-corpus fallback is needed.
+
+- [x] Build the complete current Docker service images.
+- [x] Run the disposable PostgreSQL/Redis cutover rehearsal (two cycles).
+- [x] Export the live corpus read-only and import into an isolated `_test` database; verify all 20 retained table counts/hashes and exact current schema.
+- [x] Verify embedding regeneration on ten retained Jobs with the actual local model.
+- [x] Stop all persistent application services and the host Vite process.
+- [x] Save a restricted full PostgreSQL dump and validate its archive manifest.
+- [x] Export the quiescent corpus, clear runtime streams and shared schema, bootstrap current schema, import, and verify exact retention before startup.
+- [x] Start the complete current stack and regenerate all embeddings; verify immutable retention and current schema after startup.
+- [x] Verify live routes, browser workflows, and backend health; document runtime settings/history reset separately from preserved corpus.

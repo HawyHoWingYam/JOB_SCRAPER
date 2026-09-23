@@ -131,6 +131,10 @@ function CompaniesPage() {
 
   const handleSearchSubmit = async (event) => {
     event.preventDefault();
+    if (page === 1 && searchInput.trim() === appliedQuery) {
+      await loadCompanies();
+      return;
+    }
     setPage(1);
     setAppliedQuery(searchInput.trim());
   };
@@ -352,15 +356,15 @@ function CompaniesPage() {
         </div>
       </section>
 
-      {error && <div className="companies-error glass-panel">{error}</div>}
-      {refreshError && <div className="companies-error glass-panel">{refreshError}</div>}
+      {error && <div className="companies-error glass-panel" role="alert">{error}</div>}
+      {refreshError && <div className="companies-error glass-panel" role="alert">{refreshError}</div>}
       {actionMessage && <div className="companies-status glass-panel">{actionMessage}</div>}
 
       {isLoading ? (
         <div className="companies-empty glass-panel">
           <p>Loading companies...</p>
         </div>
-      ) : companies.length === 0 ? (
+      ) : error ? null : companies.length === 0 ? (
         <div className="companies-empty glass-panel">
           <p>No companies matched the current query.</p>
         </div>

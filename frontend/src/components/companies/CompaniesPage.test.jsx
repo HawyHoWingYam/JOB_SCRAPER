@@ -201,6 +201,29 @@ describe('CompaniesPage', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows list loading and failure separately from an empty successful search', async () => {
+    const originalFetch = globalThis.fetch.getMockImplementation();
+    let fail;
+    globalThis.fetch.mockImplementation((input, init) => {
+      if (new URL(String(input), 'http://localhost').pathname === '/api/companies') {
+        return new Promise((_resolve, reject) => { fail = () => reject(new Error('Company list unavailable')); });
+      }
+      return originalFetch(input, init);
+    });
+    const user = userEvent.setup();
+    render(<CompaniesPage />);
+    expect(screen.getByText('Loading companies...')).toBeVisible();
+    expect(screen.queryByText('No companies matched the current query.')).not.toBeInTheDocument();
+    fail();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Company list unavailable');
+    expect(screen.queryByText('No companies matched the current query.')).not.toBeInTheDocument();
+    companyPages['status=pending&q=&page=1&page_size=25'] = buildCompaniesPayload([]);
+    globalThis.fetch.mockImplementation(originalFetch);
+    await user.click(screen.getByRole('button', { name: 'Search', exact: true }));
+    expect(await screen.findByText('No companies matched the current query.')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('defaults to pending companies with server-side pagination', async () => {
     render(<CompaniesPage />);
 

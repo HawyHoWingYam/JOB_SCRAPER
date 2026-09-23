@@ -41,15 +41,15 @@ Apply the same visual, wording, form-feedback, empty-state, and error-state stan
 
 ## Acceptance Criteria
 
-- [ ] AC1 / R1: At 1366×768 and 1440×900, primary controls and text are legible, no page-level horizontal overflow obscures actions, and wide tables scroll within their own region when needed. Ordinary labels/body copy target at least 14px; smaller auxiliary text remains legible. Interactive elements have visible keyboard focus and associated names. Color is not the sole status indicator.
+- [x] AC1 / R1: At 1366×768 and 1440×900, primary controls and text are legible, no page-level horizontal overflow obscures actions, and wide tables scroll within their own region when needed. Ordinary labels/body copy target at least 14px; smaller auxiliary text remains legible. Interactive elements have visible keyboard focus and associated names. Color is not the sole status indicator.
 - [x] AC2 / R2: All current destinations remain accessible through the approved expanded groups; existing deep links work and Dashboard remains the default.
 - [x] AC3 / R3: With a representative populated fixture and no blocking error, at least the first result row is visible without scrolling at both target sizes. Filters remain reachable without a new advanced-settings gate.
 - [x] AC4 / R3: Editing filters alone leaves results unchanged; explicit apply updates results on success. Pending edits, applying, and failure are visible. Replace/refine/edit/remove/clear, pagination, same-tab restoration, facet recovery, and export continue to obey existing contracts.
 - [x] AC5 / R4: After a successful dispatch, the exact run is identifiable and directly accessible. Pending cancellation is not reported as completed. Distinct task/log actions are identifiable; any duplicate removal is justified by target/action equivalence.
 - [x] AC6 / R5: Empty eligible queues explain why no run can start; API errors are not reported as empty queues. Known statuses and timestamps are readable, IDs remain copyable, and retry/stop retain their existing scope and acknowledgement behavior.
-- [ ] AC7 / R6: Every named page is reviewed at laptop size with findings recorded; loading, empty, success, error, and validation states are checked where applicable. No capability is removed and backend contracts remain unchanged.
+- [x] AC7 / R6: Every named page is reviewed at laptop size with findings recorded; loading, empty, success, error, and validation states are checked where applicable. No capability is removed and backend contracts remain unchanged.
 - [x] AC8 / R1–R6: Frontend checks and relevant behavior tests pass, with rendered before/after evidence for Job Browser, collection, and AI processing and a cross-page regression review.
-- [ ] AC9 / Integration: Existing backend/API contracts, frontend data loading, and server-authorized actions continue to work without backend regressions. Run relevant backend tests for touched contracts and verify the frontend against the configured API path.
+- [x] AC9 / Integration: Existing backend/API contracts, frontend data loading, and server-authorized actions continue to work without backend regressions. Run relevant backend tests for touched contracts and verify the frontend against the configured API path.
 - [x] AC10 / E2E: Frontend end-to-end tests pass after the UI changes. Run the existing E2E suite as configured and add or run focused browser coverage for changed navigation and workflows; report environment-only limitations separately.
 
 Viewport sizes and numeric presentation targets are proposed engineering acceptance targets, not user-specified hardware.
@@ -60,4 +60,4 @@ New business features, backend/API/schema changes, new background automation, ch
 
 ## Review Gate
 
-The user approved all three artifacts and implementation. See verification.md for test evidence and the pre-existing live deployment mismatch. Code remains pending commit review.
+The user approved all three artifacts and implementation. See verification.md for test evidence and the pre-existing live deployment mismatch. The user approved the commit, recorded as 6d686d00, and subsequently authorized coordinated service replacement with business data retained. This operational rollout adds no business feature or schema design change; it deploys the current schema through the existing cutover contract.

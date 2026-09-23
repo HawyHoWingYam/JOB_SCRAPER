@@ -88,3 +88,11 @@ Advanced Options gate. Check 1366×768 and 1440×900 with actual content, not on
 loading placeholders. Use the shared `formatControlDateTime` for run timestamps
 with timezone context. Display labels may change while persisted status codes,
 API payloads, and route identities remain stable.
+
+## Collection loading and empty states
+
+Companies list failures render as alerts and must not also display the successful
+empty-query message. A Search click with the same query on page one reloads the
+list, allowing recovery after a transient failure; a changed query resets to page
+one through the existing state effect. Preserve server-side pagination and do
+not trigger Company enrichment while retrying list reads.

@@ -81,5 +81,50 @@ test('keyword catalog failures remain actionable and never look like an empty ca
   await expect(page.getByRole('button', { name: 'Retry loading' })).toBeVisible();
   await expect(page.getByText('No matching keywords. Try a different filter.')).toHaveCount(0);
   await page.getByRole('button', { name: 'Download CSV' }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText('Could not download the CSV. Please retry.');
+});
+
+test('keyword retry restores the catalog and CSV changes require explicit confirmation', async ({ page }) => {
+  let catalogUnavailable = true;
+  let confirmations = 0;
+  const catalog = { items: [{ id: 'keyword-1', classification_label: 'Information Technology', classification_id: 'offertoday:118000', keyword: 'Python', enabled: true }] };
+  await page.route('**/api/offertoday-keyword-packs', (route) => {
+    return catalogUnavailable
+      ? route.fulfill({ status: 503, json: { detail: 'Catalog temporarily unavailable' } })
+      : route.fulfill({ json: catalog });
+  });
+  await page.route('**/api/offertoday-keyword-packs/csv/preview', async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ csv_content: 'keyword\nPython\n' });
+    await route.fulfill({ json: { valid: true, diff: [{ keyword: 'Python' }], confirmation_token: 'preview-token', csv_hash: 'preview-hash', resulting_enabled_counts: { 'offertoday:118000': 1 } } });
+  });
+  await page.route('**/api/offertoday-keyword-packs/csv/confirm', async (route) => {
+    confirmations += 1;
+    expect(route.request().postDataJSON()).toEqual({ confirmation_token: 'preview-token', csv_hash: 'preview-hash' });
+    await route.fulfill({ json: { applied: true } });
+  });
+  await page.goto('/#offertoday-keywords');
+  await expect(page.getByRole('alert')).toContainText('Catalog temporarily unavailable');
+  catalogUnavailable = false;
+  await page.getByRole('button', { name: 'Retry loading' }).click();
+  await expect(page.getByRole('cell', { name: 'Python', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByRole('textbox', { name: 'Filter keywords' }).fill('no-match');
+  await expect(page.getByText('No matching keywords. Try a different filter.')).toBeVisible();
+  await page.getByRole('textbox', { name: 'Filter keywords' }).clear();
+  await page.getByLabel('Upload CSV to preview').setInputFiles({ name: 'keywords.csv', mimeType: 'text/csv', buffer: Buffer.from('keyword\nPython\n') });
+  await expect(page.getByRole('region', { name: 'CSV preview' })).toContainText('1 changes');
+  expect(confirmations).toBe(0);
+  await page.getByRole('button', { name: 'Confirm and apply' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Keyword changes applied successfully.' })).toBeVisible();
+  expect(confirmations).toBe(1);
+  await expect(page.getByRole('region', { name: 'CSV preview' })).toHaveCount(0);
+});
+
+test('invalid keyword CSV cannot be confirmed', async ({ page }) => {
+  await page.route('**/api/offertoday-keyword-packs', (route) => route.fulfill({ json: { items: [] } }));
+  await page.route('**/api/offertoday-keyword-packs/csv/preview', (route) => route.fulfill({ json: { valid: false, errors: [{ row: 2, code: 'invalid_keyword', message: 'Keyword is required' }], warnings: [] } }));
+  await page.goto('/#offertoday-keywords');
+  await page.getByLabel('Upload CSV to preview').setInputFiles({ name: 'invalid.csv', mimeType: 'text/csv', buffer: Buffer.from('keyword\n\n') });
+  await expect(page.getByRole('region', { name: 'CSV preview' })).toContainText('Keyword is required');
+  await expect(page.getByRole('button', { name: 'Confirm and apply' })).toBeDisabled();
 });
