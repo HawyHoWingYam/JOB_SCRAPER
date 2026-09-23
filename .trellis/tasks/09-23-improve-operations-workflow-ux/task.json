@@ -25,7 +25,7 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "User requested tasks and issues only. All children remain planning; no implementation started.",
+  "notes": "Scheduler child #75 implemented, verified, committed (43b245e1), and archived; awaiting manual QA. Crawl Tasks #76 and AI Enrichment #77 remain planning. Final cross-workflow acceptance pending.",
   "meta": {
     "github_issue": 74,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/74"

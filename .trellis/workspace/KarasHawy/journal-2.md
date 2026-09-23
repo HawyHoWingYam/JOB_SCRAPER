@@ -366,3 +366,37 @@ Completed English laptop UI improvements and recovery-state regressions; fronten
 ### Next Steps
 
 - None - task complete
+
+
+## Session 66: Scheduler workflow UX implementation and verification
+
+**Date**: 2026-09-23
+**Task**: Scheduler workflow UX implementation and verification
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Created parent issue #74 and workflow children #75/#76/#77. Implemented approved Scheduler responsive board, direct editing, review correction, draft preservation, detail scope validation, source-preserving navigation and accurate receipts. Validation: 242 frontend tests, 46 taskControl tests, frontend lint/build and five isolated Playwright journeys passed. Scheduler archived after work commits; #75 remains open for manual QA. No push or deployment; Crawl Tasks and AI Enrichment remain planning.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d09ec64b` | (see git log) |
+| `43b245e1` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
