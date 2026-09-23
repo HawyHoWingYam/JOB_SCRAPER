@@ -67,7 +67,7 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
     }
   }, [sourceSite]);
 
-  const hasCancelling = state.board.value?.activeRuns.some(({ run }) => run.status === 'cancelling');
+  const hasCancelling = Boolean(state.board.value?.activeRuns.some(({ run }) => run.status === 'cancelling'));
   useEffect(() => {
     const controller = new AbortController();
     loadBoard({ signal: controller.signal });
@@ -84,7 +84,7 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
   const navigateAction = (action, entity) => {
     if (action === 'view_task') window.location.hash = buildCrawlTaskRoute(entity.id);
     else if (action === 'view_logs') window.location.hash = buildCrawlTaskRoute(entity.id, 'events');
-    else if (action === 'edit') window.location.hash = buildControlRoute({ flow: 'automation', mode: 'edit', automationId: entity.id, sourceSite: entity.sourceSite, draftId: newDraftId(), step: 'intent' });
+    else if (action === 'edit') window.location.hash = buildControlRoute({ flow: 'automation', mode: 'edit', automationId: entity.id, sourceSite: entity.sourceSite, draftId: newDraftId(), step: 'execution' });
     else if (action === 'run_now') window.location.hash = buildControlRoute({ flow: 'run_now', mode: 'review', automationId: entity.id, sourceSite: entity.sourceSite, draftId: newDraftId(), step: 'review' });
   };
 
@@ -186,10 +186,20 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
     return undefined;
   };
 
-  const renderActions = (actions, entity) => (
-    <div className="board-actions">{actions.filter((action, index) => actions.findIndex((candidate) => candidate.action === action.action && candidate.enabled === action.enabled && candidate.reasonCode === action.reasonCode) === index).map((action, index) => (
-      <button key={`${action.action}-${index}`} type="button" disabled={!action.enabled || busy} title={action.reasonCode || undefined} onClick={(event) => handleAction(action, entity, event)}>{actionLabel(action.action)}</button>
-    ))}</div>
+  const renderActions = (actions, entity, context = 'automation') => (
+    <div className="board-actions">{actions.filter((action, index) => actions.findIndex((candidate) => candidate.action === action.action && candidate.enabled === action.enabled && candidate.reasonCode === action.reasonCode) === index).map((action, index) => {
+      const reasonId = `action-reason-${context}-${entity.id}-${action.action}-${index}`;
+      const reason = {
+        AUTOMATION_ARCHIVED: 'Restore this Automation before using this action.',
+        AUTOMATION_NOT_ACTIVE: 'Available when this Automation is active.',
+        AUTOMATION_NOT_PAUSED: 'Available when this Automation is paused.',
+        AUTOMATION_NOT_ARCHIVED: 'Archive this Automation first.',
+        RUN_NOT_CANCELLABLE: 'This run cannot be cancelled in its current state.',
+        MANUAL_RESUME_UNAVAILABLE: 'Manual recovery is not currently available.',
+      }[action.reasonCode] || `Unavailable in the current state${action.reasonCode ? ` (${action.reasonCode.replaceAll('_', ' ').toLowerCase()})` : ''}.`;
+      const className = ['view_task', 'run_now'].includes(action.action) ? 'board-primary' : ['archive', 'delete_review', 'cancel'].includes(action.action) ? 'board-danger' : '';
+      return <div className="board-action" key={`${action.action}-${index}`}><button className={className} type="button" disabled={!action.enabled || busy} aria-describedby={!action.enabled ? reasonId : undefined} onClick={(event) => handleAction(action, entity, event)}>{actionLabel(action.action)}</button>{!action.enabled && <small id={reasonId}>{reason}</small>}</div>;
+    })}</div>
   );
 
   if (!board && state.board.status === 'loading') return <section className="task-control-board"><h1>Scheduler</h1><p role="status">Loading schedules and runs…</p></section>;
@@ -201,21 +211,41 @@ export default function TaskControlBoardPage({ hash = window.location.hash }) {
 
   return (
     <section className="task-control-board">
-      <header className="board-header"><div><p className="board-eyebrow">Desktop operations</p><h1>Scheduler</h1><p>Schedule recurring collection, start a one-off run, or resolve tasks that need attention.</p></div><div className="board-header-actions"><button type="button" onClick={() => { window.location.hash = buildControlRoute({ flow: 'automation', mode: 'create', sourceSite, draftId: newDraftId(), step: 'intent' }); }}>New Automation</button><button type="button" onClick={() => { window.location.hash = buildControlRoute({ flow: 'one_off', mode: 'create', sourceSite, draftId: newDraftId(), step: 'intent' }); }}>One-off Run</button></div></header>
+      <header className="board-header"><div><p className="board-eyebrow">Collection · {SOURCE_LABELS[sourceSite]}</p><h1>Scheduler</h1><p>Schedule recurring collection, start a one-off run, or resolve tasks that need attention.</p></div><div className="board-header-actions"><button type="button" className="board-primary" onClick={() => { window.location.hash = buildControlRoute({ flow: 'automation', mode: 'create', sourceSite, draftId: newDraftId(), step: 'intent' }); }}>New Automation</button><button type="button" onClick={() => { window.location.hash = buildControlRoute({ flow: 'one_off', mode: 'create', sourceSite, draftId: newDraftId(), step: 'intent' }); }}>One-off Run</button></div></header>
 
-      <div className="board-source-tabs" role="tablist" aria-label="Task Control Source">{board?.sourceSummaries.map((summary) => <button role="tab" aria-selected={summary.sourceSite === sourceSite} key={summary.sourceSite} type="button" onClick={() => { window.location.hash = buildControlRoute({ kind: 'board', sourceSite: summary.sourceSite }); }}><strong>{SOURCE_LABELS[summary.sourceSite]}</strong><span>{summary.state.replace('_', ' ')} · {summary.attentionCount} attention · {summary.activeRunCount} running</span></button>)}</div>
+      <div className="board-source-tabs" role="tablist" aria-label="Task Control Source">{board?.sourceSummaries.map((summary) => <button role="tab" aria-selected={summary.sourceSite === sourceSite} key={summary.sourceSite} type="button" onClick={() => { window.location.hash = buildControlRoute({ kind: 'board', sourceSite: summary.sourceSite }); }}><strong>{SOURCE_LABELS[summary.sourceSite]}</strong><span>{summary.attentionCount > 0 ? `${summary.attentionCount} need attention` : 'No issues'} · {summary.activeRunCount} running</span></button>)}</div>
       {crossSourceAttention.length > 0 && <aside className="cross-source-banner" role="status"><strong>Attention exists on another Source.</strong>{crossSourceAttention.map((summary) => <button key={summary.sourceSite} type="button" onClick={() => { window.location.hash = buildControlRoute({ kind: 'board', sourceSite: summary.sourceSite }); }}>Open {SOURCE_LABELS[summary.sourceSite]} ({summary.attentionCount})</button>)}</aside>}
-      {state.board.stale && <p className="board-warning" role="alert">Refresh failed; prior good data remains visible. {state.board.error.message}</p>}
+      {state.board.stale && <p className="board-warning" role="alert">Refresh failed. Showing the last successful update. {state.board.error.message} <button type="button" onClick={() => loadBoard()}>Retry refresh</button></p>}
       {state.notice && <p className="board-success" role="status">{state.notice}</p>}
       {state.mutation.error && <p className="board-error" role="alert">{state.mutation.error.message}</p>}
 
+      {board && <div className="board-context"><strong>{SOURCE_LABELS[sourceSite]} operations</strong><span>Updated {formatControlDateTime(board.refreshedAt)}</span></div>}
       {board?.allClear && <section className="board-all-clear"><h2>All clear</h2><p>No attention items, active runs, or upcoming Automations for {SOURCE_LABELS[sourceSite]}.</p></section>}
 
-      {board?.needsAttention.length > 0 && <section className="board-section"><h2>Needs attention</h2><div className="attention-list">{board.needsAttention.map((item) => <article key={item.id} className="attention-card"><p className="board-code">{item.code}</p><h3>{item.title}</h3><p>{item.summary}</p>{renderActions([item.primaryAction, ...item.secondaryActions], { id: item.entityId, sourceSite: item.sourceSite, failureEventSequence: item.failureEventSequence })}</article>)}</div></section>}
+      {board?.needsAttention.length > 0 && <section className="board-section"><h2>Needs attention</h2><div className="attention-list">{board.needsAttention.map((item) => <article key={item.id} className="attention-card"><p className="board-code">{item.code}</p><h3>{item.title}</h3><p>{item.summary}</p>{renderActions([item.primaryAction, ...item.secondaryActions], { id: item.entityId, sourceSite: item.sourceSite, failureEventSequence: item.failureEventSequence }, item.id)}</article>)}</div></section>}
 
-      {board?.activeRuns.length > 0 && <section className="board-section"><h2>Active runs</h2><div className="active-run-list">{board.activeRuns.map(({ run, issue, manualActionGuidance, actions }) => <article key={run.id} className="active-run-card"><div><p className="board-code">{run.phase} · {run.mode}</p><h3>{run.status}</h3><RunProgress run={run} />{issue && <p className="board-warning">{issue.code || issue.issueClass}: {issue.summary}</p>}{manualActionGuidance && <p>{manualActionGuidance.message}</p>}</div>{renderActions(actions, { id: run.id, sourceSite: run.sourceSite })}</article>)}</div></section>}
+      {board?.activeRuns.length > 0 && <section className="board-section"><h2>Active runs</h2><div className="active-run-list">{board.activeRuns.map(({ run, issue, manualActionGuidance, actions }) => <article key={run.id} className="active-run-card"><div><p className="board-code">{run.phase} · {run.mode}</p><h3>{run.status.replaceAll('_', ' ')}</h3><RunProgress run={run} />{run.updatedAt && <small>Updated {formatControlDateTime(run.updatedAt)}</small>}{issue && <p className="board-warning">{issue.code || issue.issueClass}: {issue.summary}</p>}{manualActionGuidance && <p>{manualActionGuidance.message}</p>}</div>{renderActions(actions, { id: run.id, sourceSite: run.sourceSite }, 'active')}</article>)}</div></section>}
 
-      <section className="board-section"><div className="section-heading"><div><h2>{state.showArchived ? 'Archived Automations' : 'Upcoming Automations'}</h2><p>Manage recurring collection. Expand an Automation to inspect its latest run and configuration.</p></div><button type="button" onClick={() => dispatch({ type: 'archivedToggled' })}>{state.showArchived ? 'Show upcoming' : `Show archived (${board?.archivedAutomations.length || 0})`}</button></div>{automations.length === 0 ? <p className="board-empty">No {state.showArchived ? 'archived' : 'upcoming'} Automations for this Source.</p> : <div className="automation-table-wrap"><table className="automation-table"><caption>{state.showArchived ? 'Archived' : 'Upcoming'} Automation operations</caption><thead><tr><th>Automation</th><th>Intent / scope</th><th>Schedule / timezone</th><th>Last outcome</th><th>Next run</th><th>Lifecycle</th><th>Actions</th></tr></thead><tbody>{automations.map((automation) => { const expanded = state.expanded.has(automation.id); return <React.Fragment key={automation.id}><tr><th scope="row"><button type="button" className="disclosure" aria-expanded={expanded} aria-controls={`automation-${automation.id}`} onClick={() => dispatch({ type: 'expandedToggled', id: automation.id })}>{expanded ? '▾' : '▸'} {automation.name}</button></th><td>{automation.phase} · {scopeSummary(automation.authoredScope)}</td><td>{automation.schedule.humanSummary}</td><td>{automation.latestOutcome ? `${automation.latestOutcome.status}` : 'No run recorded'}</td><td>{automation.schedule.nextRunAt ? formatControlDateTime(automation.schedule.nextRunAt, automation.schedule.timezone) : 'Not scheduled'}</td><td>{automation.lifecycleState}</td><td>{renderActions(automation.actions, automation)}</td></tr>{expanded && <tr id={`automation-${automation.id}`} className="automation-expanded"><td colSpan="7"><dl><div><dt>Resolved Query Targets</dt><dd>{automation.resolvedScopeSummary?.query_target_count ?? 'No recent resolved run'}</dd></div><div><dt>Execution</dt><dd>{automation.phase} · {automation.mode}</dd></div><div><dt>Current run</dt><dd>{automation.currentRun ? <a href={buildCrawlTaskRoute(automation.currentRun.id)}>{automation.currentRun.status}</a> : 'None'}</dd></div></dl></td></tr>}</React.Fragment>; })}</tbody></table></div>}</section>
+      <section className="board-section" aria-labelledby="automation-heading">
+        <div className="section-heading"><div><h2 id="automation-heading">{state.showArchived ? 'Archived Automations' : 'Upcoming Automations'}</h2><p>Recurring collection for {SOURCE_LABELS[sourceSite]}. Edit settings or review a run now.</p></div><button type="button" onClick={() => dispatch({ type: 'archivedToggled' })}>{state.showArchived ? 'Show upcoming' : `Show archived (${board?.archivedAutomations.length || 0})`}</button></div>
+        {automations.length === 0 ? <p className="board-empty">No {state.showArchived ? 'archived' : 'upcoming'} Automations for this Source.</p> : <ul className="automation-list" aria-label={`${state.showArchived ? 'Archived' : 'Upcoming'} Automation operations`}>
+          {automations.map((automation) => {
+            const expanded = state.expanded.has(automation.id);
+            return <li key={automation.id} className="automation-card">
+              <div className="automation-card-heading"><h3>{automation.name}</h3><span className="board-state">{automation.lifecycleState.replaceAll('_', ' ')}</span></div>
+              <dl className="automation-facts">
+                <div><dt>Task and scope</dt><dd>{automation.phase === 'listing' ? 'Discover listings' : 'Fetch job details'} · {scopeSummary(automation.authoredScope)}</dd></div>
+                <div><dt>Schedule</dt><dd>{automation.schedule.humanSummary}</dd></div>
+                <div><dt>Next run</dt><dd>{automation.schedule.nextRunAt ? formatControlDateTime(automation.schedule.nextRunAt, automation.schedule.timezone) : 'Not scheduled'}</dd></div>
+                <div><dt>Last outcome</dt><dd>{automation.latestOutcome ? String(automation.latestOutcome.status || 'Unknown').replaceAll('_', ' ') : 'No run recorded'}</dd></div>
+              </dl>
+              {renderActions(automation.actions, automation)}
+              <button type="button" className="disclosure" aria-expanded={expanded} aria-controls={`automation-${automation.id}`} onClick={() => dispatch({ type: 'expandedToggled', id: automation.id })}>{expanded ? 'Hide' : 'Show'} configuration and latest run</button>
+              {expanded && <div id={`automation-${automation.id}`} className="automation-expanded"><dl><div><dt>Resolved Query Targets</dt><dd>{automation.resolvedScopeSummary?.query_target_count ?? 'No recent resolved run'}</dd></div><div><dt>Execution</dt><dd>{automation.phase} · {automation.mode}</dd></div><div><dt>Current run</dt><dd>{automation.currentRun ? <a href={buildCrawlTaskRoute(automation.currentRun.id)}>{automation.currentRun.status}</a> : 'None'}</dd></div></dl></div>}
+            </li>;
+          })}
+        </ul>}
+      </section>
 
       {state.dialog && <ConfirmActionDialog title={state.dialog.kind === 'archive' ? `Archive ${state.dialog.entity.name}?` : state.dialog.kind === 'cancel' ? 'Cancel this run?' : `Permanently delete ${state.dialog.entity.name}?`} summary={state.dialog.kind === 'archive' ? 'Future dispatch stops. Existing runs, jobs, and history remain.' : state.dialog.kind === 'cancel' ? 'Committed work remains visible. Unfinished detail work returns to backend-owned later backlog after cancelled acknowledgement.' : `Remove the Automation. Preserve ${impact?.schedule_execution_count ?? 0} schedule execution(s), ${impact?.crawl_job_count ?? 0} Crawl Job(s), and run history. Review expires ${state.deleteReview?.expiresAt ? formatControlDateTime(state.deleteReview.expiresAt) : 'soon'}.`} confirmLabel={state.dialog.kind === 'archive' ? 'Archive Automation' : state.dialog.kind === 'cancel' ? 'Request cancellation' : 'Delete permanently'} pending={busy} error={state.mutation.error} restoreFocusRef={dialogTriggerRef} onCancel={() => dispatch({ type: 'dialogClosed' })} onConfirm={confirmDialog} />}
     </section>

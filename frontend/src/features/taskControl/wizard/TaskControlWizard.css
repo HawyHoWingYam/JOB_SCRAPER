@@ -53,3 +53,25 @@
 .control-danger { border-color: rgba(248, 113, 113, 0.48) !important; background: rgba(127, 29, 29, 0.28) !important; }
 @media (max-width: 980px) { .wizard-layout { flex-direction: column; } .wizard-summary { position: static; width: 100%; } }
 @media (max-width: 760px) { .wizard-progress, .intent-grid, .control-field-grid { grid-template-columns: 1fr; } .scope-node { align-items: stretch; flex-direction: column; } .scope-node-actions { justify-content: flex-start; } }
+
+/* Workflow navigation and review */
+.task-control-wizard { min-width: 0; }
+.wizard-fields { min-width: 0; display: grid; gap: 1rem; padding: 0; margin: 0; border: 0; }
+.wizard-progress li { padding: 0; min-width: 0; }
+.wizard-progress li button { width: 100%; display: flex; align-items: center; gap: .5rem; text-align: left; background: transparent; border: 0; padding: .7rem; }
+.wizard-progress li span { flex-shrink: 0; }
+.review-edit-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.control-choice-row, .wizard-actions { flex-wrap: wrap; }
+.task-control-wizard .control-primary, .control-primary-link { background: #234e80; border: 1px solid #74b8ff; border-radius: .55rem; color: #fff; padding: .55rem .8rem; }
+.control-field { font-size: .875rem; }
+.control-field small, .wizard-summary p { color: #b8c6d8; font-weight: 400; line-height: 1.5; }
+.control-success { display: grid; justify-items: start; }
+.control-success h2, .control-success p { margin: 0; }
+.wizard-summary details p { overflow-wrap: anywhere; }
+.wizard-summary { width: min(20rem, 32%); }
+.wizard-actions { position: sticky; bottom: 0; z-index: 1; padding: .85rem; background: #111b2c; border-radius: .55rem; }
+.control-notice { padding: .85rem; border-left: 3px solid #74b8ff; background: #182c44; margin: 0; }
+@media (max-width: 980px) { .wizard-summary { width: 100%; } }
+@media (max-width: 760px) { .wizard-progress { grid-template-columns: 1fr 1fr; } .wizard-header { flex-wrap: wrap; } }
+
+.wizard-fields[hidden] { display: none; }

@@ -11,7 +11,7 @@ under `#scheduler/*`. The current `#scheduler` board remains reachable.
   Source, draft ID, and step hashes. Wizard steps are history-visible so browser
   back/forward can restore them without discarding work.
 - Store recoverable, non-authoritative input only under
-  `taskControl.draft.v1.<draft-id>`. Validate route/Source/flow binding and catch
+  `taskControl.draft.<draft-id>` (`DRAFT_PREFIX`). Validate route/Source/flow binding and catch
   malformed or unavailable storage. Never persist review fingerprints,
   confirmation tokens, Dispatch Plan IDs, readiness, or runtime snapshots as
   reusable authority.
@@ -64,6 +64,44 @@ under `#scheduler/*`. The current `#scheduler` board remains reachable.
 
 Run focused `src/features/taskControl` tests, scoped ESLint, and a production
 frontend build. Leave complete-suite integration to the parent UI gate.
+
+## Guided authoring and direct editing
+
+- Keep the four route steps (`intent`, `scope`, `execution`, `review`); display
+  Choose task, Choose scope, Configure run, Review and confirm. New authoring is
+  guided; existing Automation editing enters configuration. Completed
+  prerequisites can be revisited through stage buttons and explicit review edit
+  actions. Browser Back/Forward retain the draft and Source.
+- Same-draft step navigation updates the in-memory step instead of rehydrating
+  from storage. Persist before navigation, but retain in-memory changes when
+  storage is unavailable. An unchanged step is a reducer no-op. Selecting the
+  already selected intent must not reset scope/execution.
+- Fetch Automation settings by draft identity, not every step change. On an edit
+  reload, preserve a valid saved draft rather than overwriting it with the saved
+  Automation. Initial read failure has a retry action. Do not render detail
+  conflict validation before a task intent is loaded.
+- New drafts choose Source in the first step with a reset explanation. Summary
+  describes Source, task, category names, limits, and timing; identifiers and
+  review fingerprints are secondary reference disclosures.
+- Run now reviews saved settings directly; Run with changes opens an independent
+  One-off draft and does not mutate the Automation.
+- Detail backlog choices `source_backlog` and `listing_batch` require all-scope.
+  Disable incompatible choices with a visible explanation. Restored invalid
+  combinations remain visible, block Continue, and offer correction rather than
+  silently widening scope. Detail caps must be positive safe integers.
+- Initial state is a creation-only control. Save receipts use the refetched
+  Automation lifecycle and next run, never assume saving starts a run. Dispatch
+  receipts report acceptance and link to the exact Task. Successful submission
+  removes submission controls and focuses the receipt; mutations disable fields
+  and step navigation.
+- Ignore authority responses for an old draft fingerprint or after leaving
+  review. Only the latest request may commit a response. Plan expiry updates the
+  UI while open and is rechecked at click time; expired plans require refresh.
+
+Regression coverage lives in wizard/board component tests and
+`frontend/e2e/scheduler/workflow.spec.js`. The browser suite covers edit/refresh,
+review correction, guided creation, dispatch identity, Run with changes,
+Source-preserving return, laptop geometry, and keyboard/history navigation.
 
 ## Scenario: Historical OfferToday fixed-sweep authoring
 

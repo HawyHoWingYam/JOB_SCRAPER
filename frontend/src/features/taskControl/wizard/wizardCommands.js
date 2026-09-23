@@ -123,7 +123,7 @@ export function draftFromAutomation(route, automation) {
     mode: route.mode,
     automation_id: automation.id,
     source_site: automation.sourceSite,
-    step: route.flow === 'run_now' ? 'review' : 'intent',
+    step: route.flow === 'run_now' ? 'review' : (route.step || (route.mode === 'edit' ? 'execution' : 'intent')),
     run_choice: route.flow === 'run_now' ? 'saved' : null,
     intent: listing ? 'listing' : 'detail',
     scope: { mode: scope.mode, classification_ids: scope.classification_ids || [] },

@@ -61,7 +61,7 @@ Use this composition for `#scheduler` operations and `#crawl-tasks?task=<id>` de
 ### 6. Tests Required
 
 - Route encode/decode plus hash back/forward and Source changes.
-- Board loading, all-clear, stale prior-good, table/disclosure, lifecycle/CAS, delete review, and dialog focus.
+- Board loading, all-clear, stale prior-good, Automation list/disclosure, lifecycle/CAS, delete review, and dialog focus.
 - Direct Task success/not-found, listing/detail authority rendering, safe guidance, and raw-payload absence.
 - Terminal detail backlog rendering asserts that no `Start detail recovery run`
   action is present, while manual-action tests retain Fresh/Open/Reuse behavior.
@@ -152,3 +152,21 @@ entity, collapse only descriptors with identical action, enabled state, and
 reason code. Do not merge actions across entities or infer authorization.
 The failed-attention test asserts one task button while preserving Logs and
 Dismiss behavior.
+
+## Scheduler workflow presentation
+
+- Render Automations as a responsive semantic list, preserving backend order.
+  Each item exposes name, lifecycle, task/scope, schedule, next run, last outcome,
+  actions, and an expandable configuration/current-run summary.
+- Keep all supplied actions accessible. Visually distinguish View task/Run now
+  and dangerous lifecycle actions without changing server authorization.
+- Disabled actions have visible explanations and `aria-describedby`; reason IDs
+  include the section/item context because attention and active-run cards can
+  refer to the same Task. Unknown reason codes retain a readable fallback.
+- Edit routes enter `step=execution`. All wizard return paths retain the Source.
+- Show the last successful refresh time and a Retry refresh action after a
+  failed refresh. Normalize the cancellation polling flag to a Boolean so the
+  initial empty-to-loaded transition does not start an extra fetch.
+- `frontend/playwright.scheduler.config.js` runs isolated browser journeys with
+  API interception and no backend/database. Match `/api/` URL path prefixes,
+  not a broad glob that also intercepts Vite's `/src/api/*.js` modules.

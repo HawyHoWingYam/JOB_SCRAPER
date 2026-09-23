@@ -51,11 +51,11 @@ describe('TaskControlBoardPage', () => {
     window.location.hash = '#scheduler?source=jobsdb';
   });
 
-  it('renders backend-owned sections/source state and preserves Automation order in a semantic table', async () => {
+  it('renders backend-owned sections/source state and preserves Automation order in a semantic list', async () => {
     render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
     expect(await screen.findByRole('heading', { name: 'Active runs' })).toBeInTheDocument();
-    expect(screen.getByRole('table', { name: 'Upcoming Automation operations' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Morning listings/ })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Upcoming Automation operations' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Morning listings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open CTgoodjobs (2)' })).toBeInTheDocument();
     expect(api.getTaskControlBoard).toHaveBeenCalledWith('jobsdb', expect.any(Object));
   });
@@ -150,4 +150,38 @@ describe('TaskControlBoardPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Dismiss was stale');
   });
+  it('opens editing at configuration and exposes disabled reasons without hover', async () => {
+    const user = userEvent.setup();
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+    const resume = await screen.findByRole('button', { name: 'Resume', exact: true });
+    expect(resume).toBeDisabled();
+    expect(resume).toHaveAccessibleDescription(/Unavailable in the current state/);
+    await user.click(screen.getByRole('button', { name: 'Edit', exact: true }));
+    expect(window.location.hash).toContain('source=jobsdb');
+    expect(window.location.hash).toContain('step=execution');
+  });
+
+  it('keeps prior board data visible when a post-action refresh fails and allows retry', async () => {
+    api.getTaskControlBoard.mockResolvedValueOnce(board).mockRejectedValueOnce(new Error('Board offline')).mockResolvedValue(board);
+    const user = userEvent.setup();
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+    await user.click(await screen.findByRole('button', { name: 'Pause' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing the last successful update');
+    expect(screen.getByRole('heading', { name: 'Morning listings' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry refresh' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  });
+
+  it('confirms cancellation and reports only the request acknowledgement', async () => {
+    api.cancelCrawlJob.mockResolvedValue({ status: 'cancellation_requested' });
+    const user = userEvent.setup();
+    render(<TaskControlBoardPage hash="#scheduler?source=jobsdb" />);
+    await user.click(await screen.findByRole('button', { name: 'Cancel', exact: true }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(api.cancelCrawlJob).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Request cancellation' }));
+    expect(api.cancelCrawlJob).toHaveBeenCalledWith('task-1');
+    expect(await screen.findByText('Cancellation requested; waiting for acknowledgement.')).toBeInTheDocument();
+  });
+
 });

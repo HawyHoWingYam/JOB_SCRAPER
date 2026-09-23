@@ -75,4 +75,12 @@ describe('wizard reducer invariants', () => {
     expect(changed.classifications.status).toBe('idle');
     expect(changed.classifications.requestVersion).toBe(2);
   });
+  it('ignores late review results after a configuration edit', () => {
+    const base = createWizardState({ ...createWizardDraft(route), step: 'review' });
+    const changed = wizardReducer(base, { type: 'scheduleChanged', value: { name: 'New name' } });
+    const result = wizardReducer(changed, { type: 'authoritySucceeded', kind: 'review', draftFingerprint: 'old-fingerprint', value: { readiness: { status: 'ready' } } });
+    expect(result.review.status).toBe('idle');
+    expect(result.draft.schedule.name).toBe('New name');
+  });
+
 });

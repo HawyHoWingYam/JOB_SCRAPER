@@ -1,3 +1,4 @@
+import { wizardDraftFingerprint } from './wizardCommands';
 import {
   OFFERTODAY_DEFAULT_PAGE_DEPTH,
   OFFERTODAY_DEFAULT_RUN_PAGE_CAP,
@@ -64,6 +65,7 @@ export function wizardReducer(state, action) {
       return { ...nextState, classifications: resetClassifications(state) };
     }
     case 'intentChanged':
+      if (state.draft.intent === action.intent) return state;
       return invalidateAuthority(state, {
         ...state.draft,
         intent: action.intent,
@@ -87,6 +89,7 @@ export function wizardReducer(state, action) {
     case 'runChoiceChanged':
       return { ...state, draft: { ...state.draft, run_choice: action.value } };
     case 'stepChanged':
+      if (state.draft.step === action.step) return state;
       return { ...state, draft: { ...state.draft, step: action.step } };
     case 'classificationsStarted':
       return { ...state, classifications: { ...state.classifications, status: 'loading', error: null, requestVersion: action.version } };
@@ -105,8 +108,10 @@ export function wizardReducer(state, action) {
     case 'authorityStarted':
       return { ...state, [action.kind]: { status: 'loading', value: null, draftFingerprint: action.draftFingerprint, error: null }, mutation: { status: 'idle', kind: null, error: null }, result: null };
     case 'authoritySucceeded':
+      if (action.draftFingerprint !== wizardDraftFingerprint(state.draft) || state.draft.step !== 'review') return state;
       return { ...state, [action.kind]: { status: 'success', value: action.value, draftFingerprint: action.draftFingerprint, error: null }, conflict: action.conflict || null };
     case 'authorityFailed':
+      if (action.draftFingerprint !== wizardDraftFingerprint(state.draft) || state.draft.step !== 'review') return state;
       return { ...state, [action.kind]: { status: 'error', value: null, draftFingerprint: action.draftFingerprint, error: action.error } };
     case 'mutationStarted':
       if (state.mutation.status === 'loading') return state;
@@ -146,8 +151,9 @@ export function isStepComplete(draft, step = draft.step) {
         && runPageCap > 0;
     }
     if (!draft.execution.backlog_kind || !draft.execution.limit_kind) return false;
+    if (draft.execution.backlog_kind !== 'crawl_scope' && draft.scope?.mode !== 'all') return false;
     if (draft.execution.backlog_kind === 'listing_batch' && !draft.execution.source_listing_crawl_job_id) return false;
-    return draft.execution.limit_kind === 'entire_snapshot' || Number(draft.execution.detail_run_cap) > 0;
+    return draft.execution.limit_kind === 'entire_snapshot' || (Number.isSafeInteger(Number(draft.execution.detail_run_cap)) && Number(draft.execution.detail_run_cap) > 0);
   }
   return true;
 }

@@ -183,7 +183,7 @@ describe('TaskControlWizard', () => {
     expect(api.dispatchPlan).toHaveBeenCalledWith('plan-1', 'one-time-token', 'plan-fingerprint');
 
     finishDispatch({ crawlJobId: 'crawl-job-1' });
-    expect(await screen.findByText('Reviewed plan dispatched.')).toBeInTheDocument();
+    expect(await screen.findByText('Run request accepted.')).toBeInTheDocument();
   });
 
   it('allows an explicit headless execution mode for CTgoodjobs', async () => {
@@ -364,6 +364,97 @@ describe('TaskControlWizard', () => {
     expect(await screen.findByText(/is cancelling/)).toBeInTheDocument();
     await waitFor(() => expect(api.getCrawlJob).toHaveBeenCalled(), { timeout: 2500 });
     await waitFor(() => expect(api.prepareDispatchPlan).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/Frozen detail snapshot: 10 canonical targets/)).toBeInTheDocument();
+    expect(await screen.findByText(/Frozen detail snapshot: 10 jobs/)).toBeInTheDocument();
   });
+  it('edits existing configuration directly, preserves changes on refresh, and reports saved lifecycle', async () => {
+    api.getAutomation.mockResolvedValue(automation());
+    api.reviewAutomation.mockResolvedValue(review('updated-review'));
+    api.updateAutomation.mockResolvedValue({ id: 'automation-1' });
+    const user = userEvent.setup();
+    const hash = '#scheduler/automation/automation-1/edit?draft=edit-draft&source=jobsdb&step=execution';
+    const view = render(<TaskControlWizard hash={hash} />);
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Saved Automation'));
+    expect(screen.queryByLabelText('Initial state')).not.toBeInTheDocument();
+    await user.clear(screen.getByLabelText('Name'));
+    await user.type(screen.getByLabelText('Name'), 'Changed schedule');
+    view.unmount();
+    render(<TaskControlWizard hash={hash} />);
+    await waitFor(() => expect(screen.getByLabelText('Name')).toBeEnabled());
+    expect(screen.getByLabelText('Name')).toHaveValue('Changed schedule');
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save reviewed Automation' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Save reviewed Automation' }));
+    expect(api.updateAutomation).toHaveBeenCalledWith('automation-1', expect.objectContaining({ configuration: expect.objectContaining({ name: 'Changed schedule' }), review_fingerprint: 'updated-review' }));
+    expect(api.updateAutomation.mock.calls[0][1]).not.toHaveProperty('initial_state');
+    expect(await screen.findByText(/Paused — no scheduled runs/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save reviewed Automation' })).not.toBeInTheDocument();
+  });
+
+  it('returns from review to configuration and uses fresh authority for the revised settings', async () => {
+    storeDraft('correction', draft({ flow: 'one_off' }));
+    api.prepareDispatchPlan.mockResolvedValueOnce(plan()).mockResolvedValue({ ...plan(), planId: 'plan-2', confirmationToken: 'token-2', planFingerprint: 'fingerprint-2' });
+    api.dispatchPlan.mockResolvedValue({ crawlJobId: 'correct-task' });
+    const user = userEvent.setup();
+    render(<TaskControlWizard hash="#scheduler/one-off/new?draft=correction&source=jobsdb&step=review" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Confirm and start' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Edit configuration' }));
+    fireEvent.change(screen.getByLabelText('Run Page Cap'), { target: { value: '30' } });
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Confirm and start' })).toBeEnabled());
+    expect(api.prepareDispatchPlan).toHaveBeenLastCalledWith(expect.objectContaining({ listing_settings: expect.objectContaining({ run_page_cap: 30 }) }));
+    await user.click(screen.getByRole('button', { name: 'Confirm and start' }));
+    expect(api.dispatchPlan).toHaveBeenCalledWith('plan-2', 'token-2', 'fingerprint-2');
+    expect(await screen.findByRole('link', { name: 'View task' })).toHaveAttribute('href', '#crawl-tasks?task=correct-task');
+  });
+
+  it('blocks restored detail scope conflicts before review and keeps a correction available', async () => {
+    storeDraft('invalid-detail', { ...draft({ flow: 'one_off', step: 'execution' }), intent: 'detail', scope: { mode: 'selected', classification_ids: ['jobsdb:1'] }, execution: { backlog_kind: 'source_backlog', limit_kind: 'stop_after', detail_run_cap: 10 } });
+    const user = userEvent.setup();
+    render(<TaskControlWizard hash="#scheduler/one-off/new?draft=invalid-detail&source=jobsdb&step=execution" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('does not match your scope');
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Entire source backlog' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Chosen categories' }));
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+    expect(api.prepareDispatchPlan).not.toHaveBeenCalled();
+  });
+
+  it('shows expired review guidance and prevents dispatch', async () => {
+    storeDraft('expired', draft({ flow: 'one_off' }));
+    api.prepareDispatchPlan.mockResolvedValue({ ...plan(), expiresAt: '2000-01-01T00:00:00Z' });
+    render(<TaskControlWizard hash="#scheduler/one-off/new?draft=expired&source=jobsdb&step=review" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('review has expired');
+    expect(screen.getByRole('button', { name: 'Confirm and start' })).toBeDisabled();
+    expect(api.dispatchPlan).not.toHaveBeenCalled();
+  });
+
+  it('keeps input across step navigation when draft storage is unavailable', async () => {
+    storeDraft('memory-draft', draft({ flow: 'one_off', step: 'execution' }));
+    const user = userEvent.setup();
+    const view = render(<TaskControlWizard hash="#scheduler/one-off/new?draft=memory-draft&source=jobsdb&step=execution" />);
+    const storageRead = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('Unavailable'); });
+    const storageWrite = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Unavailable'); });
+    try {
+      fireEvent.change(screen.getByLabelText('Run Page Cap'), { target: { value: '37' } });
+      await user.click(screen.getByRole('button', { name: 'Back', exact: true }));
+      view.rerender(<TaskControlWizard hash="#scheduler/one-off/new?draft=memory-draft&source=jobsdb&step=scope" />);
+      await user.click(screen.getByRole('button', { name: 'Continue' }));
+      view.rerender(<TaskControlWizard hash="#scheduler/one-off/new?draft=memory-draft&source=jobsdb&step=execution" />);
+      expect(screen.getByLabelText('Run Page Cap')).toHaveValue(37);
+    } finally {
+      storageRead.mockRestore();
+      storageWrite.mockRestore();
+    }
+  });
+
+  it('retries loading an Automation after a read failure', async () => {
+    api.getAutomation.mockRejectedValueOnce(new Error('Settings unavailable')).mockResolvedValue(automation());
+    const user = userEvent.setup();
+    render(<TaskControlWizard hash="#scheduler/automation/automation-1/edit?draft=retry-edit&source=jobsdb&step=execution" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Settings unavailable');
+    await user.click(screen.getByRole('button', { name: 'Retry loading Automation' }));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Saved Automation'));
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
+  });
+
 });

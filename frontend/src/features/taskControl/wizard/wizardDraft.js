@@ -11,7 +11,7 @@ export function createWizardDraft(route, sourceSite = route.sourceSite || 'jobsd
     mode: route.mode,
     automation_id: route.automationId || null,
     source_site: SOURCES.has(sourceSite) ? sourceSite : 'jobsdb',
-    step: route.flow === 'run_now' ? 'review' : 'intent',
+    step: route.flow === 'run_now' ? 'review' : (route.mode === 'edit' ? 'execution' : 'intent'),
     run_choice: route.flow === 'run_now' ? 'saved' : null,
     intent: null,
     scope: null,
