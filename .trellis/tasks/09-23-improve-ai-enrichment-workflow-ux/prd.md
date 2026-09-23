@@ -14,24 +14,23 @@ Make AI Enrichment scope selection, launch, monitoring, exception handling, and 
 
 ## Acceptance Criteria
 
-- [ ] A filtered run can be scoped, previewed, launched, identified, and monitored with the same run identity; zero/error/stale previews cannot launch guessed work.
-- [ ] Manual Entry and external origins retain correct cascading filter behavior; all-pending confirmation remains explicit and transient.
-- [ ] Waiting, running, stopping, completed, completed-with-failures, completed-with-exclusions, cancelled, and failed states have correct counts, explanations, and supported actions.
-- [ ] Retry targets only the chosen run failures; Stop explains in-flight completion; follow-up links retain bounded scope where supported.
-- [ ] Focused preview/persistence/conflict/action tests and browser journeys pass at target laptop sizes using fixtures, with before/after evidence and keyboard checks.
+- [x] A filtered run can be scoped, previewed, launched, identified, and monitored with the same run identity; zero/error/stale previews cannot launch guessed work.
+- [x] Manual Entry and external origins retain correct cascading filter behavior; all-pending confirmation remains explicit and transient.
+- [x] Waiting, running, stopping, completed, completed-with-failures, completed-with-exclusions, cancelled, and failed states have correct counts, explanations, and supported actions.
+- [x] Retry targets only the chosen run failures; Stop explains in-flight completion; follow-up links retain bounded scope where supported.
+- [x] Focused preview/persistence/conflict/action tests and browser journeys pass at target laptop sizes using fixtures, with before/after evidence and keyboard checks.
 
 ## Planning Status
 
-Discovery backlog created at the user's explicit request. Scope and acceptance below are proposed planning targets, not an approved interaction design. No implementation is authorized by this task creation. Before implementation, inspect rendered workflows, resolve product decisions, and prepare reviewed `design.md` and `implement.md`.
+Implementation authorized by the user's instruction to complete the tasks and subsequent confirmation. Keep the two-slot monitoring policy and add a separate inspectable history surface. Prioritize scope accuracy, durable run identity, and actionable waiting/failure states.
 
 ## Constraints
 
 Carry forward the existing dark theme, plain English interface, accessible keyboard interactions, laptop usability, and directly accessible configuration controls from #73. Preserve backend authority, data, existing capabilities, deep links, and acknowledgement semantics. Backend contract changes require explicit planning rather than incidental UI edits. Do not run paid AI jobs or live crawls for design exploration.
 
-## Open Questions
+## Design decisions
 
-- Which friction should lead the redesign: information hierarchy/readability, too many steps/unclear navigation, or understanding progress and recovery? Recommended starting point: map the full workflow and prioritize unclear next actions, then refine visual hierarchy; confirm during discovery.
-- Which proposed layout and interaction changes best resolve the observed friction? Capture rendered evidence and review a concrete proposal before implementation.
+See `design.md` for the approved-scope implementation choices and `verification.md` for checks and rendered evidence. Preserve normalized backend authority and improve context, actionable feedback and downstream navigation.
 
 ## Evidence and Entry Points
 

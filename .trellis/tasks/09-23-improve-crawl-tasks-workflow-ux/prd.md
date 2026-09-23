@@ -14,23 +14,22 @@ Make finding, inspecting, monitoring, and handling Crawl Tasks a coherent workfl
 
 ## Acceptance Criteria
 
-- [ ] A task linked from Scheduler loads directly even when absent from the current list page; returning to the list preserves or predictably restores user context.
-- [ ] Running, waiting/manual action, cancelling, cancelled, failed, and completed scenarios each show accurate progress and appropriate supported actions.
-- [ ] An operator can inspect diagnostics, request cancellation, and follow capability-gated recovery without confusing request success with task completion.
-- [ ] Loading, no matches, unknown task, API failure, and stale refresh remain distinguishable; focused task tests and end-to-end monitoring/recovery journeys pass at target laptop sizes.
+- [x] A task linked from Scheduler loads directly even when absent from the current list page; returning to the list preserves or predictably restores user context.
+- [x] Running, waiting/manual action, cancelling, cancelled, failed, and completed scenarios each show accurate progress and appropriate supported actions.
+- [x] An operator can inspect diagnostics, request cancellation, and follow capability-gated recovery without confusing request success with task completion.
+- [x] Loading, no matches, unknown task, API failure, and stale refresh remain distinguishable; focused task tests and end-to-end monitoring/recovery journeys pass at target laptop sizes.
 
 ## Planning Status
 
-Discovery backlog created at the user's explicit request. Scope and acceptance below are proposed planning targets, not an approved interaction design. No implementation is authorized by this task creation. Before implementation, inspect rendered workflows, resolve product decisions, and prepare reviewed `design.md` and `implement.md`.
+Implementation authorized by the user's instruction to complete the tasks and subsequent confirmation. Prioritize navigation continuity, truthful monitoring, and accessible recovery. Preserve the existing master/detail layout and directly accessible controls.
 
 ## Constraints
 
 Carry forward the existing dark theme, plain English interface, accessible keyboard interactions, laptop usability, and directly accessible configuration controls from #73. Preserve backend authority, data, existing capabilities, deep links, and acknowledgement semantics. Backend contract changes require explicit planning rather than incidental UI edits. Do not run paid AI jobs or live crawls for design exploration.
 
-## Open Questions
+## Design decisions
 
-- Which friction should lead the redesign: information hierarchy/readability, too many steps/unclear navigation, or understanding progress and recovery? Recommended starting point: map the full workflow and prioritize unclear next actions, then refine visual hierarchy; confirm during discovery.
-- Which proposed layout and interaction changes best resolve the observed friction? Capture rendered evidence and review a concrete proposal before implementation.
+See `design.md` for the approved-scope implementation choices and `verification.md` for checks and rendered evidence. Preserve normalized backend authority and improve context, actionable feedback and downstream navigation.
 
 ## Evidence and Entry Points
 

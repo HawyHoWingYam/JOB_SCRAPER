@@ -1,8 +1,8 @@
 {
   "id": "improve-operations-workflow-ux",
   "name": "improve-operations-workflow-ux",
-  "title": "Improve Scheduler, Crawl Tasks, and AI Enrichment workflows",
-  "description": "Coordinate UI/UX improvement for three operational pages and their complete downstream workflows.",
+  "title": "Improve Scheduler, Crawl Tasks, AI Enrichment, and Settings workflows",
+  "description": "Complete UI/UX improvements and testing for four operational pages and their downstream workflows.",
   "status": "planning",
   "dev_type": null,
   "scope": "frontend",
@@ -15,17 +15,18 @@
   "branch": null,
   "base_branch": "codex/offertoday-it-coverage-20260702",
   "worktree_path": null,
-  "commit": null,
+  "commit": "3b460795316ec18711406e98b0451630ab4a0d7b",
   "pr_url": null,
   "subtasks": [],
   "children": [
     "09-23-improve-scheduler-workflow-ux",
     "09-23-improve-crawl-tasks-workflow-ux",
-    "09-23-improve-ai-enrichment-workflow-ux"
+    "09-23-improve-ai-enrichment-workflow-ux",
+    "09-23-improve-settings-workflow-ux"
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Scheduler child #75 implemented, verified, committed (43b245e1), and archived; awaiting manual QA. Crawl Tasks #76 and AI Enrichment #77 remain planning. Final cross-workflow acceptance pending.",
+  "notes": "Implementation and automated verification complete; user approved both commit batches and task archive. UI work committed as 3b460795. Archive and journal follow documentation commit. GitHub issue remains open for manual QA.",
   "meta": {
     "github_issue": 74,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/74"

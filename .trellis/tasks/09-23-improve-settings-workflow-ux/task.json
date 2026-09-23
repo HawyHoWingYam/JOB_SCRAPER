@@ -1,8 +1,8 @@
 {
-  "id": "improve-crawl-tasks-workflow-ux",
-  "name": "improve-crawl-tasks-workflow-ux",
-  "title": "Improve Crawl Tasks page and end-to-end workflow UX",
-  "description": "Make finding, inspecting, monitoring, and handling Crawl Tasks a coherent workflow with clear outcomes and next steps.",
+  "id": "improve-settings-workflow-ux",
+  "name": "improve-settings-workflow-ux",
+  "title": "Improve Settings page and configuration workflow UX",
+  "description": "Improve Settings navigation, configuration, save/validation feedback and recovery; include in the authorized operations UX goal.",
   "status": "in_progress",
   "dev_type": null,
   "scope": "frontend",
@@ -23,7 +23,7 @@
   "relatedFiles": [],
   "notes": "Implementation and automated verification complete; user approved both commit batches and task archive. UI work committed as 3b460795. Archive and journal follow documentation commit. GitHub issue remains open for manual QA.",
   "meta": {
-    "github_issue": 76,
-    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/76"
+    "github_issue": 78,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/78"
   }
 }
