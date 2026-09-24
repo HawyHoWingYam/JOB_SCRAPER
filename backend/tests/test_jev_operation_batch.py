@@ -17,6 +17,7 @@ from app.models.company import Company
 from app.models.job import Job
 from app.models.jev import JevDuplicateAssociation, JevOperationBatchItem
 from app.services.jev_duplicate_association import JevDuplicateAssociationService
+from app.services.job_detail_read_service import _latest_jev_operation_payloads
 from app.services.jev_operation_batch import (
     JevOperationBatchService,
     execute_jev_operation_batch,
@@ -233,6 +234,37 @@ def test_direct_start_freezes_scope_and_defers_expensive_eligibility() -> None:
             ("duplicate", "pending", "deferred")
         ]
         assert db.execute(text("SELECT count(*) FROM jev_runs")).scalar_one() == 0
+    finally:
+        _dispose(db, engine)
+
+
+def test_job_detail_can_identify_a_job_from_its_durable_operation_item() -> None:
+    engine, db, subject, _candidate = _session()
+    try:
+        batch = JevOperationBatchService(db).start(
+            _Request(),
+            preview_fingerprint=None,
+            idempotency_key="job-detail-operation-state",
+        )
+        item = batch.items[0]
+        item.status = "completed"
+        item.eligibility_reason = "eligible"
+        item.completed_at = datetime(2026, 9, 24, 12, 34)
+        batch.status = "completed"
+        db.commit()
+
+        assert _latest_jev_operation_payloads(db, subject.id) == [
+            {
+                "operation": "duplicate",
+                "status": "completed",
+                "eligibility_reason": "eligible",
+                "batch_id": batch.id,
+                "batch_status": "completed",
+                "error_code": None,
+                "error_message": None,
+                "updated_at": datetime(2026, 9, 24, 12, 34),
+            }
+        ]
     finally:
         _dispose(db, engine)
 

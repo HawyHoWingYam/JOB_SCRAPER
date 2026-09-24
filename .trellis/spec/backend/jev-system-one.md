@@ -166,10 +166,15 @@ rewritten.
   It first publishes a usable AI Skill baseline. Jev Skill classification is a
   separately and explicitly started correction pass; unavailable Jev preserves
   the current usable projection.
-- Job Detail and Candidate reads whitelist audit fields (`status`, model,
-  request ID, reported cost and error code). They never expose credentials,
-  endpoint configuration, full answers or evidence snapshots and never call the
-  provider.
+- Job Detail exposes the latest durable operation-item state for each of Skills
+  correction, Possible same vacancy and Related Jobs, including its batch ID,
+  status, eligibility reason, timestamp and secret-safe error. This processing
+  state is independent of projected output counts, so a successfully processed
+  Job remains identifiable even when Jev produced no Skills, duplicate proposal
+  or Related Job. Job Detail and Candidate reads otherwise whitelist audit
+  fields (`status`, model, request ID, reported cost and error code). They never
+  expose credentials, endpoint configuration, full answers or evidence
+  snapshots and never call the provider.
 - Stronger-model Skill maintenance has a separate model. It has no scheduler or
   automatic start path: an operator starts it from Jev Operations. It persists
   recoverable work before dispatch and allows at most one pending/running batch. SQLite

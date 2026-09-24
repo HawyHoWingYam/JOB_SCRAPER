@@ -375,6 +375,84 @@ describe('JobDetailModal', () => {
     expect(within(receipt).getByText('USD 0.00005')).toBeInTheDocument();
   });
 
+  it('shows the latest durable state for every Jev operation in Job Detail', async () => {
+    renderModalWithPayload(
+      createJobPayload({
+        jev_operations: [
+          {
+            operation: 'skills',
+            status: 'completed',
+            eligibility_reason: 'eligible',
+            batch_id: 'batch-skills-complete',
+            batch_status: 'completed',
+            error_code: null,
+            error_message: null,
+            updated_at: '2026-09-24T12:34:00Z',
+          },
+          {
+            operation: 'duplicate',
+            status: 'skipped',
+            eligibility_reason: 'successful_unchanged',
+            batch_id: 'batch-duplicate-skipped',
+            batch_status: 'completed',
+            error_code: null,
+            error_message: null,
+            updated_at: '2026-09-24T12:35:00Z',
+          },
+          {
+            operation: 'related_jobs',
+            status: 'failed',
+            eligibility_reason: 'eligible',
+            batch_id: 'batch-related-failed',
+            batch_status: 'completed_with_errors',
+            error_code: 'provider_timeout',
+            error_message: 'Jev provider timed out.',
+            updated_at: '2026-09-24T12:36:00Z',
+          },
+        ],
+      }),
+    );
+
+    const heading = await screen.findByRole('heading', {
+      name: 'Jev processing',
+    });
+    const summary = heading.closest('section');
+    expect(summary).not.toBeNull();
+    expect(within(summary).getByText('Skills correction')).toBeInTheDocument();
+    expect(
+      within(summary).getByText('Possible same vacancy'),
+    ).toBeInTheDocument();
+    expect(within(summary).getByText('Related Jobs')).toBeInTheDocument();
+    expect(within(summary).getByText('Completed')).toBeInTheDocument();
+    expect(
+      within(summary).getByText('Skipped — unchanged'),
+    ).toBeInTheDocument();
+    expect(within(summary).getByText('Failed')).toBeInTheDocument();
+    expect(
+      within(summary).getByText('batch-skills-complete'),
+    ).toBeInTheDocument();
+    expect(within(summary).getByText('Provider Timeout')).toBeInTheDocument();
+    expect(
+      within(summary).getByText('Jev provider timed out.'),
+    ).toBeInTheDocument();
+  });
+
+  it('makes it explicit when a Job has no durable Jev operation history', async () => {
+    renderModalWithPayload(createJobPayload({ jev_operations: [] }));
+
+    const heading = await screen.findByRole('heading', {
+      name: 'Jev processing',
+    });
+    const summary = heading.closest('section');
+    expect(summary).not.toBeNull();
+    expect(within(summary).getAllByText('Not processed')).toHaveLength(3);
+    expect(
+      within(summary).getAllByText(
+        'No durable Jev batch item has been recorded.',
+      ),
+    ).toHaveLength(3);
+  });
+
   it('prefers a normalized numeric experience label over free-text summary text', async () => {
     renderModalWithPayload(createJobPayload());
 

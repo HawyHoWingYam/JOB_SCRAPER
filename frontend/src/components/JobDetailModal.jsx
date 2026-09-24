@@ -6,6 +6,11 @@ import ManualJobForm from './jobs/ManualJobForm';
 import { formatExperienceDisplay } from '../utils/experienceDisplay';
 
 const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
+const JEV_OPERATIONS = [
+  ['skills', 'Skills correction'],
+  ['duplicate', 'Possible same vacancy'],
+  ['related_jobs', 'Related Jobs'],
+];
 
 function formatRelativePostedState(postedDate) {
   if (!postedDate) {
@@ -105,6 +110,48 @@ function humanizeContractValue(value) {
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase())
     .replace(/\bAi\b/g, 'AI');
+}
+
+function jevOperationStatusLabel(state) {
+  if (!state) return 'Not processed';
+  if (state.status === 'completed') return 'Completed';
+  if (state.status === 'failed') return 'Failed';
+  if (state.status === 'running') return 'Running';
+  if (state.status === 'pending') {
+    return state.eligibility_reason === 'deferred' ? 'Queued' : 'Pending';
+  }
+  if (state.status === 'stopped') return 'Stopped';
+  if (state.status === 'skipped') {
+    if (state.eligibility_reason === 'successful_unchanged') {
+      return 'Skipped — unchanged';
+    }
+    if (state.eligibility_reason === 'missing_skill_evidence') {
+      return 'Skipped — no Skill evidence';
+    }
+    return `Skipped — ${humanizeContractValue(state.eligibility_reason)}`;
+  }
+  return humanizeContractValue(state.status);
+}
+
+function jevOperationTone(state) {
+  if (!state) return 'neutral';
+  if (state.status === 'completed') return 'success';
+  if (state.status === 'failed') return 'danger';
+  if (state.status === 'running' || state.status === 'pending') return 'active';
+  return 'warning';
+}
+
+function formatJevTimestamp(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function sourceClassificationPathLabel(path) {
@@ -377,6 +424,11 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
       ? job.skill_candidate_mentions
       : []);
   const hasSkillCandidateMentions = skillCandidateMentions.length > 0;
+  const jevOperationStates = new Map(
+    (Array.isArray(job?.jev_operations) ? job.jev_operations : []).map(
+      (state) => [state.operation, state],
+    ),
+  );
 
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -460,6 +512,64 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 onCancel={() => setIsEditing(false)}
               />
             )}
+
+            <section
+              className="modal-section jev-processing-summary"
+              role="region"
+              aria-labelledby="jev-processing-heading"
+            >
+              <div className="jev-processing-heading">
+                <div>
+                  <h3 id="jev-processing-heading">Jev processing</h3>
+                  <p>Latest durable operation state for this Job.</p>
+                </div>
+                <a href="#jev">Open Jev Operations</a>
+              </div>
+              <div className="jev-processing-grid">
+                {JEV_OPERATIONS.map(([operation, label]) => {
+                  const state = jevOperationStates.get(operation);
+                  const updatedAt = formatJevTimestamp(state?.updated_at);
+                  return (
+                    <div className="jev-processing-card" key={operation}>
+                      <div className="jev-processing-card-heading">
+                        <strong className="jev-processing-card-title">
+                          {label}
+                        </strong>
+                        <span
+                          className={`jev-operation-status is-${jevOperationTone(state)}`}
+                        >
+                          {jevOperationStatusLabel(state)}
+                        </span>
+                      </div>
+                      {state ? (
+                        <dl className="jev-processing-details">
+                          <dt>Batch</dt>
+                          <dd>
+                            <code>{state.batch_id}</code>
+                          </dd>
+                          <dt>Updated</dt>
+                          <dd>{updatedAt || 'Time unavailable'}</dd>
+                          {state.error_code && (
+                            <>
+                              <dt>Error</dt>
+                              <dd>{humanizeContractValue(state.error_code)}</dd>
+                            </>
+                          )}
+                          {state.error_message && (
+                            <>
+                              <dt>Message</dt>
+                              <dd>{state.error_message}</dd>
+                            </>
+                          )}
+                        </dl>
+                      ) : (
+                        <p>No durable Jev batch item has been recorded.</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
 
             <section
               className="modal-section"

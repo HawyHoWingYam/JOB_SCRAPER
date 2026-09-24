@@ -242,6 +242,21 @@ class JevSkillClassificationReceiptSchema(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class JevOperationStateSchema(BaseModel):
+    """Latest durable Jev operation state for one Job Detail operation."""
+
+    operation: Literal["skills", "duplicate", "related_jobs"]
+    status: Literal[
+        "pending", "running", "completed", "failed", "skipped", "stopped"
+    ]
+    eligibility_reason: str
+    batch_id: str
+    batch_status: str
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    updated_at: datetime
+
+
 class JobDetailSchema(JobSchema):
     """Expanded schema for the job detail view."""
 
@@ -272,6 +287,7 @@ class JobDetailSchema(JobSchema):
     )
     skill_state: Optional[CurrentJobSkillStateSchema] = None
     jev_skill_classification: Optional[JevSkillClassificationReceiptSchema] = None
+    jev_operations: list[JevOperationStateSchema] = Field(default_factory=list)
     job_intelligence_availability: JobIntelligenceAvailabilitySchema = Field(
         default_factory=JobIntelligenceAvailabilitySchema
     )

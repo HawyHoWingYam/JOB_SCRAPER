@@ -36,6 +36,10 @@ Related Jobs.
   only classification/run identity, status/error, model, request ID, reported
   USD cost and completion time. This is a local latest-record read; it never
   dispatches Jev or serializes the full receipt/evidence/answers.
+- Job Detail exposes `jev_operations` as the latest durable batch-item state for
+  Skills correction, Possible same vacancy and Related Jobs. The state is
+  independent of result counts, so a completed operation remains visible when
+  it produced no governed Skill, duplicate proposal or Related Job.
 - Ordinary Skill search/filter/export/embedding uses governed Skills only.
 - Related Jobs requires the source embedding and ranks candidates as
   `0.80 semantic + 0.15 governed Skill overlap + 0.05 freshness`.

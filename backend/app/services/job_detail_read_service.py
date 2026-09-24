@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.models.job import Job
+from app.models.jev import JevOperationBatch, JevOperationBatchItem
 from app.schemas.job import JobDetailSchema, JobSchema
 from app.services.jev_online_skill_store import JevOnlineSkillStore
 
@@ -51,6 +53,45 @@ def _latest_jev_skill_payload(db: Session, job_id) -> dict[str, object] | None:
     }
 
 
+def _latest_jev_operation_payloads(
+    db: Session, job_id
+) -> list[dict[str, object]]:
+    rows = db.execute(
+        select(JevOperationBatchItem, JevOperationBatch)
+        .join(
+            JevOperationBatch,
+            JevOperationBatch.id == JevOperationBatchItem.batch_id,
+        )
+        .where(JevOperationBatchItem.job_id == job_id)
+        .order_by(
+            JevOperationBatch.created_at.desc(),
+            JevOperationBatchItem.created_at.desc(),
+            JevOperationBatchItem.position.desc(),
+        )
+    )
+    latest: dict[str, dict[str, object]] = {}
+    for item, batch in rows:
+        if item.operation in latest:
+            continue
+        latest[item.operation] = {
+            "operation": item.operation,
+            "status": item.status,
+            "eligibility_reason": item.eligibility_reason,
+            "batch_id": batch.id,
+            "batch_status": batch.status,
+            "error_code": item.error_code,
+            "error_message": item.error_message,
+            "updated_at": (
+                item.completed_at
+                or item.started_at
+                or item.created_at
+                or batch.created_at
+            ),
+        }
+    operation_order = ("skills", "duplicate", "related_jobs")
+    return [latest[operation] for operation in operation_order if operation in latest]
+
+
 def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
     """Compose Job Detail without touching retired governed ORM relationships."""
 
@@ -95,6 +136,7 @@ def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
             "enrichment_eligibility": eligibility,
             "job_intelligence_freshness": freshness,
             "jev_skill_classification": _latest_jev_skill_payload(db, job.id),
+            "jev_operations": _latest_jev_operation_payloads(db, job.id),
         }
     )
     payload.update(
