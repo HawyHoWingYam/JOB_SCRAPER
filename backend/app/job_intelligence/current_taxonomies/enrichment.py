@@ -134,19 +134,52 @@ class CurrentSkillEnrichment:
                 )
             )
         )
+        incoming_evidence_hash = str(provenance.get("job_evidence_hash") or "")
+        protected_mentions = tuple(
+            mention
+            for mention in existing_mentions
+            if mention.source == "operator-decision"
+            or (
+                source == "ai-extraction"
+                and mention.source == "jev-classification"
+                and bool(incoming_evidence_hash)
+                and str((mention.provenance or {}).get("job_evidence_hash") or "")
+                == incoming_evidence_hash
+            )
+        )
+        protected_ids = {mention.id for mention in protected_mentions}
         touched_candidate_ids = {
             mention.candidate_id
             for mention in existing_mentions
-            if mention.candidate_id is not None
+            if mention.candidate_id is not None and mention.id not in protected_ids
         }
         for mention in existing_mentions:
+            if mention.id in protected_ids:
+                continue
             mention.status = "superseded"
             mention.superseded_at = now
             mention.updated_at = now
         self.db.flush()
 
-        seen_keys: set[str] = set()
-        matched_codes: list[str] = []
+        seen_keys: set[str] = {
+            mention.normalized_key for mention in protected_mentions
+        }
+        matched_codes: list[str] = [
+            mention.skill_code
+            for mention in protected_mentions
+            if mention.resolution == "match_existing" and mention.skill_code
+        ]
+        protected_codes = set(matched_codes)
+        protected_sources = {
+            mention.skill_code: mention.source
+            for mention in protected_mentions
+            if mention.resolution == "match_existing" and mention.skill_code
+        }
+        protected_provenance = {
+            mention.skill_code: dict(mention.provenance or {})
+            for mention in protected_mentions
+            if mention.resolution == "match_existing" and mention.skill_code
+        }
         mention_payloads: list[dict[str, object]] = []
         for value in extracted_skills:
             payload = value if isinstance(value, dict) else {"name": value}
@@ -270,9 +303,15 @@ class CurrentSkillEnrichment:
                 skills=tuple(
                     CurrentJobSkillInput(
                         skill_code=code,
-                        source=source,
+                        source=(
+                            protected_sources[code] if code in protected_codes else source
+                        ),
                         confidence=confidence,
-                        provenance=dict(provenance),
+                        provenance=(
+                            protected_provenance.get(code, {})
+                            if code in protected_codes
+                            else dict(provenance)
+                        ),
                         mention_count=count,
                         updated_at=now,
                     )

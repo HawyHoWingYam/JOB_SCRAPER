@@ -10,6 +10,7 @@ POSTGRESQL_JOB_INTELLIGENCE_SUITES = (
     ("test_jev_crawl_quality_product.py", "JEV_CRAWL_QUALITY_TEST_DATABASE_URL"),
     ("test_jev_search_rerank_product.py", "JEV_SEARCH_RERANK_TEST_DATABASE_URL"),
     ("test_jev_incident_triage_product.py", "JEV_INCIDENT_TRIAGE_TEST_DATABASE_URL"),
+    ("test_jev_operation_batch.py", "JEV_OPERATIONS_TEST_DATABASE_URL"),
     (
         "integration/test_sandbox_cutover_rehearsal.py",
         "SANDBOX_CUTOVER_TEST_DATABASE_URL",

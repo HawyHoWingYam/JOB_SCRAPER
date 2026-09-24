@@ -25,7 +25,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Manual Job Detail Pacing](./scraper-detail-pacing.md) | Source settings, immutable task snapshots, dispatch exclusion, and per-attempt pacing | Active |
 | [AI Enrichment Run Operations](./ai-enrichment-runs.md) | Filter candidates, single-active scheduling, waiting promotion, monitor, retry, and cooperative Stop | Active |
 | [Company Enrichment Runs](./company-enrichment-runs.md) | Krill Chat/Responses routing, explicit Company-only Web Search, capability probes, persistence, and safe diagnostics | Active |
-| [Jev System One Settings and Bounded Runs](./jev-system-one.md) | Native typed decisions, frozen bounded runs, cumulative microdollar allowance, Settings UI, and isolated browser E2E | Active |
+| [Jev System One Settings and Manually Started Runs](./jev-system-one.md) | Native typed decisions, provider-console monetary authority, unified manual operations, and isolated browser E2E | Active |
 | [CTGoodJobs Transport Research](./ctgoodjobs-transport-research.md) | Bounded HTTP/headless/headed comparison, sanitized evidence, viability replay, and WAF hard stops | Active |
 | [OfferToday Production Crawl](./offertoday-production-crawl.md) | Cursor listing, partial caps, finite detail scope, normalized progress, and hard-stop contracts | Active |
 | [OfferToday Keyword Coverage Review](./offertoday-keyword-coverage-review.md) | Read-only Job Detail corpus analysis, bounded listing probes, and evidence-limited recommendations | Active |

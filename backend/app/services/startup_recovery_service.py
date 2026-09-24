@@ -13,6 +13,7 @@ from app.models.crawl_job_listing import CrawlJobListing
 from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
+from app.services.jev_operation_batch import JevOperationBatchService
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.sources.offertoday.completeness import is_complete_offertoday_job
 from app.utils.time import utc_now
@@ -46,6 +47,7 @@ class StartupRecoveryService:
         recover_company_runs: bool = True,
         recover_crawl_jobs: bool = True,
         recover_schedule_executions: bool = True,
+        recover_jev_operation_batches: bool = True,
     ) -> dict[str, int]:
         ai_run_count = 0
         if recover_ai_runs:
@@ -75,11 +77,23 @@ class StartupRecoveryService:
                 self.db.rollback()
                 logger.exception("Startup schedule execution recovery failed")
 
+        jev_batch_recovery_count = 0
+        if recover_jev_operation_batches:
+            try:
+                jev_batch_recovery_count = JevOperationBatchService(
+                    self.db
+                ).recover_interrupted()
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                logger.exception("Startup Jev batch recovery failed")
+
         return {
             "ai_runs_recovered": ai_run_count,
             "company_runs_recovered": company_run_count,
             "crawl_jobs_recovered": crawl_job_recovery_count,
             "schedule_executions_recovered": schedule_recovery_count,
+            "jev_operation_batches_stopped": jev_batch_recovery_count,
         }
 
     def recover_ai_runs_only(self) -> int:

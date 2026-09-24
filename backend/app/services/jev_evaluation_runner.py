@@ -97,10 +97,6 @@ class JevEvaluationRunner:
                     manifest_sha256=evaluation.get("manifest_sha256"),
                     rubric_version=run.rubric_version,
                     model=result.get("model") or run.settings_snapshot.get("model"),
-                    reservation_id=attempt.reservation_id if attempt else None,
-                    reserved_microdollars=(
-                        int(attempt.reserved_microdollars or 0) if attempt else 0
-                    ),
                     split=str(evaluation.get("split") or "development"),
                     decision_kind=str(
                         evaluation.get("decision_kind") or "evidence_support"
@@ -115,7 +111,7 @@ class JevEvaluationRunner:
                     input_tokens=int(attempt.input_tokens or 0) if attempt else 0,
                     output_tokens=int(attempt.output_tokens or 0) if attempt else 0,
                     actual_microdollars=(
-                        int(attempt.actual_microdollars or 0) if attempt else 0
+                        attempt.actual_microdollars if attempt else None
                     ),
                     error_code=item.error_code,
                 )

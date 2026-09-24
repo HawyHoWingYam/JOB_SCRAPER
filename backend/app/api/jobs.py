@@ -25,8 +25,6 @@ from app.api.job_search_query import apply_parsed_clauses
 from app.config import settings
 from app.models import Job, Company
 from app.models.current_taxonomy import CurrentTaxonomyNodeRecord
-from app.models.jev import JevSearchRerankEvaluation
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.jev_duplicate_association import (
     DuplicateAssociationConflictError,
     DuplicateAssociationError,
@@ -597,6 +595,10 @@ def _build_search_response_from_results(
                 employment_type=job.employment_type,
                 company_name=company.name if company else None,
                 posted_date=job.posted_date.isoformat() if job.posted_date else None,
+                experience_level=job.experience_level,
+                experience_min_years=job.experience_min_years,
+                experience_max_years=job.experience_max_years,
+                experience_evidence=job.experience_evidence,
                 source_classification_paths=job.source_classification_paths,
                 employment_types=job.employment_types,
             )
@@ -973,9 +975,6 @@ async def evaluate_search_rerank(
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Search rerank preview not found") from exc
-    except JevBudgetExhaustedError:
-        db.commit()
-        return service.serialize(db.get(JevSearchRerankEvaluation, evaluation_id))
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1223,15 +1222,6 @@ async def evaluate_duplicate_associations(
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Job not found") from exc
-    except JevBudgetExhaustedError as exc:
-        db.commit()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "jev_allowance_exhausted",
-                "remaining_microdollars": exc.remaining_microdollars,
-            },
-        ) from exc
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc

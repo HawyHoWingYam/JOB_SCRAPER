@@ -329,14 +329,15 @@ async def test_manual_filter_option_has_no_source_classification_paths(db, compa
 
 
 class _StubInsightExtractor:
-    def __init__(self, experience):
+    def __init__(self, experience, *, skills=None):
         self.experience = experience
+        self.skills = [] if skills is None else skills
 
     async def extract(self, **_kwargs):
         return {
             "summary": "Fresh AI summary",
             "classification": {"code": "software-engineering"},
-            "skills": [],
+            "skills": self.skills,
             "confidence": 0.8,
             "experience": self.experience,
         }
@@ -357,6 +358,66 @@ class _StubCurrentSkillEnrichment:
 
     def replace_job_skills(self, **_kwargs):
         return {"skills": []}
+
+
+@pytest.mark.asyncio
+async def test_ordinary_ai_enrichment_publishes_skills_without_starting_jev(
+    db,
+    company,
+    monkeypatch,
+):
+    job = make_job(
+        db,
+        company,
+        job_id="00000000-0000-0000-0000-000000000208",
+    )
+    job.description = "Python is required for this role."
+    db.commit()
+    replacements = []
+
+    class RecordingSkillEnrichment(_StubCurrentSkillEnrichment):
+        def replace_job_skills(self, **kwargs):
+            replacements.append(kwargs)
+            return {"skills": [{"skill_code": "backend.python"}]}
+
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.CurrentSkillEnrichment",
+        RecordingSkillEnrichment,
+    )
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.get_llm_status",
+        lambda _scope: {"active_provider": "test", "active_model": "model"},
+    )
+    service = AIEnrichmentService()
+    service.insight_extractor = _StubInsightExtractor(
+        {
+            "experience_level": "not_specified",
+            "experience_min_years": None,
+            "experience_max_years": None,
+            "summary": "Not specified",
+            "evidence": [],
+        },
+        skills=[{"name": "Python", "kind": "technical"}],
+    )
+
+    result = await service.enrich_job(job, db)
+
+    assert result["status"] == "success"
+    assert result["jev_skill_classification"] == {
+        "status": "not_started",
+        "reason": "manual_start_required",
+        "apply_projection": False,
+    }
+    assert len(replacements) == 1
+    assert replacements[0]["extracted_skills"] == [
+        {"name": "Python", "kind": "technical"}
+    ]
+    assert replacements[0]["source"] == "ai-extraction"
+    assert replacements[0]["provenance"] == {
+        "method": "constrained-ai-extraction",
+        "model": {"provider": "test", "name": "model"},
+        "job_evidence_hash": "0" * 64,
+    }
 
 
 @pytest.mark.asyncio

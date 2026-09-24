@@ -352,42 +352,11 @@ describe("CrawlTasksPage list projections", () => {
 });
 
 describe("CrawlTasksPage normalized Task Details", () => {
-  it("previews repeated incidents for free and renders advisory-only Jev triage", async () => {
-    const user = userEvent.setup();
-    apiFetchJson.mockImplementation(async (url, options = {}) => {
+  it("routes repeated-incident Jev execution to the unified manual console", async () => {
+    apiFetchJson.mockImplementation(async (url) => {
       const value = String(url);
       if (value.endsWith("/crawl-jobs/incident-triage")) {
         return { enabled: true, maximum_event_limit: 3, latest: null };
-      }
-      if (value.endsWith("/crawl-jobs/incident-triage/preview")) {
-        expect(options).toMatchObject({
-          method: "POST",
-          body: JSON.stringify({ event_limit: 3 }),
-        });
-        return {
-          id: "incident-evaluation-1",
-          status: "preview",
-          total_event_count: 3,
-          selected_cluster_count: 1,
-          clusters: [],
-        };
-      }
-      if (value.endsWith("/crawl-jobs/incident-triage/evaluations/incident-evaluation-1")) {
-        return {
-          id: "incident-evaluation-1",
-          status: "completed",
-          request_id: "incident-request-1",
-          provider: "local-test",
-          cost_usd: 0.00002,
-          clusters: [{
-            id: "cluster-row-1",
-            source_site: "jobsdb",
-            issue_class: "infrastructure_failure",
-            event_count: 3,
-            disposition: "investigate_now",
-            normalized_symptom: "failed at [url] [credential]",
-          }],
-        };
       }
       if (isDetailRequest(value)) return normalizedTaskDetail({ id: "listing-task" });
       if (isQualityReadRequest(value)) return { enabled: false, maximum_limit: 20, latest: null };
@@ -399,67 +368,21 @@ describe("CrawlTasksPage normalized Task Details", () => {
       name: "Jev repeated incident triage",
     });
     expect(within(advisory).getByText(/cannot change severity, retry, resume, cancel, dismiss/i)).toBeInTheDocument();
-    expect(within(advisory).getByLabelText("Jev incident event limit")).toHaveValue(3);
-
-    await user.click(within(advisory).getByRole("button", { name: "Preview incident clusters" }));
-    expect(await within(advisory).findByRole("status")).toHaveTextContent(
-      "Free database preview: 1 clusters selected from 3 events. No Jev request was sent.",
-    );
+    expect(within(advisory).getByRole("link", { name: /Jev Operations/ }))
+      .toHaveAttribute("href", "#jev");
+    expect(apiFetchJson.mock.calls.some(([url]) => String(url).includes("/preview"))).toBe(false);
     expect(apiFetchJson.mock.calls.some(([url]) => String(url).includes("/evaluations/"))).toBe(false);
-
-    await user.click(within(advisory).getByRole("button", { name: "Evaluate clusters with Jev" }));
-    expect(await within(advisory).findByTestId("jev-incident-triage-receipt")).toHaveTextContent(
-      "Latest: completed · receipt incident-request-1 · local-test · cost USD 0.00002",
-    );
-    expect(within(advisory).getByText(/jobsdb · infrastructure_failure/).closest("article")).toHaveTextContent(
-      "3 events · investigate_now",
-    );
     expect(within(advisory).queryByRole("button", { name: /retry|resume|cancel|dismiss/i })).not.toBeInTheDocument();
   });
 
-  it("previews crawl quality for free and renders one bounded Jev receipt", async () => {
-    const user = userEvent.setup();
-    const evaluation = {
-      id: "quality-evaluation-1",
-      status: "completed",
-      observations: [
-        {
-          id: "quality-observation-1",
-          source_identity: "jobsdb:source-123",
-          status: "answered",
-          quality: "quality_problem",
-          problem_kind: "access_wall",
-          request_id: "req-quality-1",
-          cost_usd: 0.012345,
-        },
-      ],
-    };
-    apiFetchJson.mockImplementation(async (url, options = {}) => {
+  it("routes crawl-quality Jev execution to the unified manual console", async () => {
+    apiFetchJson.mockImplementation(async (url) => {
       const value = String(url);
       if (isDetailRequest(value)) {
         return normalizedTaskDetail({ id: "listing-task" });
       }
       if (value.endsWith("/crawl-jobs/tasks/listing-task/quality")) {
         return { enabled: true, maximum_limit: 5, latest: null };
-      }
-      if (value.endsWith("/crawl-jobs/tasks/listing-task/quality/preview")) {
-        expect(options).toMatchObject({
-          method: "POST",
-          body: JSON.stringify({ limit: 5 }),
-        });
-        return {
-          eligible_count: 5,
-          selected_count: 2,
-          deterministic_excluded_count: 1,
-          insufficient_excluded_count: 2,
-        };
-      }
-      if (value.endsWith("/crawl-jobs/tasks/listing-task/quality/evaluations")) {
-        expect(options).toMatchObject({
-          method: "POST",
-          body: JSON.stringify({ limit: 5 }),
-        });
-        return evaluation;
       }
       return listPayload();
     });
@@ -472,36 +395,18 @@ describe("CrawlTasksPage normalized Task Details", () => {
       })
     ).closest("section");
     const advisoryQueries = within(advisory);
-    expect(advisoryQueries.getByLabelText("Crawl quality listing limit")).toHaveValue(5);
     expect(
       advisoryQueries.getByText(
         /does not retry, repair, resume, cancel, or change this Crawl Job/i,
       ),
     ).toBeInTheDocument();
-
-    await user.click(advisoryQueries.getByRole("button", { name: "Preview candidates" }));
-    expect(
-      await advisoryQueries.findByText(
-        /Free database preview: 2 selected \/ 5 eligible .* No Jev request was sent\./,
-      ),
-    ).toBeInTheDocument();
+    expect(advisoryQueries.getByRole("link", { name: /Jev Operations/ }))
+      .toHaveAttribute("href", "#jev");
     expect(
       apiFetchJson.mock.calls.some(([url]) =>
         String(url).endsWith("/quality/evaluations"),
       ),
     ).toBe(false);
-
-    await user.click(advisoryQueries.getByRole("button", { name: "Evaluate with Jev" }));
-    expect(
-      await advisoryQueries.findByText(
-        (_content, node) =>
-          node.tagName === "P"
-          && node.textContent === "Latest: completed · 1 observations",
-      ),
-    ).toBeInTheDocument();
-    expect(advisoryQueries.getByText(/jobsdb:source-123/).closest("article")).toHaveTextContent(
-      "jobsdb:source-123 · quality_problem · access_wall · receipt req-quality-1 · cost USD 0.01235",
-    );
     expect(
       advisoryQueries.queryByRole("button", { name: /retry|repair|resume|cancel/i }),
     ).not.toBeInTheDocument();

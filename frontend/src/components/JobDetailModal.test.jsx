@@ -170,7 +170,7 @@ describe('JobDetailModal', () => {
     await user.click(opener);
 
     const closeButton = screen.getByRole('button', { name: 'Close job details' });
-    const lastAction = await screen.findByRole('button', { name: /evaluate with jev/i });
+    const lastAction = await screen.findByRole('link', { name: /process in jev operations/i });
     lastAction.focus();
     await user.tab();
     expect(closeButton).toHaveFocus();
@@ -320,7 +320,8 @@ describe('JobDetailModal', () => {
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
     expect(screen.getByText('No technical skills extracted from this posting')).toBeInTheDocument();
     expect(screen.getByText('No AI summary extracted from this posting')).toBeInTheDocument();
-    expect(screen.getByText('No explicit experience requirement found in the posting')).toBeInTheDocument();
+    expect(screen.getByText('Not specified')).toBeInTheDocument();
+    expect(screen.getByText('The posting does not specify experience')).toBeInTheDocument();
   });
 
   it('renders Skill Candidate evidence without exposing a manual review queue', async () => {
@@ -378,7 +379,8 @@ describe('JobDetailModal', () => {
     renderModalWithPayload(createJobPayload());
 
     expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(screen.getByText('3-5 years')).toBeInTheDocument();
+    expect(screen.getByText('3+')).toBeInTheDocument();
+    expect(screen.getByText('3–5 years')).toBeInTheDocument();
     expect(
       screen.queryByText('Typically seeks 3-5 years of backend platform experience.'),
     ).not.toBeInTheDocument();

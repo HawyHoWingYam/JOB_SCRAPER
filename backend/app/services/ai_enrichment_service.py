@@ -21,9 +21,6 @@ from app.job_intelligence.enrichment_evidence import JobEnrichmentEvidence
 from app.models.job import Job
 from app.database import SessionLocal
 from app.services.job_role_mode import resolve_job_role_mode
-from app.services.jev_evaluator_factory import build_jev_evaluator
-from app.services.jev_online_skill_case_builder import build_online_skill_case
-from app.services.jev_online_skill_runner import JevOnlineSkillRunner
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -73,48 +70,11 @@ class AIEnrichmentService:
                 "confidence": insight.get("confidence"),
             }
 
-            jev_record = None
-            jev_projection = None
-            jev_case = build_online_skill_case(
-                db,
-                job_id=job.id,
-                source_site=job.source_site,
-                title=job.title,
-                evidence_text=job.description or "",
-                extracted_skills=extracted_skills,
-            )
-            if jev_case is not None:
-                runner = JevOnlineSkillRunner(db)
-                jev_record = runner.start(job_id=job.id, case=jev_case)
-                db.commit()
-                if jev_record.status not in {"answered", "unavailable", "invalid"}:
-                    run = runner.runs.get(jev_record.jev_run_id)
-                    evaluator = build_jev_evaluator(db, run)
-                    try:
-                        jev_record = await runner.execute(
-                            jev_record.id,
-                            case=jev_case,
-                            evaluator=evaluator,
-                        )
-                    finally:
-                        await evaluator.aclose()
-                    db.commit()
-                if jev_record.apply_projection:
-                    jev_projection = runner.projection_skills(jev_record)
-                results["jev_skill_classification"] = {
-                    "id": jev_record.id,
-                    "status": jev_record.status,
-                    "apply_projection": bool(jev_record.apply_projection),
-                    "error_code": jev_record.error_code,
-                    "jev_run_id": jev_record.jev_run_id,
-                }
-            else:
-                jev_projection = ()
-                results["jev_skill_classification"] = {
-                    "status": "not_dispatched",
-                    "reason": "no_extracted_skill_candidates",
-                    "apply_projection": False,
-                }
+            results["jev_skill_classification"] = {
+                "status": "not_started",
+                "reason": "manual_start_required",
+                "apply_projection": False,
+            }
 
             model_provenance = self._model_provenance(llm_status)
             job.ai_enriched_at = utc_now()
@@ -147,47 +107,17 @@ class AIEnrichmentService:
                 if isinstance(raw_confidence, (int, float))
                 else None
             )
-            if jev_projection is not None and jev_record is not None:
-                results["skill_projection"] = skill_enrichment.replace_job_skills(
-                    job_id=job.id,
-                    extracted_skills=jev_projection,
-                    confidence=confidence,
-                    provenance={
-                        "method": "jev-online-classification",
-                        "discovery": model_provenance,
-                        "classification_id": jev_record.id,
-                        "jev_run_id": jev_record.jev_run_id,
-                        "input_fingerprint": jev_record.input_fingerprint,
-                        "taxonomy_snapshot_sha256": (
-                            jev_record.taxonomy_snapshot_sha256
-                        ),
-                        "rubric_version": jev_record.rubric_version,
-                        "request_id": (jev_record.receipt or {}).get("request_id"),
-                        "provider": (jev_record.receipt or {}).get("provider"),
-                        "model": (jev_record.receipt or {}).get("model"),
-                    },
-                    source="jev-classification",
-                )
-            elif jev_projection == ():
-                results["skill_projection"] = skill_enrichment.replace_job_skills(
-                    job_id=job.id,
-                    extracted_skills=(),
-                    confidence=confidence,
-                    provenance={
-                        "method": "constrained-ai-extraction-empty",
-                        "discovery": model_provenance,
-                    },
-                    source="ai-extraction",
-                )
-            else:
-                results["skill_projection"] = {
-                    "state": "preserved",
-                    "reason": (
-                        jev_record.error_code
-                        if jev_record is not None
-                        else "no_extracted_skill_candidates"
-                    ),
-                }
+            results["skill_projection"] = skill_enrichment.replace_job_skills(
+                job_id=job.id,
+                extracted_skills=extracted_skills,
+                confidence=confidence,
+                provenance={
+                    "method": "constrained-ai-extraction",
+                    "model": model_provenance,
+                    "job_evidence_hash": enrichment_input.evidence.evidence_hash,
+                },
+                source="ai-extraction",
+            )
             if enrichment_input.origin == "manual" and job.manual_evidence is not None:
                 job.manual_evidence.enriched_evidence_hash = (
                     job.manual_evidence.evidence_hash

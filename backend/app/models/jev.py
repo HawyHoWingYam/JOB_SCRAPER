@@ -24,7 +24,7 @@ from app.utils.time import utc_now
 
 
 class JevRuntimeSettings(Base):
-    """Singleton future-run defaults and cumulative allowance for Jev work."""
+    """Singleton future-run operational defaults for Jev work."""
 
     __tablename__ = "jev_runtime_settings"
 
@@ -33,12 +33,6 @@ class JevRuntimeSettings(Base):
     endpoint = Column(String(512), nullable=False)
     model = Column(String(255), nullable=False)
     api_key = Column(Text, nullable=True)
-    allowance_microdollars = Column(Integer, nullable=False)
-    spent_microdollars = Column(Integer, nullable=False, default=0)
-    reserved_microdollars = Column(Integer, nullable=False, default=0)
-    input_microdollars_per_million_tokens = Column(Integer, nullable=True)
-    output_microdollars_per_million_tokens = Column(Integer, nullable=True)
-    max_request_reservation_microdollars = Column(Integer, nullable=True)
     sample_limit = Column(Integer, nullable=False)
     question_batch_limit = Column(Integer, nullable=False)
     concurrency = Column(Integer, nullable=False)
@@ -57,11 +51,6 @@ class JevRuntimeSettings(Base):
     incident_triage_event_limit = Column(Integer, nullable=False, default=200)
     maintenance_enabled = Column(Boolean, nullable=False, default=False)
     maintenance_model = Column(String(255), nullable=False, default="jev-latest")
-    maintenance_allowance_microdollars = Column(
-        Integer, nullable=False, default=2_000_000
-    )
-    maintenance_spent_microdollars = Column(Integer, nullable=False, default=0)
-    maintenance_reserved_microdollars = Column(Integer, nullable=False, default=0)
     maintenance_interval_days = Column(Integer, nullable=False, default=30)
     maintenance_min_candidates = Column(Integer, nullable=False, default=50)
     maintenance_batch_size = Column(Integer, nullable=False, default=100)
@@ -74,34 +63,6 @@ class JevRuntimeSettings(Base):
         default=utc_now,
         onupdate=utc_now,
     )
-
-
-class JevBudgetReservation(Base):
-    """One auditable pre-dispatch claim against the cumulative Jev allowance."""
-
-    __tablename__ = "jev_budget_reservations"
-    __table_args__ = (
-        UniqueConstraint("attempt_key", name="uq_jev_budget_reservation_attempt"),
-        CheckConstraint(
-            "reserved_microdollars > 0",
-            name="ck_jev_budget_reservation_positive",
-        ),
-    )
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    settings_id = Column(
-        Integer,
-        ForeignKey("jev_runtime_settings.id", ondelete="RESTRICT"),
-        nullable=False,
-        default=1,
-    )
-    attempt_key = Column(String(255), nullable=False)
-    budget_scope = Column(String(32), nullable=False, default="online")
-    status = Column(String(32), nullable=False, default="reserved", index=True)
-    reserved_microdollars = Column(Integer, nullable=False)
-    actual_microdollars = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=utc_now)
-    settled_at = Column(DateTime, nullable=True)
 
 
 class JevRun(Base):
@@ -179,7 +140,7 @@ class JevRunItem(Base):
 
 
 class JevRunAttempt(Base):
-    """Immutable receipt for one budgeted external attempt."""
+    """Immutable receipt for one external attempt."""
 
     __tablename__ = "jev_run_attempts"
     __table_args__ = (
@@ -197,18 +158,12 @@ class JevRunAttempt(Base):
         nullable=False,
         index=True,
     )
-    reservation_id = Column(
-        String(36),
-        ForeignKey("jev_budget_reservations.id", ondelete="RESTRICT"),
-        nullable=False,
-        unique=True,
-    )
     attempt_number = Column(Integer, nullable=False)
     status = Column(String(32), nullable=False)
     model = Column(String(255), nullable=True)
     input_tokens = Column(Integer, nullable=True)
     output_tokens = Column(Integer, nullable=True)
-    reserved_microdollars = Column(Integer, nullable=False)
+    # Optional provider-reported cost normalized for audit display only.
     actual_microdollars = Column(Integer, nullable=True)
     result = Column(JSON, nullable=True)
     error_code = Column(String(128), nullable=True)
@@ -225,7 +180,8 @@ class JevOnlineSkillClassification(Base):
         UniqueConstraint(
             "job_id",
             "input_fingerprint",
-            name="uq_jev_online_skill_job_input",
+            "attempt_generation",
+            name="uq_jev_online_skill_job_input_generation",
         ),
         CheckConstraint(
             "status IN ('pending', 'running', 'answered', 'unavailable', 'invalid')",
@@ -247,6 +203,7 @@ class JevOnlineSkillClassification(Base):
         unique=True,
     )
     input_fingerprint = Column(String(64), nullable=False)
+    attempt_generation = Column(Integer, nullable=False, default=1)
     taxonomy_snapshot_sha256 = Column(String(64), nullable=False)
     rubric_version = Column(String(128), nullable=False)
     status = Column(String(32), nullable=False, default="pending", index=True)
@@ -308,7 +265,8 @@ class JevDuplicateAssociation(Base):
         UniqueConstraint(
             "pair_key",
             "input_fingerprint",
-            name="uq_jev_duplicate_pair_input",
+            "attempt_generation",
+            name="uq_jev_duplicate_pair_input_generation",
         ),
         CheckConstraint(
             "left_job_id <> right_job_id",
@@ -324,6 +282,7 @@ class JevDuplicateAssociation(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     pair_key = Column(String(64), nullable=False, index=True)
     input_fingerprint = Column(String(64), nullable=False)
+    attempt_generation = Column(Integer, nullable=False, default=1)
     left_job_id = Column(
         Uuid(as_uuid=True),
         ForeignKey("jobs.id", ondelete="RESTRICT"),
@@ -520,14 +479,119 @@ class JevIncidentTriageCluster(Base):
     created_at = Column(DateTime, nullable=False, default=utc_now, index=True)
 
 
+class JevRelatedJobsEvaluation(Base):
+    """One manually initiated judgment over a frozen Related Jobs candidate set."""
+
+    __tablename__ = "jev_related_jobs_evaluations"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    subject_job_id = Column(
+        Uuid(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    jev_run_id = Column(
+        String(36),
+        ForeignKey("jev_runs.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+    input_fingerprint = Column(String(64), nullable=False, index=True)
+    rubric_version = Column(String(128), nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    candidate_snapshots = Column(JSON, nullable=False)
+    ordered_results = Column(JSON, nullable=False, default=list)
+    receipt = Column(JSON, nullable=True)
+    error_code = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now, index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
+class JevOperationBatch(Base):
+    """Operator-authorized, frozen batch spanning selected Jev Job operations."""
+
+    __tablename__ = "jev_operation_batches"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_jev_operation_batch_idempotency"),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    idempotency_key = Column(String(255), nullable=False)
+    preview_fingerprint = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    selection_snapshot = Column(JSON, nullable=False)
+    selected_job_ids = Column(JSON, nullable=False)
+    operations = Column(JSON, nullable=False)
+    force_reevaluation = Column(Boolean, nullable=False, default=False)
+    total_items = Column(Integer, nullable=False, default=0)
+    pending_items = Column(Integer, nullable=False, default=0)
+    running_items = Column(Integer, nullable=False, default=0)
+    completed_items = Column(Integer, nullable=False, default=0)
+    failed_items = Column(Integer, nullable=False, default=0)
+    skipped_items = Column(Integer, nullable=False, default=0)
+    stop_requested_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now, index=True)
+
+    items = relationship(
+        "JevOperationBatchItem",
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by="JevOperationBatchItem.position",
+    )
+
+
+class JevOperationBatchItem(Base):
+    """Durable lifecycle for one Job and one selected Jev operation."""
+
+    __tablename__ = "jev_operation_batch_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "batch_id", "job_id", "operation", name="uq_jev_batch_job_operation"
+        ),
+    )
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    batch_id = Column(
+        String(36),
+        ForeignKey("jev_operation_batches.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_id = Column(
+        Uuid(as_uuid=True),
+        ForeignKey("jobs.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    operation = Column(String(32), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False, default="pending", index=True)
+    eligibility_reason = Column(String(128), nullable=False)
+    input_fingerprint = Column(String(64), nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    result = Column(JSON, nullable=True)
+    error_code = Column(String(128), nullable=True)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_now)
+
+    batch = relationship("JevOperationBatch", back_populates="items")
+
+
 __all__ = [
-    "JevBudgetReservation",
     "JevCrawlQualityEvaluation",
     "JevCrawlQualityObservation",
     "JevDuplicateAssociation",
     "JevIncidentTriageCluster",
     "JevIncidentTriageEvaluation",
     "JevOnlineSkillClassification",
+    "JevOperationBatch",
+    "JevOperationBatchItem",
+    "JevRelatedJobsEvaluation",
     "JevRun",
     "JevRunAttempt",
     "JevRunItem",

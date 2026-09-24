@@ -17,13 +17,9 @@ import { formatCrawlPhaseLabel } from "./crawlPhase";
 import { formatScraperSourceLabel } from "./listingBatchLabel";
 import { cancelCrawlJob } from "./crawlTaskActions";
 import {
-  evaluateCrawlQuality,
-  evaluateIncidentTriage,
   getCrawlQuality,
   getIncidentTriage,
   getCrawlTaskDetail,
-  previewCrawlQuality,
-  previewIncidentTriage,
   resumeManualTask,
 } from "../../features/taskControl/board/boardApi";
 import { buildCrawlTaskRoute, parseCrawlTaskRoute } from "../../features/taskControl/board/boardRoute";
@@ -73,11 +69,7 @@ const TIME_RANGE_OPTIONS = [
   { value: "30d", label: "Last 30 days" },
 ];
 
-function IncidentTriageAdvisory({ value, pending, error, onPreview, onEvaluate }) {
-  const [eventLimit, setEventLimit] = useState(200);
-  const maximum = Number(value?.maximum_event_limit || 200);
-  const boundedLimit = Math.max(1, Math.min(maximum, eventLimit));
-  const preview = value?.preview;
+function IncidentTriageAdvisory({ value, error }) {
   const latest = value?.latest;
   return (
     <section className="glass-panel crawl-tasks-detail-block" aria-label="Jev repeated incident triage">
@@ -86,36 +78,10 @@ function IncidentTriageAdvisory({ value, pending, error, onPreview, onEvaluate }
         Jev prioritizes secret-safe clusters only. It cannot change severity,
         retry, resume, cancel, dismiss, or write Crawl Job events.
       </p>
-      <label>
-        <span>Recent incident event limit</span>
-        <input
-          aria-label="Jev incident event limit"
-          type="number"
-          min="1"
-          max={maximum}
-          value={boundedLimit}
-          onChange={(event) => setEventLimit(Math.max(1, Math.min(maximum, Number(event.target.value) || 1)))}
-        />
-      </label>
       <div className="board-actions">
-        <button type="button" disabled={pending !== null} onClick={() => onPreview(boundedLimit)}>
-          Preview incident clusters
-        </button>
-        <button
-          type="button"
-          disabled={!value?.enabled || pending !== null || !preview?.selected_cluster_count}
-          onClick={() => onEvaluate(preview.id)}
-        >
-          Evaluate clusters with Jev
-        </button>
+        <a href="#jev">Preview and evaluate in Jev Operations</a>
       </div>
       {!value?.enabled && <p>Incident triage is disabled in Settings.</p>}
-      {preview && (
-        <p role="status">
-          Free database preview: {preview.selected_cluster_count} clusters selected
-          from {preview.total_event_count} events. No Jev request was sent.
-        </p>
-      )}
       {error && <p role="alert" className="crawl-tasks-banner crawl-tasks-banner-error">{error}</p>}
       {latest && (
         <div data-testid="jev-incident-triage-receipt">
@@ -518,10 +484,8 @@ export default function CrawlTasksPage() {
   const [selectedTaskDetailError, setSelectedTaskDetailError] = useState(null);
   const [selectedTaskDetailLoading, setSelectedTaskDetailLoading] = useState(false);
   const [crawlQuality, setCrawlQuality] = useState(null);
-  const [crawlQualityPending, setCrawlQualityPending] = useState(null);
   const [crawlQualityError, setCrawlQualityError] = useState('');
   const [incidentTriage, setIncidentTriage] = useState(null);
-  const [incidentTriagePending, setIncidentTriagePending] = useState(null);
   const [incidentTriageError, setIncidentTriageError] = useState('');
   const [refreshedAt, setRefreshedAt] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -790,60 +754,6 @@ export default function CrawlTasksPage() {
     if (succeeded) setCancelDialogOpen(false);
   }, [runTaskAction, selectedTaskId]);
 
-  const handleCrawlQualityPreview = useCallback(async (limit) => {
-    if (!selectedTaskId) return;
-    setCrawlQualityPending('preview');
-    setCrawlQualityError('');
-    try {
-      const preview = await previewCrawlQuality(selectedTaskId, limit);
-      setCrawlQuality((current) => ({ ...(current || {}), preview }));
-    } catch (qualityError) {
-      setCrawlQualityError(extractErrorMessage(qualityError, 'Preview failed'));
-    } finally {
-      setCrawlQualityPending(null);
-    }
-  }, [selectedTaskId]);
-
-  const handleCrawlQualityEvaluate = useCallback(async (limit) => {
-    if (!selectedTaskId) return;
-    setCrawlQualityPending('evaluate');
-    setCrawlQualityError('');
-    try {
-      const latest = await evaluateCrawlQuality(selectedTaskId, limit);
-      setCrawlQuality((current) => ({ ...(current || {}), latest }));
-    } catch (qualityError) {
-      setCrawlQualityError(extractErrorMessage(qualityError, 'Jev quality evaluation failed'));
-    } finally {
-      setCrawlQualityPending(null);
-    }
-  }, [selectedTaskId]);
-
-  const handleIncidentTriagePreview = useCallback(async (eventLimit) => {
-    setIncidentTriagePending('preview');
-    setIncidentTriageError('');
-    try {
-      const preview = await previewIncidentTriage(eventLimit);
-      setIncidentTriage((current) => ({ ...(current || {}), preview }));
-    } catch (triageError) {
-      setIncidentTriageError(extractErrorMessage(triageError, 'Incident preview failed'));
-    } finally {
-      setIncidentTriagePending(null);
-    }
-  }, []);
-
-  const handleIncidentTriageEvaluate = useCallback(async (evaluationId) => {
-    setIncidentTriagePending('evaluate');
-    setIncidentTriageError('');
-    try {
-      const latest = await evaluateIncidentTriage(evaluationId);
-      setIncidentTriage((current) => ({ ...(current || {}), latest }));
-    } catch (triageError) {
-      setIncidentTriageError(extractErrorMessage(triageError, 'Jev incident triage failed'));
-    } finally {
-      setIncidentTriagePending(null);
-    }
-  }, []);
-
   return (
     <section className="crawl-tasks-page">
       <header className="crawl-tasks-header">
@@ -1064,10 +974,7 @@ export default function CrawlTasksPage() {
               onContinueCappedListing={handleContinueCappedListing}
               onRecoveryChanged={handleRecoveryChanged}
               crawlQuality={crawlQuality}
-              crawlQualityPending={crawlQualityPending}
               crawlQualityError={crawlQualityError}
-              onCrawlQualityPreview={handleCrawlQualityPreview}
-              onCrawlQualityEvaluate={handleCrawlQualityEvaluate}
             />
           ) : (
             <div className="crawl-tasks-empty">
@@ -1078,10 +985,7 @@ export default function CrawlTasksPage() {
       </div>
       <IncidentTriageAdvisory
         value={incidentTriage}
-        pending={incidentTriagePending}
         error={incidentTriageError}
-        onPreview={handleIncidentTriagePreview}
-        onEvaluate={handleIncidentTriageEvaluate}
       />
 
       {cancelDialogOpen && (

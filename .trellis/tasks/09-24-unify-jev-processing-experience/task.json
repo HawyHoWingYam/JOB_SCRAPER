@@ -1,0 +1,42 @@
+{
+  "id": "unify-jev-processing-experience",
+  "name": "unify-jev-processing-experience",
+  "title": "Unify Jev processing and simplify experience display",
+  "description": "Plan independent AI Skills plus manual Jev correction, unified bounded operations and Related Jobs, compact experience labels, and consistent search; preserve issue #61 ownership.",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-24",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "09-24-independent-ai-skills",
+    "09-24-manual-jev-batch",
+    "09-24-jev-related-jobs",
+    "09-24-unified-jev-console",
+    "09-24-compact-experience-search",
+    "09-24-job-browser-search-consistency"
+  ],
+  "parent": null,
+  "relatedFiles": [
+    "CONTEXT.md",
+    ".trellis/tasks/09-24-unify-jev-processing-experience/prd.md",
+    ".trellis/tasks/09-24-unify-jev-processing-experience/design.md",
+    ".trellis/tasks/09-24-unify-jev-processing-experience/implement.md",
+    ".trellis/tasks/09-24-unify-jev-processing-experience/research/search-audit.md"
+  ],
+  "notes": "",
+  "meta": {
+    "github_issue": 79,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/79"
+  }
+}

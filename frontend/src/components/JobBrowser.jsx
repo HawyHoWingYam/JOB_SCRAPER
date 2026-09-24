@@ -24,6 +24,7 @@ import {
     writeJobBrowserSession,
 } from './jobBrowserSessionStorage';
 import { summarizeJobBrowserLayer } from './jobBrowserLayerSummary';
+import { formatExperienceDisplay } from '../utils/experienceDisplay';
 import {
     countPendingQueryChanges,
     getDatePresetForQuery,
@@ -178,9 +179,7 @@ function JobBrowser({
     });
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [retrievalMode, setRetrievalMode] = useState('lexical');
-    const [searchRerank, setSearchRerank] = useState(null);
-    const [searchRerankPending, setSearchRerankPending] = useState(null);
-    const [searchRerankError, setSearchRerankError] = useState('');
+    const [appliedRetrievalMode, setAppliedRetrievalMode] = useState('lexical');
     const [capabilities, setCapabilities] = useState(null);
     const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
 
@@ -198,8 +197,8 @@ function JobBrowser({
     });
     const draftDatePreset = getDatePresetForQuery(draftLayer.structured_filters);
     const dateValidationError = getDateValidationError(draftLayer.structured_filters);
-    const semanticAvailable = capabilities?.search?.semantic?.available !== false;
-    const hybridAvailable = capabilities?.search?.hybrid?.available !== false;
+    const semanticAvailable = !capabilitiesLoading && capabilities?.search?.semantic?.available === true;
+    const hybridAvailable = !capabilitiesLoading && capabilities?.search?.hybrid?.available === true;
 
     const syncRouteToScope = (scope) => {
         if (typeof window === 'undefined') return;
@@ -271,7 +270,7 @@ function JobBrowser({
         commitScope = false,
         clearDraft = false,
         refreshFacets = commitScope,
-        rerankEvaluationId = null,
+        requestedRetrievalMode = retrievalMode,
     }) => {
         const requestSequence = searchRequestSequenceRef.current + 1;
         searchRequestSequenceRef.current = requestSequence;
@@ -305,11 +304,10 @@ function JobBrowser({
                 },
                 body: JSON.stringify({
                     scope,
-                    retrieval_mode: retrievalMode,
+                    retrieval_mode: requestedRetrievalMode,
                     page,
                     page_size: pageSize,
                     include_facets: false,
-                    jev_rerank_evaluation_id: rerankEvaluationId,
                 }),
             });
 
@@ -344,9 +342,8 @@ function JobBrowser({
             }));
             const committedScope = data.applied_scope || scope;
             if (commitScope) {
-                setSearchRerank(null);
-                setSearchRerankError('');
                 setActiveScope(committedScope);
+                setAppliedRetrievalMode(requestedRetrievalMode);
                 writeJobBrowserSession(
                     getJobBrowserSessionStorage(),
                     committedScope,
@@ -360,7 +357,7 @@ function JobBrowser({
             if (refreshFacets) {
                 void fetchFacets({
                     scope: committedScope,
-                    retrievalMode,
+                    retrievalMode: requestedRetrievalMode,
                 });
             }
             return true;
@@ -550,61 +547,8 @@ function JobBrowser({
             page: newPage,
             pageSize: pagination.pageSize,
             refreshFacets: false,
-            rerankEvaluationId: searchRerank?.evaluation?.id || null,
+            requestedRetrievalMode: appliedRetrievalMode,
         });
-    };
-
-    const handleSearchRerankPreview = async () => {
-        setSearchRerankPending('preview');
-        setSearchRerankError('');
-        try {
-            const response = await fetch(apiPath('/jobs/search/rerank/preview'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    scope: activeScope,
-                    retrieval_mode: retrievalMode,
-                }),
-            });
-            const payload = await response.json().catch(() => null);
-            if (!response.ok) {
-                throw new Error(formatApiErrorDetail(payload?.detail, 'Rerank preview failed'));
-            }
-            setSearchRerank({ preview: payload, evaluation: null });
-        } catch (err) {
-            setSearchRerankError(err.message);
-        } finally {
-            setSearchRerankPending(null);
-        }
-    };
-
-    const handleSearchRerankEvaluate = async () => {
-        const evaluationId = searchRerank?.preview?.id;
-        if (!evaluationId) return;
-        setSearchRerankPending('evaluate');
-        setSearchRerankError('');
-        try {
-            const response = await fetch(
-                apiPath(`/jobs/search/rerank/evaluations/${encodeURIComponent(evaluationId)}`),
-                { method: 'POST' },
-            );
-            const payload = await response.json().catch(() => null);
-            if (!response.ok) {
-                throw new Error(formatApiErrorDetail(payload?.detail, 'Jev reranking failed'));
-            }
-            setSearchRerank((current) => ({ ...current, evaluation: payload }));
-            await fetchJobs({
-                scope: activeScope,
-                page: 1,
-                pageSize: pagination.pageSize,
-                refreshFacets: false,
-                rerankEvaluationId: payload.id,
-            });
-        } catch (err) {
-            setSearchRerankError(err.message);
-        } finally {
-            setSearchRerankPending(null);
-        }
     };
 
     const handleEditLayer = (clientId) => {
@@ -684,8 +628,7 @@ function JobBrowser({
                 },
                 body: JSON.stringify({
                     scope: activeScope,
-                    retrieval_mode: retrievalMode,
-                    jev_rerank_evaluation_id: searchRerank?.evaluation?.id || null,
+                    retrieval_mode: appliedRetrievalMode,
                 }),
             });
 
@@ -722,9 +665,9 @@ function JobBrowser({
                                 {activeScope.layers.length > 0 ? 'Layered scope active' : 'Open query scope'}
                             </span>
                             <span className="console-pill">
-                                {retrievalMode === 'lexical'
+                                {appliedRetrievalMode === 'lexical'
                                     ? 'Lexical retrieval'
-                                    : retrievalMode === 'hybrid'
+                                    : appliedRetrievalMode === 'hybrid'
                                         ? 'Hybrid retrieval'
                                         : 'Semantic retrieval'}
                             </span>
@@ -757,8 +700,6 @@ function JobBrowser({
                                 value={retrievalMode}
                                 onChange={(event) => {
                                     setRetrievalMode(event.target.value);
-                                    setSearchRerank(null);
-                                    setSearchRerankError('');
                                 }}
                                 disabled={isLoading}
                             >
@@ -768,6 +709,7 @@ function JobBrowser({
                             </select>
                             <p className="query-mode-note">
                                 Lexical matches words; semantic matches meaning; hybrid combines both.
+                                {retrievalMode !== appliedRetrievalMode && ' Apply the search to use this mode.'}
                             </p>
                         </div>
 
@@ -1008,6 +950,9 @@ function JobBrowser({
                                         ) : (
                                             <span className="tag type-tag">Employment Type: Unknown</span>
                                         )}
+                                        <span className="tag experience-tag">
+                                            Experience: {formatExperienceDisplay(job).label}
+                                        </span>
                                     </div>
                                 </article>
                             ))}
@@ -1032,57 +977,12 @@ function JobBrowser({
                         <div>
                             <h3>Jev search relevance</h3>
                             <p>
-                                Preview freezes a bounded lexical prefix for free.
-                                Jev may reorder that prefix only; membership, totals,
-                                filters, paging, facets, and CSV export stay unchanged.
+                                Preview and manually evaluate the latest applied lexical
+                                scope from the unified Jev console.
                             </p>
                         </div>
-                        <div className="scope-trail-actions">
-                            <button
-                                type="button"
-                                className="scope-remove-btn"
-                                onClick={handleSearchRerankPreview}
-                                disabled={searchRerankPending !== null || pagination.total === 0 || retrievalMode !== 'lexical'}
-                            >
-                                Preview rerank candidates
-                            </button>
-                            <button
-                                type="button"
-                                className="scope-remove-btn"
-                                onClick={handleSearchRerankEvaluate}
-                                disabled={searchRerankPending !== null || !searchRerank?.preview?.enabled || !searchRerank?.preview?.selected_count}
-                            >
-                                Evaluate with Jev
-                            </button>
-                        </div>
+                        <a href="#jev" className="scope-remove-btn">Open Jev Operations</a>
                     </div>
-                    {retrievalMode !== 'lexical' && (
-                        <p>Jev reranking currently supports lexical search only.</p>
-                    )}
-                    {searchRerank?.preview && (
-                        <p role="status">
-                            Free database preview: {searchRerank.preview.selected_count} selected / {searchRerank.preview.eligible_count} eligible. Candidate membership is frozen. No Jev request was sent.
-                        </p>
-                    )}
-                    {searchRerank?.preview && !searchRerank.preview.enabled && (
-                        <p>Search reranking is disabled in Settings.</p>
-                    )}
-                    {searchRerankError && <p role="alert">{searchRerankError}</p>}
-                    {searchRerank?.evaluation && (
-                        <div data-testid="jev-search-rerank-receipt">
-                            <p>
-                                <strong>Latest:</strong> {searchRerank.evaluation.status}
-                                {searchRerank.evaluation.request_id && ` · receipt ${searchRerank.evaluation.request_id}`}
-                                {searchRerank.evaluation.provider && ` · ${searchRerank.evaluation.provider}`}
-                                {searchRerank.evaluation.cost_usd != null && ` · cost USD ${Number(searchRerank.evaluation.cost_usd).toFixed(5)}`}
-                            </p>
-                            {searchRerank.evaluation.status !== 'completed' && (
-                                <p data-testid="jev-search-rerank-fallback">
-                                    Fallback: baseline order retained; no candidate was added or removed.
-                                </p>
-                            )}
-                        </div>
-                    )}
                 </section>
             </div>
 

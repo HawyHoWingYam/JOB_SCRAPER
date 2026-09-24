@@ -12,6 +12,7 @@ from app.api import (
     current_taxonomies,
     jobs,
     jev,
+    jev_operations,
     recommendations,
     offertoday_keyword_packs,
     settings,
@@ -27,6 +28,7 @@ router.include_router(skill_candidates.router, prefix="/api")
 router.include_router(skills.router, prefix="/api")
 router.include_router(jobs.router, prefix="/api")
 router.include_router(jev.router, prefix="/api")
+router.include_router(jev_operations.router, prefix="/api")
 router.include_router(companies.router, prefix="/api")
 router.include_router(crawl_control.router, prefix="/api")
 router.include_router(crawl_jobs.router, prefix="/api")

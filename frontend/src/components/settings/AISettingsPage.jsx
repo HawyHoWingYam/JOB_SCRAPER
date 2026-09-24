@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { buildSettingsRoute, parseSettingsRoute } from "./settingsRoute";
 import { apiPath } from "../../api/base";
-import { formatApiErrorDetail } from "../../api/errors";
 import ScraperPacingSettings from "./ScraperPacingSettings";
 import "./AISettingsPage.css";
 
@@ -272,21 +271,6 @@ function createFormState(payload) {
       endpoint: jev.endpoint || "https://www.rsiai.net/v1/systemone",
       model: jev.model || "jev-latest",
       api_key: "",
-      allowance_usd: (
-        Number(jev.allowance_microdollars ?? 10_000_000) / 1_000_000
-      ).toFixed(2),
-      input_microdollars_per_million_tokens:
-        jev.input_microdollars_per_million_tokens == null
-          ? ""
-          : String(jev.input_microdollars_per_million_tokens),
-      output_microdollars_per_million_tokens:
-        jev.output_microdollars_per_million_tokens == null
-          ? ""
-          : String(jev.output_microdollars_per_million_tokens),
-      max_request_reservation_microdollars:
-        jev.max_request_reservation_microdollars == null
-          ? ""
-          : String(jev.max_request_reservation_microdollars),
       sample_limit: String(jev.sample_limit ?? 100),
       question_batch_limit: String(jev.question_batch_limit ?? 10),
       concurrency: String(jev.concurrency ?? 2),
@@ -307,9 +291,6 @@ function createFormState(payload) {
       incident_triage_event_limit: String(jev.incident_triage_event_limit ?? 200),
       maintenance_enabled: Boolean(jev.maintenance_enabled),
       maintenance_model: jev.maintenance_model || "jev-latest",
-      maintenance_allowance_usd: (
-        Number(jev.maintenance_allowance_microdollars ?? 2_000_000) / 1_000_000
-      ).toFixed(2),
       maintenance_interval_days: String(jev.maintenance_interval_days ?? 30),
       maintenance_min_candidates: String(
         jev.maintenance_min_candidates ?? 50,
@@ -349,21 +330,6 @@ function appendSecret(body, requestKey, value) {
   }
 }
 
-function optionalInteger(value) {
-  return value === "" || value == null ? null : Number(value);
-}
-
-function getJevRunTokenUsage(run) {
-  return (run?.items || []).reduce((total, item) => {
-    const usage = item?.result?.usage;
-    return total + Number(usage?.input_tokens || 0) + Number(usage?.output_tokens || 0);
-  }, 0);
-}
-
-function formatMicrodollars(value) {
-  return (Number(value || 0) / 1_000_000).toFixed(2);
-}
-
 function buildRequestBody(formState, settingsPayload) {
   const body = {
     llm_provider: formState.jobs.llm_provider,
@@ -388,18 +354,6 @@ function buildRequestBody(formState, settingsPayload) {
       endpoint: formState.jev.endpoint,
       model: formState.jev.model,
       api_key: formState.jev.api_key,
-      allowance_microdollars: Math.round(
-        Number(formState.jev.allowance_usd) * 1_000_000,
-      ),
-      input_microdollars_per_million_tokens: optionalInteger(
-        formState.jev.input_microdollars_per_million_tokens,
-      ),
-      output_microdollars_per_million_tokens: optionalInteger(
-        formState.jev.output_microdollars_per_million_tokens,
-      ),
-      max_request_reservation_microdollars: optionalInteger(
-        formState.jev.max_request_reservation_microdollars,
-      ),
       sample_limit: Number(formState.jev.sample_limit),
       question_batch_limit: Number(formState.jev.question_batch_limit),
       concurrency: Number(formState.jev.concurrency),
@@ -418,9 +372,6 @@ function buildRequestBody(formState, settingsPayload) {
       incident_triage_event_limit: Number(formState.jev.incident_triage_event_limit),
       maintenance_enabled: formState.jev.maintenance_enabled,
       maintenance_model: formState.jev.maintenance_model,
-      maintenance_allowance_microdollars: Math.round(
-        Number(formState.jev.maintenance_allowance_usd) * 1_000_000,
-      ),
       maintenance_interval_days: Number(
         formState.jev.maintenance_interval_days,
       ),
@@ -878,9 +829,6 @@ function AIRuntimeSettings({ profileFocus }) {
   const [testingProfile, setTestingProfile] = useState(null);
   const [error, setError] = useState(null);
   const [feedback, setFeedback] = useState(null);
-  const [jevRuns, setJevRuns] = useState([]);
-  const [jevRunError, setJevRunError] = useState(null);
-  const [jevActionId, setJevActionId] = useState(null);
   const [secretVisibility, setSecretVisibility] = useState(
     createSecretVisibilityState,
   );
@@ -935,32 +883,6 @@ function AIRuntimeSettings({ profileFocus }) {
     };
   }, [loadRevision]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadJevRuns() {
-      try {
-        const response = await fetch(apiPath("/jev/runs"));
-        if (!response.ok) {
-          throw new Error(`Failed to load Jev runs (${response.status})`);
-        }
-        const payload = await response.json();
-        if (!cancelled) {
-          setJevRuns(Array.isArray(payload?.runs) ? payload.runs : []);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setJevRunError(err.message);
-        }
-      }
-    }
-
-    loadJevRuns();
-    return () => {
-      cancelled = true;
-    };
-  }, [loadRevision]);
-
   function updateProfileProvider(profileKey, provider) {
     setFormState((currentState) => ({
       ...currentState,
@@ -1009,109 +931,6 @@ function AIRuntimeSettings({ profileFocus }) {
       ...currentState,
       [profileKey]: !currentState[profileKey],
     }));
-  }
-
-  function replaceJevRun(updatedRun) {
-    setJevRuns((currentRuns) => [
-      updatedRun,
-      ...currentRuns.filter((run) => run.id !== updatedRun.id),
-    ]);
-    if (updatedRun?.allowance) {
-      setSettingsPayload((currentPayload) => ({
-        ...currentPayload,
-        jev: {
-          ...currentPayload.jev,
-          ...updatedRun.allowance,
-        },
-      }));
-    }
-  }
-
-  async function performJevRunAction(runId, action) {
-    setJevActionId(runId);
-    setJevRunError(null);
-    try {
-      const response = await fetch(apiPath(`/jev/runs/${runId}/${action}`), {
-        method: "POST",
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          typeof payload?.detail === "string"
-            ? payload.detail
-            : `Jev run action failed (${response.status})`,
-        );
-      }
-      replaceJevRun(payload);
-      return payload;
-    } catch (err) {
-      setJevRunError(err.message);
-      return null;
-    } finally {
-      setJevActionId(null);
-    }
-  }
-
-  async function runJevSmokeTest() {
-    setJevActionId("new");
-    setJevRunError(null);
-    try {
-      const response = await fetch(apiPath("/jev/runs"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          purpose: "configuration_smoke_test",
-          rubric_version: "jev-smoke-v1",
-          items: [
-            {
-              subject_id: "settings-smoke-test",
-              payload: {
-                state: "A job posting explicitly requires Python experience.",
-                questions: {
-                  requires_python: {
-                    type: "noul",
-                    instructions:
-                      "The job explicitly requires Python experience.",
-                  },
-                },
-              },
-            },
-          ],
-        }),
-      });
-      const created = await response.json();
-      if (!response.ok) {
-        throw new Error(
-          typeof created?.detail === "string"
-            ? created.detail
-            : `Failed to start Jev smoke run (${response.status})`,
-        );
-      }
-      replaceJevRun(created);
-      setJevActionId(created.id);
-      const executeResponse = await fetch(
-        apiPath(`/jev/runs/${created.id}/execute-next`),
-        { method: "POST" },
-      );
-      const executed = await executeResponse.json();
-      if (!executeResponse.ok) {
-        const refreshedResponse = await fetch(apiPath(`/jev/runs/${created.id}`));
-        if (refreshedResponse.ok) {
-          replaceJevRun(await refreshedResponse.json());
-        }
-        throw new Error(
-          formatApiErrorDetail(
-            executed?.detail,
-            `Jev smoke run failed (${executeResponse.status})`,
-          ),
-        );
-      }
-      replaceJevRun(executed);
-    } catch (err) {
-      setJevRunError(err.message);
-    } finally {
-      setJevActionId(null);
-    }
   }
 
   async function handleSubmit(event) {
@@ -1427,8 +1246,8 @@ function AIRuntimeSettings({ profileFocus }) {
             <div>
               <h2>Jev System One</h2>
               <p>
-                Configure native bounded decisions and the cumulative allowance
-                used by future Jev runs. Saving does not call the provider.
+                Configure native bounded decisions. Monetary limits are managed
+                in the Jev API Console; saving here does not call the provider.
               </p>
             </div>
           </div>
@@ -1492,26 +1311,6 @@ function AIRuntimeSettings({ profileFocus }) {
                 {secretVisibility.jev ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </label>
-            <label className="ai-settings-field">
-              <span>Jev allowance (USD)</span>
-              <input
-                aria-label="Jev allowance"
-                type="number"
-                min="0"
-                step="0.01"
-                value={formState.jev.allowance_usd}
-                onChange={(event) =>
-                  updateJevField("allowance_usd", event.target.value)
-                }
-                disabled={saving}
-              />
-              <span className="ai-settings-field-hint">
-                Remaining: USD {(
-                  Number(settingsPayload?.jev?.remaining_microdollars || 0) /
-                  1_000_000
-                ).toFixed(2)}
-              </span>
-            </label>
           </div>
 
           <details>
@@ -1523,24 +1322,6 @@ function AIRuntimeSettings({ profileFocus }) {
                 ["concurrency", "Jev concurrency", 1, 50],
                 ["retry_limit", "Jev retry limit", 0, 10],
                 ["timeout_seconds", "Jev timeout seconds", 1, 600],
-                [
-                  "input_microdollars_per_million_tokens",
-                  "Jev input microdollars per million tokens",
-                  1,
-                  undefined,
-                ],
-                [
-                  "output_microdollars_per_million_tokens",
-                  "Jev output microdollars per million tokens",
-                  1,
-                  undefined,
-                ],
-                [
-                  "max_request_reservation_microdollars",
-                  "Jev maximum request reservation microdollars",
-                  1,
-                  undefined,
-                ],
               ].map(([key, label, min, max]) => (
                 <label className="ai-settings-field" key={key}>
                   <span>{label}</span>
@@ -1788,28 +1569,6 @@ function AIRuntimeSettings({ profileFocus }) {
                   disabled={saving}
                 />
               </label>
-              <label className="ai-settings-field">
-                <span>Maintenance allowance (USD)</span>
-                <input
-                  aria-label="Jev maintenance allowance"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={formState.jev.maintenance_allowance_usd}
-                  onChange={(event) =>
-                    updateJevField(
-                      "maintenance_allowance_usd",
-                      event.target.value,
-                    )
-                  }
-                  disabled={saving}
-                />
-                <span className="ai-settings-field-hint">
-                  Remaining: USD {formatMicrodollars(
-                    settingsPayload?.jev?.maintenance_remaining_microdollars,
-                  )}
-                </span>
-              </label>
               {[
                 ["maintenance_interval_days", "Jev maintenance interval days", 1, 3650],
                 ["maintenance_min_candidates", "Jev maintenance minimum candidates", 1, 100000],
@@ -1849,112 +1608,15 @@ function AIRuntimeSettings({ profileFocus }) {
           <div className="ai-settings-throughput-note">
             <div className="ai-settings-section-heading">
               <div>
-                <h3>Jev bounded runs</h3>
+                <h3>Jev execution moved to one console</h3>
                 <p>
-                  The smoke test is one explicit paid request. Reading this page
-                  never starts provider work.
+                  Credentials, model, limits, and feature availability stay here.
+                  Preview, Start, Stop, Resume, retry, history, and smoke execution
+                  are manual actions in Jev Operations.
                 </p>
               </div>
-              <button
-                type="button"
-                className="ai-settings-save-button"
-                onClick={runJevSmokeTest}
-                disabled={
-                  Boolean(jevActionId) ||
-                  !settingsPayload?.jev?.enabled ||
-                  !settingsPayload?.jev?.has_api_key ||
-                  !settingsPayload?.jev?.max_request_reservation_microdollars
-                }
-              >
-                <FlaskConical size={16} />
-                <span>
-                  {jevActionId === "new"
-                    ? "Starting Jev smoke test..."
-                    : "Run one Jev smoke test"}
-                </span>
-              </button>
+              <a className="ai-settings-save-button" href="#jev">Open Jev Operations</a>
             </div>
-            {jevRunError ? <p role="alert">{jevRunError}</p> : null}
-            {jevRuns.length === 0 ? (
-              <p>No Jev runs yet.</p>
-            ) : (
-              <div aria-label="Jev run history">
-                {jevRuns.map((run) => {
-                  const busy = jevActionId === run.id;
-                  const tokenUsage = getJevRunTokenUsage(run);
-                  return (
-                    <article key={run.id} className="ai-settings-secret-meta">
-                      <div>
-                        <strong>{run.purpose}</strong>
-                        <p>
-                          {run.status} · {run.completed_items}/{run.total_items}
-                          {tokenUsage ? ` · ${tokenUsage} tokens` : ""}
-                        </p>
-                        <small>
-                          Frozen model: {run.settings_snapshot?.model || "unknown"}
-                        </small>
-                        <small>
-                          Frozen endpoint: {run.settings_snapshot?.endpoint || "unknown"}
-                        </small>
-                        <small>
-                          Allowance USD {formatMicrodollars(
-                            settingsPayload?.jev?.allowance_microdollars,
-                          )} · spent {formatMicrodollars(
-                            settingsPayload?.jev?.spent_microdollars,
-                          )} · reserved {formatMicrodollars(
-                            settingsPayload?.jev?.reserved_microdollars,
-                          )} · remaining {formatMicrodollars(
-                            settingsPayload?.jev?.remaining_microdollars,
-                          )}
-                        </small>
-                      </div>
-                      <div>
-                        {["pending", "running"].includes(run.status) ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                performJevRunAction(run.id, "execute-next")
-                              }
-                              disabled={busy}
-                            >
-                              Execute next
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => performJevRunAction(run.id, "stop")}
-                              disabled={busy}
-                            >
-                              Stop
-                            </button>
-                          </>
-                        ) : null}
-                        {run.status === "cancelled" ? (
-                          <button
-                            type="button"
-                            onClick={() => performJevRunAction(run.id, "resume")}
-                            disabled={busy}
-                          >
-                            Resume
-                          </button>
-                        ) : null}
-                        {run.status === "completed_with_failures" ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              performJevRunAction(run.id, "retry-failed")
-                            }
-                            disabled={busy}
-                          >
-                            Retry failed
-                          </button>
-                        ) : null}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </section>
 

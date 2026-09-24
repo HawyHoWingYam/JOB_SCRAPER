@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.ai.system_one import SystemOneRequest
 from app.models.jev import JevRun, JevRunAttempt, JevRunItem
-from app.services.jev_budget import JevBudgetExhaustedError, JevBudgetLedger
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
 from app.utils.time import utc_now
 
@@ -41,10 +40,6 @@ class JevRunService:
             raise JevRunConfigurationError("Jev is disabled")
         if not settings.api_key:
             raise JevRunConfigurationError("Jev API key is missing")
-        if settings.max_request_reservation_microdollars is None:
-            raise JevRunConfigurationError(
-                "Jev maximum request reservation is required"
-            )
         subject_ids = [str(item.get("subject_id") or "").strip() for item in items]
         if any(not subject_id for subject_id in subject_ids):
             raise ValueError("every work item needs a subject_id")
@@ -203,11 +198,6 @@ class JevRunService:
         if item is None:
             return None
         run = self.get(run_id)
-        maximum = run.settings_snapshot.get("max_request_reservation_microdollars")
-        if not isinstance(maximum, int) or maximum <= 0:
-            raise JevRunConfigurationError(
-                "a maximum request reservation is required for this run"
-            )
         request = SystemOneRequest.model_validate(
             {
                 "state": item.payload.get("state"),
@@ -216,31 +206,10 @@ class JevRunService:
             }
         )
         attempt_number = item.attempt_count
-        ledger = JevBudgetLedger(
-            self.db,
-            scope=str(run.settings_snapshot.get("budget_scope") or "online"),
-        )
-        try:
-            reservation = ledger.reserve(
-                attempt_key=f"{run.id}:{item.id}:{attempt_number}",
-                microdollars=maximum,
-            )
-        except JevBudgetExhaustedError:
-            now = utc_now()
-            item.status = "failed"
-            item.error_code = "jev_allowance_exhausted"
-            item.error_message = "Jev allowance cannot cover another request"
-            item.completed_at = now
-            self.db.flush()
-            self._refresh_counts(run)
-            self._finish_if_terminal(run, now=now)
-            raise
         attempt = JevRunAttempt(
             item_id=item.id,
-            reservation_id=reservation.id,
             attempt_number=attempt_number,
-            status="reserved",
-            reserved_microdollars=maximum,
+            status="dispatched",
         )
         self.db.add(attempt)
         self.db.flush()
@@ -257,7 +226,6 @@ class JevRunService:
             item.error_code = attempt.error_code
             item.error_message = attempt.error_message
             item.completed_at = now
-            ledger.mark_uncertain(reservation.id)
             self.db.flush()
             self._finish_if_terminal(run, now=now)
             return item
@@ -291,28 +259,14 @@ class JevRunService:
             item.result = receipt
             item.completed_at = now
             attempt.result = receipt
-            actual = self._actual_microdollars(
-                run.settings_snapshot,
-                usage=result.usage,
-                fallback=maximum,
+            attempt.actual_microdollars = self._provider_cost_microdollars(
+                usage=result.usage
             )
-            if actual > maximum:
-                attempt.status = "cost_exceeded_reservation"
-                attempt.error_code = "cost_exceeded_reservation"
-                attempt.error_message = "Jev usage exceeded its reserved maximum"
-                item.status = "failed"
-                item.error_code = attempt.error_code
-                item.error_message = attempt.error_message
-                ledger.mark_uncertain(reservation.id)
-            else:
-                ledger.settle(reservation.id, actual_microdollars=actual)
-                attempt.actual_microdollars = actual
         else:
             item.status = "failed"
             item.error_code = result.error_code
             item.error_message = result.error_message
             item.completed_at = now
-            ledger.mark_uncertain(reservation.id)
         self.db.flush()
         self._refresh_counts(run)
         self._finish_if_terminal(run, now=now)
@@ -326,28 +280,14 @@ class JevRunService:
         self.db.flush()
 
     @staticmethod
-    def _actual_microdollars(
-        settings_snapshot: dict[str, object],
-        *,
-        usage,
-        fallback: int,
-    ) -> int:
-        if usage is not None and usage.cost is not None:
-            return int(
-                (Decimal(str(usage.cost)) * 1_000_000).to_integral_value(
-                    rounding=ROUND_CEILING
-                )
+    def _provider_cost_microdollars(*, usage) -> int | None:
+        if usage is None or usage.cost is None:
+            return None
+        return int(
+            (Decimal(str(usage.cost)) * 1_000_000).to_integral_value(
+                rounding=ROUND_CEILING
             )
-        input_rate = settings_snapshot.get("input_microdollars_per_million_tokens")
-        output_rate = settings_snapshot.get("output_microdollars_per_million_tokens")
-        if (
-            usage is None
-            or not isinstance(input_rate, int)
-            or not isinstance(output_rate, int)
-        ):
-            return fallback
-        numerator = usage.input_tokens * input_rate + usage.output_tokens * output_rate
-        return (numerator + 999_999) // 1_000_000
+        )
 
     def _locked_run(self, run_id: str) -> JevRun:
         run = self.db.scalar(
@@ -383,22 +323,7 @@ class JevRunService:
                 if profile == "maintenance"
                 else settings.model
             ),
-            "budget_scope": profile,
             "api_key_fingerprint": api_key_fingerprint,
-            "allowance_microdollars": (
-                settings.maintenance_allowance_microdollars
-                if profile == "maintenance"
-                else settings.allowance_microdollars
-            ),
-            "input_microdollars_per_million_tokens": (
-                settings.input_microdollars_per_million_tokens
-            ),
-            "output_microdollars_per_million_tokens": (
-                settings.output_microdollars_per_million_tokens
-            ),
-            "max_request_reservation_microdollars": (
-                settings.max_request_reservation_microdollars
-            ),
             "question_batch_limit": settings.question_batch_limit,
             "concurrency": settings.concurrency,
             "retry_limit": settings.retry_limit,

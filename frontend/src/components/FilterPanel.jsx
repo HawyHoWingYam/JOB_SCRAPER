@@ -266,7 +266,7 @@ function FilterPanel({
                     </label>
 
                     <label className="filter-field">
-                        <span className="filter-label">Experience From</span>
+                        <span className="filter-label">Job experience from</span>
                         <input
                             className="premium-input"
                             type="number"
@@ -280,7 +280,7 @@ function FilterPanel({
                     </label>
 
                     <label className="filter-field">
-                        <span className="filter-label">Experience To</span>
+                        <span className="filter-label">Job experience to</span>
                         <input
                             className="premium-input"
                             type="number"
@@ -296,7 +296,10 @@ function FilterPanel({
                     <div className="filter-field filter-field-wide">
                         <span className="filter-label">Experience Matching</span>
                         <div className="filter-date-note">
-                            <span>Unspecified experience is counted as 0-1 years.</span>
+                            <span>
+                                Matches postings whose original experience range overlaps this query range.
+                                Explicitly unspecified postings count as 0–1 years.
+                            </span>
                         </div>
                     </div>
 

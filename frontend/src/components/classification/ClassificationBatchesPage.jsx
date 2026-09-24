@@ -6,9 +6,6 @@ import {
   decideSkillCandidate,
   fetchSkillCandidates,
   fetchSkillMaintenanceStatus,
-  previewJevSkillBackfill,
-  runSkillMaintenanceNow,
-  startJevSkillBackfill,
 } from '../../api/skillCandidates';
 import './ClassificationBatchesPage.css';
 
@@ -54,10 +51,6 @@ function proposalSummary(proposal) {
   return `Held: ${proposal.action || 'unknown action'}`;
 }
 
-function normalizedBackfillLimit(value) {
-  return Math.max(1, Math.min(5000, Number(value) || 1));
-}
-
 function CandidateList({ candidates, selectedId, onSelect }) {
   return (
     <div className="skill-review-list" role="listbox" aria-label="Skills to review">
@@ -81,7 +74,7 @@ function CandidateList({ candidates, selectedId, onSelect }) {
   );
 }
 
-function MaintenancePanel({ payload, busy, feedback, onRun, onApprove }) {
+function MaintenancePanel({ payload, busy, feedback, onApprove }) {
   const eligibility = payload?.eligibility || {};
   const batch = payload?.latest_batch;
   return (
@@ -128,50 +121,12 @@ function MaintenancePanel({ payload, busy, feedback, onRun, onApprove }) {
         {feedback && <small role="status">{feedback}</small>}
       </div>
       <div className="skill-maintenance-actions">
-        <button type="button" onClick={onRun} disabled={busy || !eligibility.enabled}>
-          {busy === 'run' ? 'Running maintenance…' : 'Run maintenance now'}
-        </button>
+        <a href="#jev">Open Jev Operations to run maintenance</a>
         {batch?.status === 'ready_for_approval' && (
           <button type="button" onClick={() => onApprove(batch.id)} disabled={Boolean(busy)}>
             {busy === 'approve' ? 'Approving…' : 'Approve proposed Skills'}
           </button>
         )}
-      </div>
-    </section>
-  );
-}
-
-function BackfillPanel({ limit, plan, busy, feedback, onLimit, onPreview, onStart }) {
-  return (
-    <section className="skill-maintenance-panel" aria-label="Historical Jev Skill backfill">
-      <div>
-        <strong>Historical Jev Skill backfill</strong>
-        <p>Classify an oldest-first bounded slice through the existing enrichment worker.</p>
-        {plan && (
-          <small>
-            {plan.eligible_count} eligible · {plan.already_current_count} already current · {plan.reserved_count} reserved · {plan.selected_item_count} selected
-          </small>
-        )}
-        {feedback && <small role="status">{feedback}</small>}
-      </div>
-      <div className="skill-maintenance-actions">
-        <label className="skill-backfill-limit">
-          <span>Backfill limit</span>
-          <input
-            aria-label="Jev Skill backfill limit"
-            type="number"
-            min="1"
-            max="5000"
-            value={limit}
-            onChange={(event) => onLimit(event.target.value)}
-          />
-        </label>
-        <button type="button" onClick={onPreview} disabled={Boolean(busy)}>
-          {busy === 'preview' ? 'Previewing…' : 'Preview backfill'}
-        </button>
-        <button type="button" onClick={onStart} disabled={Boolean(busy) || !plan?.selected_item_count}>
-          {busy === 'start' ? 'Queueing…' : 'Start bounded backfill'}
-        </button>
       </div>
     </section>
   );
@@ -400,10 +355,6 @@ export default function ClassificationBatchesPage() {
   const [maintenance, setMaintenance] = useState(null);
   const [maintenanceBusy, setMaintenanceBusy] = useState('');
   const [maintenanceFeedback, setMaintenanceFeedback] = useState('');
-  const [backfillLimit, setBackfillLimit] = useState(50);
-  const [backfillPlan, setBackfillPlan] = useState(null);
-  const [backfillBusy, setBackfillBusy] = useState('');
-  const [backfillFeedback, setBackfillFeedback] = useState('');
   const pageSize = 25;
 
   useEffect(() => {
@@ -458,26 +409,6 @@ export default function ClassificationBatchesPage() {
     });
   };
 
-  const runMaintenance = async () => {
-    setMaintenanceBusy('run');
-    setMaintenanceFeedback('');
-    try {
-      const result = await runSkillMaintenanceNow();
-      if (result.batch) {
-        setMaintenance((current) => ({ ...current, latest_batch: result.batch }));
-        setMaintenanceFeedback(`Maintenance finished: ${result.batch.auto_applied_count} auto-applied, ${result.batch.held_for_approval_count} awaiting approval.`);
-        const appliedIds = new Set((result.batch.applied_changes || []).map((item) => item.candidate_id));
-        setPayload((current) => ({ ...current, items: current.items.filter((item) => !appliedIds.has(item.id)) }));
-      } else {
-        setMaintenanceFeedback(`No provider call: ${result.reason}.`);
-      }
-    } catch (nextError) {
-      setMaintenanceFeedback(nextError?.message || 'Unable to run Skill maintenance.');
-    } finally {
-      setMaintenanceBusy('');
-    }
-  };
-
   const approveMaintenance = async (batchId) => {
     setMaintenanceBusy('approve');
     setMaintenanceFeedback('');
@@ -494,43 +425,6 @@ export default function ClassificationBatchesPage() {
     }
   };
 
-  const previewBackfill = async () => {
-    setBackfillBusy('preview');
-    setBackfillFeedback('');
-    try {
-      const limit = normalizedBackfillLimit(backfillLimit);
-      setBackfillLimit(limit);
-      const plan = await previewJevSkillBackfill(limit);
-      setBackfillPlan(plan);
-      setBackfillFeedback('Preview is a free database read; no Jev request was sent.');
-    } catch (nextError) {
-      setBackfillFeedback(nextError?.message || 'Unable to preview historical backfill.');
-    } finally {
-      setBackfillBusy('');
-    }
-  };
-
-  const startBackfill = async () => {
-    setBackfillBusy('start');
-    setBackfillFeedback('');
-    try {
-      const limit = normalizedBackfillLimit(backfillLimit);
-      setBackfillLimit(limit);
-      const result = await startJevSkillBackfill(limit);
-      if (result.status === 'empty') {
-        setBackfillFeedback('No eligible historical Jobs remain.');
-        setBackfillPlan((current) => current && ({ ...current, selected_item_count: 0 }));
-      } else {
-        setBackfillFeedback(`Queued ${result.total_items} Jobs in run ${result.id}. Monitor it in AI Enrichment.`);
-        setBackfillPlan((current) => current && ({ ...current, selected_item_count: 0 }));
-      }
-    } catch (nextError) {
-      setBackfillFeedback(nextError?.message || 'Unable to start historical backfill.');
-    } finally {
-      setBackfillBusy('');
-    }
-  };
-
   return (
     <section className="classification-page">
       <header className="classification-header">
@@ -542,19 +436,13 @@ export default function ClassificationBatchesPage() {
         payload={maintenance}
         busy={maintenanceBusy}
         feedback={maintenanceFeedback}
-        onRun={runMaintenance}
         onApprove={approveMaintenance}
       />
 
-      <BackfillPanel
-        limit={backfillLimit}
-        plan={backfillPlan}
-        busy={backfillBusy}
-        feedback={backfillFeedback}
-        onLimit={setBackfillLimit}
-        onPreview={previewBackfill}
-        onStart={startBackfill}
-      />
+      <section className="skill-maintenance-panel" aria-label="Historical Jev Skill backfill">
+        <div><strong>Historical Jev Skill correction</strong><p>Preview and start bounded Job batches from the unified console.</p></div>
+        <a href="#jev">Open Jev Operations</a>
+      </section>
 
       {loading && <p>Loading…</p>}
       {error && <p role="alert" className="skill-candidate-error">{error}</p>}

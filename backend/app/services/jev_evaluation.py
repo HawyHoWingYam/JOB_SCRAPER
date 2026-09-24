@@ -53,8 +53,6 @@ class EvaluationObservation(BaseModel):
     manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     rubric_version: str | None = None
     model: str | None = None
-    reservation_id: str | None = None
-    reserved_microdollars: int = Field(default=0, ge=0)
     split: Literal["development", "held_out", "real_corpus"]
     decision_kind: Literal["evidence_support", "candidate_recommendation"]
     status: Literal["answered", "abstained", "unavailable", "invalid"]
@@ -67,7 +65,7 @@ class EvaluationObservation(BaseModel):
     latency_ms: int | None = Field(default=None, ge=0)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
-    actual_microdollars: int = Field(default=0, ge=0)
+    actual_microdollars: int | None = Field(default=None, ge=0)
     error_code: str | None = None
 
 
@@ -320,9 +318,8 @@ def _score_kind(observations: list[EvaluationObservation]) -> dict[str, object]:
         "latency_ms_p95": percentile(Decimal("0.95")),
         "input_tokens": sum(item.input_tokens for item in observations),
         "output_tokens": sum(item.output_tokens for item in observations),
-        "actual_microdollars": sum(item.actual_microdollars for item in observations),
-        "reserved_microdollars": sum(
-            item.reserved_microdollars for item in observations
+        "provider_reported_microdollars": sum(
+            item.actual_microdollars or 0 for item in observations
         ),
     }
 

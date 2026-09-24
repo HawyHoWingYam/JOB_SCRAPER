@@ -33,6 +33,7 @@ from app.models.current_taxonomy import (
 from app.services.current_embedding_document_builder import (
     CurrentEmbeddingDocumentBuilder,
 )
+from app.services.classification_domain_adapters import SkillClassificationAdapter
 
 
 DATA_DIRECTORY = Path(__file__).parents[1] / "app" / "data"
@@ -291,6 +292,159 @@ def test_current_skill_enrichment_matches_existing_and_accumulates_candidates():
         )
         assert candidate.occurrence_count == 1
         assert candidate.distinct_job_count == 1
+    finally:
+        db.rollback()
+        db.close()
+        engine.dispose()
+
+
+def test_operator_skill_decision_survives_later_ai_projection():
+    engine = create_engine("sqlite:///:memory:")
+    for table in (
+        CurrentTaxonomyNodeRecord.__table__,
+        CurrentTaxonomyAliasRecord.__table__,
+        CurrentJobSkillAssignment.__table__,
+        CurrentSkillCandidate.__table__,
+        CurrentJobSkillMention.__table__,
+    ):
+        table.create(engine)
+    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    job_id = uuid4()
+    try:
+        store = CurrentTaxonomyStore(db)
+        store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
+        enrichment = CurrentSkillEnrichment(db)
+        enrichment.replace_job_skills(
+            job_id=job_id,
+            extracted_skills=({"name": "New Framework", "kind": "technical"},),
+            confidence=0.8,
+            provenance={"method": "constrained-ai-extraction"},
+        )
+        candidate = db.scalar(
+            select(CurrentSkillCandidate).where(
+                CurrentSkillCandidate.normalized_key == "new framework"
+            )
+        )
+
+        SkillClassificationAdapter().apply_operator_decision(
+            db,
+            candidate.id,
+            action="reject",
+            rejection_reason="too_specific",
+        )
+        enrichment.replace_job_skills(
+            job_id=job_id,
+            extracted_skills=(
+                {"name": "New Framework", "kind": "technical"},
+                {"name": "React", "kind": "technical"},
+            ),
+            confidence=0.9,
+            provenance={"method": "constrained-ai-extraction"},
+        )
+
+        active = tuple(
+            db.scalars(
+                select(CurrentJobSkillMention).where(
+                    CurrentJobSkillMention.job_id == job_id,
+                    CurrentJobSkillMention.status == "active",
+                )
+            )
+        )
+        by_name = {mention.raw_name: mention for mention in active}
+        assert set(by_name) == {"New Framework", "React"}
+        assert by_name["New Framework"].resolution == "rejected"
+        assert by_name["New Framework"].source == "operator-decision"
+        assert by_name["New Framework"].rejection_reason == "too_specific"
+        assert by_name["React"].resolution == "match_existing"
+        assignments = tuple(
+            db.scalars(
+                select(CurrentJobSkillAssignment).where(
+                    CurrentJobSkillAssignment.job_id == job_id
+                )
+            )
+        )
+        assert [row.skill_code for row in assignments] == [
+            "frontend.javascript.react"
+        ]
+    finally:
+        db.rollback()
+        db.close()
+        engine.dispose()
+
+
+def test_current_jev_correction_survives_only_same_evidence_ai_rerun():
+    engine = create_engine("sqlite:///:memory:")
+    for table in (
+        CurrentTaxonomyNodeRecord.__table__,
+        CurrentTaxonomyAliasRecord.__table__,
+        CurrentJobSkillAssignment.__table__,
+        CurrentSkillCandidate.__table__,
+        CurrentJobSkillMention.__table__,
+    ):
+        table.create(engine)
+    db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
+    job_id = uuid4()
+    try:
+        store = CurrentTaxonomyStore(db)
+        store.synchronize(transform_skill_taxonomy(_load("skill_taxonomy.json")))
+        enrichment = CurrentSkillEnrichment(db)
+        enrichment.replace_job_skills(
+            job_id=job_id,
+            extracted_skills=(
+                {
+                    "name": "Python",
+                    "jev_route": "rejected",
+                    "decision_reason": "incidental",
+                },
+                {
+                    "name": "React",
+                    "jev_route": "match_existing",
+                    "existing_skill": "React",
+                },
+            ),
+            confidence=None,
+            provenance={"job_evidence_hash": "a" * 64},
+            source="jev-classification",
+        )
+
+        enrichment.replace_job_skills(
+            job_id=job_id,
+            extracted_skills=({"name": "Python", "kind": "technical"},),
+            confidence=0.8,
+            provenance={"job_evidence_hash": "a" * 64},
+            source="ai-extraction",
+        )
+        same_evidence = tuple(
+            db.scalars(
+                select(CurrentJobSkillMention).where(
+                    CurrentJobSkillMention.job_id == job_id,
+                    CurrentJobSkillMention.status == "active",
+                )
+            )
+        )
+        assert {row.raw_name: row.resolution for row in same_evidence} == {
+            "Python": "rejected",
+            "React": "match_existing",
+        }
+
+        enrichment.replace_job_skills(
+            job_id=job_id,
+            extracted_skills=({"name": "Python", "kind": "technical"},),
+            confidence=0.9,
+            provenance={"job_evidence_hash": "b" * 64},
+            source="ai-extraction",
+        )
+        changed_evidence = tuple(
+            db.scalars(
+                select(CurrentJobSkillMention).where(
+                    CurrentJobSkillMention.job_id == job_id,
+                    CurrentJobSkillMention.status == "active",
+                )
+            )
+        )
+        assert [(row.raw_name, row.resolution, row.source) for row in changed_evidence] == [
+            ("Python", "match_existing", "ai-extraction")
+        ]
     finally:
         db.rollback()
         db.close()

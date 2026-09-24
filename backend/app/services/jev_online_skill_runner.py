@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.ai.system_one import SystemOneAnswer, SystemOneResult, SystemOneUsage
 from app.models.jev import JevOnlineSkillClassification
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.jev_online_skill_classification import (
     OnlineSkillCase,
     OnlineSkillRoutingResult,
@@ -39,6 +38,7 @@ class JevOnlineSkillRunner:
         *,
         job_id: UUID,
         case: OnlineSkillCase,
+        force: bool = False,
     ) -> JevOnlineSkillClassification:
         settings = JevRuntimeSettingsService(self.db).get_or_create()
         dispatch = self.dispatch(case)
@@ -46,6 +46,7 @@ class JevOnlineSkillRunner:
             job_id=job_id,
             case=case,
             dispatch=dispatch,
+            force=force,
         )
         record = reservation.record
         if not reservation.created or record.jev_run_id is not None:
@@ -122,31 +123,7 @@ class JevOnlineSkillRunner:
         if record.jev_run_id is None:
             raise ValueError("online Skill classification has no bounded Jev run")
         self.store.mark_running(record.id)
-        try:
-            item = await self.runs.execute_next(record.jev_run_id, evaluator=evaluator)
-        except JevBudgetExhaustedError:
-            routing = route_online_skill_result(
-                case,
-                SystemOneResult(
-                    status="unavailable",
-                    error_code="jev_allowance_exhausted",
-                    error_message="Jev allowance cannot cover another request",
-                ),
-                input_fingerprint=record.input_fingerprint,
-                thresholds=OnlineSkillThresholds(
-                    evidence_millis=900,
-                    recommendation_millis=900,
-                ),
-            )
-            return self.store.complete(
-                record.id,
-                routing=routing,
-                receipt={
-                    "status": "unavailable",
-                    "error_code": "jev_allowance_exhausted",
-                    "error_message": "Jev allowance cannot cover another request",
-                },
-            )
+        item = await self.runs.execute_next(record.jev_run_id, evaluator=evaluator)
         if item is None:
             raise ValueError("online Skill bounded run has no executable item")
         run = self.runs.get(record.jev_run_id)
@@ -249,10 +226,6 @@ def _runtime_identity(settings) -> dict[str, object]:
             if settings.api_key
             else None
         ),
-        "allowance_microdollars": settings.allowance_microdollars,
-        "max_request_reservation_microdollars": (
-            settings.max_request_reservation_microdollars
-        ),
         "evidence_threshold_millis": settings.evidence_threshold_millis,
         "recommendation_threshold_millis": settings.recommendation_threshold_millis,
     }
@@ -263,8 +236,6 @@ def _configuration_error_code(message: str) -> str:
         return "jev_disabled"
     if message == "Jev API key is missing":
         return "jev_api_key_missing"
-    if message == "Jev maximum request reservation is required":
-        return "jev_reservation_missing"
     return "jev_configuration_error"
 
 

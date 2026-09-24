@@ -20,7 +20,6 @@ from app.crawl_control.task_control_board_service import (
     build_crawl_task_detail_projection,
 )
 from app.database import get_db
-from app.models.jev import JevIncidentTriageEvaluation
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.repositories.crawl_job_listing_repository import CrawlJobListingRepository
 from app.scraper.manual_action import ResumeStrategy, normalize_manual_action_payload
@@ -43,7 +42,6 @@ from app.services.crawl_task_snapshot_service import (
     build_crawl_task_snapshot,
 )
 from app.services.source_sites import is_supported_source_site
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.jev_crawl_quality_product import JevCrawlQualityProductService
 from app.services.jev_incident_triage_product import JevIncidentTriageProductService
 from app.services.jev_evaluator_factory import build_jev_evaluator
@@ -299,15 +297,6 @@ async def evaluate_crawl_quality(
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Crawl task not found") from exc
-    except JevBudgetExhaustedError as exc:
-        db.commit()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "jev_allowance_exhausted",
-                "remaining_microdollars": exc.remaining_microdollars,
-            },
-        ) from exc
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -375,10 +364,6 @@ async def evaluate_incident_triage(
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Incident triage preview not found") from exc
-    except JevBudgetExhaustedError:
-        db.commit()
-        evaluation = db.get(JevIncidentTriageEvaluation, evaluation_id)
-        return service.serialize(evaluation)
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc

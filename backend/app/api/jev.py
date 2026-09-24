@@ -15,7 +15,6 @@ from app.services.jev_run_service import (
     JevRunConfigurationError,
     JevRunService,
 )
-from app.services.jev_budget import JevBudgetExhaustedError, JevBudgetLedger
 
 
 router = APIRouter(prefix="/jev", tags=["jev"])
@@ -52,12 +51,8 @@ def _serialize_item(item: JevRunItem) -> dict[str, object]:
     }
 
 
-def _serialize_run(
-    run: JevRun,
-    *,
-    allowance: dict[str, int] | None = None,
-) -> dict[str, object]:
-    payload = {
+def _serialize_run(run: JevRun) -> dict[str, object]:
+    return {
         "id": run.id,
         "purpose": run.purpose,
         "rubric_version": run.rubric_version,
@@ -71,19 +66,6 @@ def _serialize_run(
         "cancelled_items": run.cancelled_items,
         "items": [_serialize_item(item) for item in run.items],
     }
-    if allowance is not None:
-        payload["allowance"] = allowance
-    return payload
-
-
-def _serialize_with_allowance(db: Session, run: JevRun) -> dict[str, object]:
-    return _serialize_run(
-        run,
-        allowance=JevBudgetLedger(
-            db,
-            scope=str(run.settings_snapshot.get("budget_scope") or "online"),
-        ).snapshot(),
-    )
 
 
 @router.post("/runs", status_code=201)
@@ -100,7 +82,7 @@ def create_jev_run(
         )
         db.commit()
         db.refresh(run)
-        return _serialize_with_allowance(db, run)
+        return _serialize_run(run)
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -122,10 +104,7 @@ def list_jev_runs(
             .limit(bounded_limit)
         )
     )
-    return {
-        "runs": [_serialize_run(run) for run in runs],
-        "allowance": JevBudgetLedger(db).snapshot(),
-    }
+    return {"runs": [_serialize_run(run) for run in runs]}
 
 
 @router.get("/runs/{run_id}")
@@ -134,7 +113,7 @@ def get_jev_run(
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
     try:
-        return _serialize_with_allowance(db, JevRunService(db).get(run_id))
+        return _serialize_run(JevRunService(db).get(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Jev run not found") from exc
 
@@ -148,7 +127,7 @@ def stop_jev_run(
         run = JevRunService(db).request_stop(run_id)
         db.commit()
         db.refresh(run)
-        return _serialize_with_allowance(db, run)
+        return _serialize_run(run)
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Jev run not found") from exc
@@ -163,7 +142,7 @@ def resume_jev_run(
         run = JevRunService(db).resume(run_id)
         db.commit()
         db.refresh(run)
-        return _serialize_with_allowance(db, run)
+        return _serialize_run(run)
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Jev run not found") from exc
@@ -181,7 +160,7 @@ def retry_failed_jev_run(
         run = JevRunService(db).retry_failed(run_id)
         db.commit()
         db.refresh(run)
-        return _serialize_with_allowance(db, run)
+        return _serialize_run(run)
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Jev run not found") from exc
@@ -203,22 +182,13 @@ async def execute_next_jev_run_item(
         await service.execute_next(run.id, evaluator=evaluator)
         db.commit()
         run = service.get(run.id)
-        return _serialize_with_allowance(db, run)
+        return _serialize_run(run)
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail="Jev run not found") from exc
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except JevBudgetExhaustedError as exc:
-        db.commit()
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "jev_allowance_exhausted",
-                "remaining_microdollars": exc.remaining_microdollars,
-            },
-        ) from exc
     finally:
         close = getattr(evaluator, "aclose", None)
         if close is not None:

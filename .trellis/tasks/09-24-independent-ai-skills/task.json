@@ -1,0 +1,29 @@
+{
+  "id": "independent-ai-skills",
+  "name": "independent-ai-skills",
+  "title": "Independent AI Skills and correction provenance",
+  "description": "Ordinary AI Skills persist without Jev; retain AI, Jev, and operator provenance with evidence-aware precedence.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-24",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": "09-24-unify-jev-processing-experience",
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "github_issue": 80,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/80"
+  }
+}

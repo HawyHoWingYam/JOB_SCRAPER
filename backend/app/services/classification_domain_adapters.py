@@ -507,6 +507,12 @@ class SkillClassificationAdapter:
             mention.skill_code = skill_code
             mention.generic_tag = generic_tag
             mention.rejection_reason = rejection_reason
+            mention.source = "operator-decision"
+            mention.provenance = {
+                **dict(mention.provenance or {}),
+                "decision_method": "operator",
+                "candidate_id": str(candidate.id),
+            }
             mention.updated_at = now
         db.flush()
 

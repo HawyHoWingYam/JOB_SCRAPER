@@ -72,7 +72,6 @@ class Settings(BaseSettings):
     scheduler_heartbeat_interval_seconds: int = 15
     scheduler_reconcile_interval_seconds: int = 30
     scheduler_heartbeat_stale_seconds: int = 60
-    jev_maintenance_poll_interval_seconds: int = 3600
 
     # LLM Configuration
     llm_provider: str = (

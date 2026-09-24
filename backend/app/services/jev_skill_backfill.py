@@ -14,6 +14,7 @@ from app.models.job import Job
 from app.services.jev_evaluator_factory import build_jev_evaluator
 from app.services.jev_online_skill_case_builder import build_online_skill_case
 from app.services.jev_online_skill_runner import JevOnlineSkillRunner
+from app.job_intelligence.enrichment_evidence import JobEnrichmentEvidence
 from app.services.jev_online_skill_store import JevOnlineSkillStore
 
 
@@ -148,7 +149,7 @@ class JevSkillBackfillPlanner:
 class JevSkillBackfillService:
     """Run only Jev Skill classification for a historical Job."""
 
-    async def enrich_job_id(self, job_id: UUID) -> dict[str, Any]:
+    async def enrich_job_id(self, job_id: UUID, *, force: bool = False) -> dict[str, Any]:
         db = SessionLocal()
         evaluator = None
         try:
@@ -176,7 +177,7 @@ class JevSkillBackfillService:
                     "error_code": "no_active_skill_mentions",
                 }
             runner = JevOnlineSkillRunner(db)
-            record = runner.start(job_id=job.id, case=case)
+            record = runner.start(job_id=job.id, case=case, force=force)
             db.commit()
             if record.status not in {"answered", "unavailable", "invalid"}:
                 run = runner.runs.get(record.jev_run_id)
@@ -188,6 +189,12 @@ class JevSkillBackfillService:
                 "reason": record.error_code or record.status,
             }
             if record.apply_projection:
+                inspection = JobEnrichmentEvidence(db).inspect(job)
+                job_evidence_hash = (
+                    inspection.enrichment_input.evidence.evidence_hash
+                    if inspection.supported and inspection.enrichment_input is not None
+                    else None
+                )
                 projection_state = CurrentSkillEnrichment(db).replace_job_skills(
                     job_id=job.id,
                     extracted_skills=runner.projection_skills(record),
@@ -202,6 +209,7 @@ class JevSkillBackfillService:
                         "request_id": (record.receipt or {}).get("request_id"),
                         "provider": (record.receipt or {}).get("provider"),
                         "model": (record.receipt or {}).get("model"),
+                        "job_evidence_hash": job_evidence_hash,
                     },
                     source="jev-classification",
                 )

@@ -101,10 +101,6 @@ class JevSettingsUpdateRequest(BaseModel):
     endpoint: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
-    allowance_microdollars: Optional[int] = None
-    input_microdollars_per_million_tokens: Optional[int] = None
-    output_microdollars_per_million_tokens: Optional[int] = None
-    max_request_reservation_microdollars: Optional[int] = None
     sample_limit: Optional[int] = None
     question_batch_limit: Optional[int] = None
     concurrency: Optional[int] = None
@@ -123,7 +119,6 @@ class JevSettingsUpdateRequest(BaseModel):
     incident_triage_event_limit: Optional[int] = None
     maintenance_enabled: Optional[bool] = None
     maintenance_model: Optional[str] = None
-    maintenance_allowance_microdollars: Optional[int] = None
     maintenance_interval_days: Optional[int] = None
     maintenance_min_candidates: Optional[int] = None
     maintenance_batch_size: Optional[int] = None

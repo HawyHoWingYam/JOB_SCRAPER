@@ -31,6 +31,8 @@ class JobRecommendationSchema(BaseModel):
     skill_overlap_score: float
     freshness_score: float
     combined_score: float
+    jev_score: Optional[int] = None
+    jev_reason: Optional[str] = None
 
     @model_validator(mode="after")
     def keep_governed_data_aligned_with_availability(self):
@@ -45,6 +47,8 @@ class JobRecommendationSchema(BaseModel):
 class JobRecommendationsResponse(BaseModel):
     source_job_id: UUID
     recommendations: list[JobRecommendationSchema]
+    jev_status: str = "not_evaluated"
+    jev_evaluation_id: Optional[str] = None
 
 
 JobRecommendationSchema.model_rebuild()

@@ -18,7 +18,6 @@ from app.job_intelligence.sandbox_cutover import (
     verify_target_state,
 )
 from app.models.jev import (
-    JevBudgetReservation,
     JevRun,
     JevRunAttempt,
     JevRunItem,
@@ -50,15 +49,6 @@ def _seed_jev_runtime(engine) -> None:
     with Session(engine) as db:
         settings = JevRuntimeSettingsService(db).get_or_create()
         settings.api_key = "disposable-cutover-secret"
-        settings.spent_microdollars = 100
-        reservation = JevBudgetReservation(
-            settings_id=1,
-            attempt_key="cutover:one:1",
-            status="settled",
-            reserved_microdollars=100,
-            actual_microdollars=100,
-            settled_at=now,
-        )
         run = JevRun(
             purpose="cutover_rehearsal",
             rubric_version="test-v1",
@@ -69,7 +59,7 @@ def _seed_jev_runtime(engine) -> None:
             completed_items=1,
             completed_at=now,
         )
-        db.add_all((reservation, run))
+        db.add(run)
         db.flush()
         item = JevRunItem(
             run_id=run.id,
@@ -86,13 +76,11 @@ def _seed_jev_runtime(engine) -> None:
         db.add(
             JevRunAttempt(
                 item_id=item.id,
-                reservation_id=reservation.id,
                 attempt_number=1,
                 status="answered",
                 model="jev-latest",
                 input_tokens=1,
                 output_tokens=1,
-                reserved_microdollars=100,
                 actual_microdollars=100,
                 completed_at=now,
             )

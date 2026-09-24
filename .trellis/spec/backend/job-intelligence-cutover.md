@@ -51,8 +51,8 @@ Delete exactly:
 
 - crawl, automation, dispatch, schedule, manual-action, enrichment,
   classification-batch, and embedding run history;
-- Jev runtime settings and credentials, cumulative allowance state, budget
-  reservations, bounded runs, work items, attempt receipts, online Skill
+- Jev runtime settings and credentials, bounded runs, work items, provider
+  receipts, online Skill
   classifications, maintenance batches, duplicate associations, crawl-quality
   observations/evaluations, search-rerank evaluations, and incident-triage
   clusters/evaluations; these records are intentionally excluded from the

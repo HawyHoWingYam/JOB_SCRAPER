@@ -10,7 +10,6 @@ from app.models.jev import JevRuntimeSettings
 
 DEFAULT_ENDPOINT = "https://www.rsiai.net/v1/systemone"
 DEFAULT_MODEL = "jev-latest"
-DEFAULT_ALLOWANCE_MICRODOLLARS = 10_000_000
 
 
 class JevSettingsValidationError(ValueError):
@@ -31,9 +30,6 @@ class JevRuntimeSettingsService:
                 enabled=False,
                 endpoint=DEFAULT_ENDPOINT,
                 model=DEFAULT_MODEL,
-                allowance_microdollars=DEFAULT_ALLOWANCE_MICRODOLLARS,
-                spent_microdollars=0,
-                reserved_microdollars=0,
                 sample_limit=100,
                 question_batch_limit=10,
                 concurrency=2,
@@ -52,9 +48,6 @@ class JevRuntimeSettingsService:
                 incident_triage_event_limit=200,
                 maintenance_enabled=False,
                 maintenance_model=DEFAULT_MODEL,
-                maintenance_allowance_microdollars=2_000_000,
-                maintenance_spent_microdollars=0,
-                maintenance_reserved_microdollars=0,
                 maintenance_interval_days=30,
                 maintenance_min_candidates=50,
                 maintenance_batch_size=100,
@@ -90,37 +83,12 @@ class JevRuntimeSettingsService:
 
     def serialize(self) -> dict[str, object]:
         row = self.get_or_create()
-        remaining = max(
-            0,
-            row.allowance_microdollars
-            - row.spent_microdollars
-            - row.reserved_microdollars,
-        )
-        maintenance_remaining = max(
-            0,
-            row.maintenance_allowance_microdollars
-            - row.maintenance_spent_microdollars
-            - row.maintenance_reserved_microdollars,
-        )
         return {
             "enabled": bool(row.enabled),
             "endpoint": row.endpoint,
             "model": row.model,
             "has_api_key": bool(row.api_key),
             "api_key_preview": self._mask_secret(row.api_key),
-            "allowance_microdollars": row.allowance_microdollars,
-            "spent_microdollars": row.spent_microdollars,
-            "reserved_microdollars": row.reserved_microdollars,
-            "remaining_microdollars": remaining,
-            "input_microdollars_per_million_tokens": (
-                row.input_microdollars_per_million_tokens
-            ),
-            "output_microdollars_per_million_tokens": (
-                row.output_microdollars_per_million_tokens
-            ),
-            "max_request_reservation_microdollars": (
-                row.max_request_reservation_microdollars
-            ),
             "sample_limit": row.sample_limit,
             "question_batch_limit": row.question_batch_limit,
             "concurrency": row.concurrency,
@@ -141,14 +109,6 @@ class JevRuntimeSettingsService:
             "incident_triage_event_limit": row.incident_triage_event_limit,
             "maintenance_enabled": bool(row.maintenance_enabled),
             "maintenance_model": row.maintenance_model,
-            "maintenance_allowance_microdollars": (
-                row.maintenance_allowance_microdollars
-            ),
-            "maintenance_spent_microdollars": row.maintenance_spent_microdollars,
-            "maintenance_reserved_microdollars": (
-                row.maintenance_reserved_microdollars
-            ),
-            "maintenance_remaining_microdollars": maintenance_remaining,
             "maintenance_interval_days": row.maintenance_interval_days,
             "maintenance_min_candidates": row.maintenance_min_candidates,
             "maintenance_batch_size": row.maintenance_batch_size,
@@ -166,18 +126,6 @@ class JevRuntimeSettingsService:
             "endpoint": row.endpoint,
             "model": row.model,
             "api_key": row.api_key,
-            "allowance_microdollars": row.allowance_microdollars,
-            "spent_microdollars": row.spent_microdollars,
-            "reserved_microdollars": row.reserved_microdollars,
-            "input_microdollars_per_million_tokens": (
-                row.input_microdollars_per_million_tokens
-            ),
-            "output_microdollars_per_million_tokens": (
-                row.output_microdollars_per_million_tokens
-            ),
-            "max_request_reservation_microdollars": (
-                row.max_request_reservation_microdollars
-            ),
             "sample_limit": row.sample_limit,
             "question_batch_limit": row.question_batch_limit,
             "concurrency": row.concurrency,
@@ -196,13 +144,6 @@ class JevRuntimeSettingsService:
             "incident_triage_event_limit": row.incident_triage_event_limit,
             "maintenance_enabled": bool(row.maintenance_enabled),
             "maintenance_model": row.maintenance_model,
-            "maintenance_allowance_microdollars": (
-                row.maintenance_allowance_microdollars
-            ),
-            "maintenance_spent_microdollars": row.maintenance_spent_microdollars,
-            "maintenance_reserved_microdollars": (
-                row.maintenance_reserved_microdollars
-            ),
             "maintenance_interval_days": row.maintenance_interval_days,
             "maintenance_min_candidates": row.maintenance_min_candidates,
             "maintenance_batch_size": row.maintenance_batch_size,
@@ -279,7 +220,6 @@ class JevRuntimeSettingsService:
                 }
             )
         bounds = {
-            "allowance_microdollars": (0, 2_147_483_647),
             "sample_limit": (1, 10_000),
             "question_batch_limit": (1, 100),
             "concurrency": (1, 50),
@@ -290,7 +230,6 @@ class JevRuntimeSettingsService:
             "crawl_quality_batch_limit": (1, 100),
             "search_rerank_candidate_limit": (1, 50),
             "incident_triage_event_limit": (1, 1_000),
-            "maintenance_allowance_microdollars": (0, 2_147_483_647),
             "maintenance_interval_days": (1, 3650),
             "maintenance_min_candidates": (1, 100_000),
             "maintenance_batch_size": (1, 10_000),
@@ -302,54 +241,6 @@ class JevRuntimeSettingsService:
                     {
                         "loc": [field_name],
                         "msg": f"Must be between {minimum} and {maximum}",
-                        "type": "value_error",
-                    }
-                )
-        committed_microdollars = int(values["spent_microdollars"]) + int(
-            values["reserved_microdollars"]
-        )
-        if (
-            isinstance(values["allowance_microdollars"], int)
-            and values["allowance_microdollars"] < committed_microdollars
-        ):
-            errors.append(
-                {
-                    "loc": ["allowance_microdollars"],
-                    "msg": (
-                        "Must cover spent and reserved charges "
-                        f"({committed_microdollars})"
-                    ),
-                    "type": "value_error",
-                }
-            )
-        maintenance_committed = int(values["maintenance_spent_microdollars"]) + int(
-            values["maintenance_reserved_microdollars"]
-        )
-        if (
-            isinstance(values["maintenance_allowance_microdollars"], int)
-            and values["maintenance_allowance_microdollars"] < maintenance_committed
-        ):
-            errors.append(
-                {
-                    "loc": ["maintenance_allowance_microdollars"],
-                    "msg": (
-                        "Must cover maintenance spent and reserved charges "
-                        f"({maintenance_committed})"
-                    ),
-                    "type": "value_error",
-                }
-            )
-        for field_name in (
-            "input_microdollars_per_million_tokens",
-            "output_microdollars_per_million_tokens",
-            "max_request_reservation_microdollars",
-        ):
-            value = values[field_name]
-            if value is not None and (not isinstance(value, int) or value <= 0):
-                errors.append(
-                    {
-                        "loc": [field_name],
-                        "msg": "Must be positive",
                         "type": "value_error",
                     }
                 )

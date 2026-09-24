@@ -12,7 +12,6 @@ from app.models.jev import (
     JevIncidentTriageEvaluation,
     JevRunItem,
 )
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.jev_incident_triage import (
     IncidentObservation,
     cluster_incidents,
@@ -231,14 +230,10 @@ class JevIncidentTriageProductService:
         evaluation = self.start(evaluation_id)
         if evaluation.status in {"completed", "completed_with_failures"}:
             return evaluation
-        try:
-            item = await JevRunService(self.db).execute_next(
-                evaluation.jev_run_id,
-                evaluator=evaluator,
-            )
-        except JevBudgetExhaustedError:
-            self._fail(evaluation, "jev_allowance_exhausted")
-            raise
+        item = await JevRunService(self.db).execute_next(
+            evaluation.jev_run_id,
+            evaluator=evaluator,
+        )
         if item is None:
             raise RuntimeError("incident triage run did not yield its work item")
         self._apply(evaluation, item)

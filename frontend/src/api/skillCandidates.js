@@ -33,31 +33,9 @@ export function fetchSkillMaintenanceStatus({ signal } = {}) {
   });
 }
 
-export function runSkillMaintenanceNow() {
-  return apiFetchJson(apiPath(`${ROOT}/maintenance/run-now`), {
-    method: 'POST',
-  });
-}
-
 export function approveSkillMaintenance(batchId) {
   return apiFetchJson(
     apiPath(`${ROOT}/maintenance/${encodeURIComponent(batchId)}/approve`),
     { method: 'POST' },
   );
-}
-
-export function previewJevSkillBackfill(limit) {
-  return apiFetchJson(apiPath('/ai/jev-skill-backfill/preview'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ limit: Number(limit) }),
-  });
-}
-
-export function startJevSkillBackfill(limit) {
-  return apiFetchJson(apiPath('/ai/jev-skill-backfill/runs'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ limit: Number(limit) }),
-  });
 }

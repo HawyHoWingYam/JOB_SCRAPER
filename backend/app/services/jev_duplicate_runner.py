@@ -29,9 +29,7 @@ class DuplicateObservation:
     language: str
     scenario_tags: tuple[str, ...]
     stability_group: str | None
-    reservation_id: str | None
-    reserved_microdollars: int
-    actual_microdollars: int
+    actual_microdollars: int | None
     input_tokens: int
     output_tokens: int
     latency_ms: int | None
@@ -163,12 +161,8 @@ class JevDuplicateRunner:
                     language=str(evaluation.get("language") or "en"),
                     scenario_tags=tuple(evaluation.get("scenario_tags") or ()),
                     stability_group=_optional_string(evaluation.get("stability_group")),
-                    reservation_id=attempt.reservation_id if attempt else None,
-                    reserved_microdollars=(
-                        int(attempt.reserved_microdollars or 0) if attempt else 0
-                    ),
                     actual_microdollars=(
-                        int(attempt.actual_microdollars or 0) if attempt else 0
+                        attempt.actual_microdollars if attempt else None
                     ),
                     input_tokens=(int(attempt.input_tokens or 0) if attempt else 0),
                     output_tokens=(int(attempt.output_tokens or 0) if attempt else 0),

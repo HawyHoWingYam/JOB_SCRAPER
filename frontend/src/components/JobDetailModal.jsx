@@ -3,6 +3,7 @@ import DOMPurify from 'dompurify';
 import { Pencil, X } from 'lucide-react';
 import SkillTags from './SkillTags';
 import ManualJobForm from './jobs/ManualJobForm';
+import { formatExperienceDisplay } from '../utils/experienceDisplay';
 
 const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
 
@@ -59,73 +60,11 @@ function getAwaitingAiCopy() {
   return 'Awaiting AI enrichment output';
 }
 
-function formatExperienceLevel(level) {
-  if (!level || level === 'not_specified') {
-    return null;
-  }
-
-  const known = {
-    junior_level: 'Junior level',
-    entry_level: 'Entry level',
-    junior: 'Junior',
-    mid_level: 'Mid level',
-    senior_level: 'Senior level',
-    senior: 'Senior',
-    lead_level: 'Lead level',
-    lead: 'Lead',
-    principal: 'Principal',
-    manager_level: 'Manager level',
-    manager: 'Manager',
-    director: 'Director',
-    director_level: 'Director level',
-    executive_level: 'Executive level',
-    internship: 'Internship',
-  };
-
-  if (known[level]) {
-    return known[level];
-  }
-
-  // Best-effort humanization for unexpected enum values.
-  return String(level)
-    .replace(/[_-]+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function hasExperienceYears(value) {
-  return value != null;
-}
-
 function getExperienceLabel(job) {
   if (!job.ai_enriched_at) {
     return getAwaitingAiCopy();
   }
-
-  // When enrichment ran but explicitly found nothing, treat the whole block as empty.
-  // Some test fixtures keep min/max defaults while setting `experience_level: not_specified`;
-  // `not_specified` should win and still render the empty-state copy.
-  if (job.experience_level === 'not_specified') {
-    return 'No explicit experience requirement found in the posting';
-  }
-
-  const levelLabel = formatExperienceLevel(job.experience_level);
-  const hasMinYears = hasExperienceYears(job.experience_min_years);
-  const hasMaxYears = hasExperienceYears(job.experience_max_years);
-
-  if (hasMinYears && hasMaxYears) {
-    return `${job.experience_min_years}-${job.experience_max_years} years`;
-  }
-
-  if (hasMinYears) {
-    return `${job.experience_min_years}+ years`;
-  }
-
-  if (hasMaxYears) {
-    return `Up to ${job.experience_max_years} years`;
-  }
-
-  return levelLabel || 'No explicit experience requirement found in the posting';
+  return formatExperienceDisplay(job).label;
 }
 
 function isExperienceEmpty(job) {
@@ -133,15 +72,7 @@ function isExperienceEmpty(job) {
     return true;
   }
 
-  if (job.experience_level === 'not_specified') {
-    return true;
-  }
-
-  if (hasExperienceYears(job.experience_min_years) || hasExperienceYears(job.experience_max_years)) {
-    return false;
-  }
-
-  return !formatExperienceLevel(job.experience_level);
+  return ['Not specified', 'Not available'].includes(formatExperienceDisplay(job).label);
 }
 
 function getExpiryLabel(job) {
@@ -204,11 +135,12 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const [relatedJobs, setRelatedJobs] = useState([]);
   const [relatedJobsLoading, setRelatedJobsLoading] = useState(true);
   const [relatedJobsError, setRelatedJobsError] = useState('');
+  const [relatedJobsJevStatus, setRelatedJobsJevStatus] = useState('not_evaluated');
   const [duplicateAssociations, setDuplicateAssociations] = useState([]);
   const [duplicateAssociationsLoading, setDuplicateAssociationsLoading] = useState(true);
   const [duplicateAssociationsError, setDuplicateAssociationsError] = useState('');
   const [duplicateActionPending, setDuplicateActionPending] = useState(false);
-  const [duplicateActionMessage, setDuplicateActionMessage] = useState('');
+  const [duplicateReviewMessage, setDuplicateReviewMessage] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const recommendationsAvailable = capabilities?.recommendations?.similar_jobs?.available !== false;
 
@@ -331,6 +263,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
           return;
         }
         setRelatedJobs(data.recommendations || []);
+        setRelatedJobsJevStatus(data.jev_status || 'not_evaluated');
         setRelatedJobsLoading(false);
       })
       .catch((err) => {
@@ -382,41 +315,9 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
     };
   }, [jobId, apiUrl]);
 
-  const evaluateDuplicateAssociations = async () => {
-    setDuplicateActionPending(true);
-    setDuplicateActionMessage('');
-    try {
-      const response = await fetch(
-        `${apiUrl}/api/jobs/${jobId}/duplicate-associations/evaluate`,
-        { method: 'POST' },
-      );
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        const detail = typeof payload.detail === 'string'
-          ? payload.detail
-          : payload.detail?.code;
-        throw new Error(detail || 'Jev duplicate evaluation could not run');
-      }
-      const payload = await response.json();
-      setDuplicateAssociations(
-        Array.isArray(payload.associations) ? payload.associations : [],
-      );
-      setDuplicateAssociationsError('');
-      setDuplicateActionMessage(
-        payload.candidate_count > 0
-          ? 'Jev duplicate evaluation completed.'
-          : 'No new candidate pairs needed evaluation.',
-      );
-    } catch (err) {
-      setDuplicateAssociationsError(err.message);
-    } finally {
-      setDuplicateActionPending(false);
-    }
-  };
-
   const reviewDuplicateAssociation = async (associationId, action) => {
     setDuplicateActionPending(true);
-    setDuplicateActionMessage('');
+    setDuplicateReviewMessage('');
     try {
       const response = await fetch(
         `${apiUrl}/api/jobs/${jobId}/duplicate-associations/${associationId}/review`,
@@ -437,10 +338,10 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
           ? current.filter((item) => item.id !== associationId)
           : current.map((item) => (item.id === associationId ? updated : item))
       ));
-      setDuplicateActionMessage(
+      setDuplicateReviewMessage(
         action === 'confirm'
           ? 'Association confirmed; both source Jobs remain available.'
-          : 'Association marked as different vacancies.',
+          : 'Association rejected; both source Jobs remain available.',
       );
     } catch (err) {
       setDuplicateAssociationsError(err.message);
@@ -720,6 +621,9 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                 <p className={isExperienceEmpty(job) ? 'modal-empty modal-experience-label' : 'modal-experience-label'}>
                   {getExperienceLabel(job)}
                 </p>
+                {job.ai_enriched_at && (
+                  <p className="modal-experience-detail">{formatExperienceDisplay(job).detail}</p>
+                )}
               </div>
             </section>
 
@@ -739,17 +643,9 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                     Source-preserving associations only. No Job is merged, hidden, or deleted.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={evaluateDuplicateAssociations}
-                  disabled={duplicateActionPending}
-                >
-                  {duplicateActionPending ? 'Working…' : 'Evaluate with Jev'}
-                </button>
+                <a href="#jev">Process in Jev Operations</a>
               </div>
-              {duplicateActionMessage && (
-                <p role="status" className="modal-ai-state">{duplicateActionMessage}</p>
-              )}
+              {duplicateReviewMessage && <p role="status">{duplicateReviewMessage}</p>}
               {duplicateAssociationsLoading ? (
                 <p className="modal-empty">Loading duplicate associations...</p>
               ) : duplicateAssociations.length > 0 ? (
@@ -809,6 +705,14 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
 
             <section className="modal-section">
               <h3>Related Jobs</h3>
+              <p className="modal-evidence-note">
+                {relatedJobsJevStatus === 'evaluated'
+                  && 'Filtered and ranked by a manually started Jev evaluation.'}
+                {relatedJobsJevStatus === 'awaiting_reevaluation'
+                  && 'Job evidence changed; showing algorithmic fallback while awaiting manual Jev reevaluation.'}
+                {relatedJobsJevStatus === 'not_evaluated'
+                  && 'Algorithmic recommendations; not evaluated by Jev.'}
+              </p>
               {relatedJobsLoading ? (
                 <p className="modal-empty">Loading related jobs...</p>
               ) : relatedJobs.length > 0 ? (
@@ -830,6 +734,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                         {relatedJob.location && <span>{relatedJob.location}</span>}
                         <span>{relatedEmploymentTypesLabel(relatedJob)}</span>
                         {relatedJob.posted_date && <span>{formatRelativePostedState(relatedJob.posted_date)}</span>}
+                        {relatedJob.jev_reason && <span>{relatedJob.jev_reason}</span>}
                       </div>
                     </article>
                   ))}

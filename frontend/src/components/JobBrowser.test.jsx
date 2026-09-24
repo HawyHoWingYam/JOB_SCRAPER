@@ -188,6 +188,38 @@ describe('JobBrowser governed filters', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders the compact experience label from the original search-card bounds', async () => {
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(searchFacets()) });
+      }
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(jobSearchPayload({
+          applied_scope: request.scope,
+          jobs: [{
+            ...productFixture.job_search.jobs[0],
+            experience_level: 'mid_level',
+            experience_min_years: 1,
+            experience_max_years: 5,
+          }],
+          total: 1,
+          total_pages: 1,
+        })),
+      });
+    });
+
+    render(<JobBrowser />);
+
+    const card = await screen.findByRole('article', {
+      name: 'Platform Engineer at Fixture Company',
+    });
+    expect(within(card).getByText('Experience: 1+')).toBeInTheDocument();
+    expect(within(card).queryByText(/1–5/)).not.toBeInTheDocument();
+  });
+
   it('opens job details only through the keyboard-operable View control', async () => {
     const user = userEvent.setup();
     render(<JobBrowser />);
@@ -428,87 +460,64 @@ describe('JobBrowser governed filters', () => {
     expect(facetSearchCalls()).toHaveLength(1);
   });
 
-  it('previews explicitly, applies one Jev rerank, and carries it into search', async () => {
+  it('keeps paging on the applied retrieval mode until a new search succeeds', async () => {
     const user = userEvent.setup();
-    const baselineJobs = productFixture.job_search.jobs.slice(0, 3);
-    globalThis.fetch = vi.fn((input, options = {}) => {
+    globalThis.fetch = vi.fn((input, options) => {
       const url = new URL(String(input), 'http://localhost');
       if (url.pathname === '/api/jobs/search/facets') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(searchFacets()),
-        });
-      }
-      if (url.pathname === '/api/jobs/search/rerank/preview') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            id: 'rerank-1',
-            enabled: true,
-            status: 'preview',
-            eligible_count: 3,
-            selected_count: 3,
-          }),
-        });
-      }
-      if (url.pathname === '/api/jobs/search/rerank/evaluations/rerank-1') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            id: 'rerank-1',
-            status: 'completed',
-            request_id: 'request-rerank-1',
-            provider: 'local-test',
-            cost_usd: 0.00005,
-          }),
-        });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(searchFacets()) });
       }
       const request = JSON.parse(options.body);
-      const jobs = request.jev_rerank_evaluation_id
-        ? [...baselineJobs].reverse()
-        : baselineJobs;
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(jobSearchPayload({
-          jobs,
-          total: 3,
-          total_pages: 1,
           applied_scope: request.scope,
-          facets: null,
+          total: 30,
+          total_pages: 2,
         })),
       });
     });
+    render(<JobBrowser />);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
 
+    await user.selectOptions(screen.getByLabelText('Retrieval mode'), 'semantic');
+    expect(screen.getByText('Lexical retrieval')).toBeInTheDocument();
+    expect(screen.getByText(/Apply the search to use this mode/)).toBeInTheDocument();
+    expect(jobSearchCalls()).toHaveLength(1);
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    expect(JSON.parse(jobSearchCalls()[1][1].body).retrieval_mode).toBe('lexical');
+
+    await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(3));
+    expect(JSON.parse(jobSearchCalls()[2][1].body).retrieval_mode).toBe('semantic');
+    expect(await screen.findByText('Semantic retrieval')).toBeInTheDocument();
+  });
+
+  it('disables unverified semantic modes when capabilities cannot load', async () => {
+    api.fetchCapabilities.mockRejectedValueOnce(new Error('capabilities offline'));
+    render(<JobBrowser />);
+
+    const mode = await screen.findByLabelText('Retrieval mode');
+    await waitFor(() => {
+      expect(within(mode).getByRole('option', { name: 'Semantic' })).toBeDisabled();
+      expect(within(mode).getByRole('option', { name: 'Hybrid' })).toBeDisabled();
+    });
+    expect(mode).toHaveValue('lexical');
+  });
+
+  it('routes manual search evaluation to Jev Operations without calling a provider path', async () => {
     render(<JobBrowser />);
     const advisory = await screen.findByRole('region', {
       name: 'Jev search relevance advisory',
     });
+    expect(within(advisory).getByRole('link', { name: 'Open Jev Operations' }))
+      .toHaveAttribute('href', '#jev');
     expect(fetchCallsFor('/api/jobs/search/rerank/preview')).toHaveLength(0);
-    expect(fetchCallsFor('/api/jobs/search/rerank/evaluations/rerank-1')).toHaveLength(0);
-
-    await user.click(within(advisory).getByRole('button', {
-      name: 'Preview rerank candidates',
-    }));
-    expect(await within(advisory).findByRole('status')).toHaveTextContent(
-      'Free database preview: 3 selected / 3 eligible. Candidate membership is frozen. No Jev request was sent.',
-    );
-    expect(fetchCallsFor('/api/jobs/search/rerank/evaluations/rerank-1')).toHaveLength(0);
-
-    await user.click(within(advisory).getByRole('button', {
-      name: 'Evaluate with Jev',
-    }));
-    expect(await within(advisory).findByTestId('jev-search-rerank-receipt')).toHaveTextContent(
-      'Latest: completed · receipt request-rerank-1 · local-test · cost USD 0.00005',
-    );
-    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
-    const rerankedRequest = JSON.parse(jobSearchCalls()[1][1].body);
-    expect(rerankedRequest).toEqual(expect.objectContaining({
-      page: 1,
-      include_facets: false,
-      jev_rerank_evaluation_id: 'rerank-1',
-    }));
-    expect(screen.getByText('3', { selector: '.query-console-results strong' }))
-      .toBeInTheDocument();
+    expect(globalThis.fetch.mock.calls.some(([input]) => (
+      new URL(String(input), 'http://localhost').pathname.includes('/rerank/evaluations')
+    ))).toBe(false);
   });
 
   it('keeps an in-flight facet refresh active while changing pages', async () => {

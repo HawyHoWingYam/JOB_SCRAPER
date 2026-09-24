@@ -19,7 +19,6 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.ai.system_one import NativeSystemOneClient  # noqa: E402
 from app.models.jev import (  # noqa: E402
-    JevBudgetReservation,
     JevRun,
     JevRunAttempt,
     JevRunItem,
@@ -36,7 +35,6 @@ from app.services.jev_evaluation_corpus import (  # noqa: E402
     verify_real_corpus_artifact,
 )
 from app.services.jev_evaluation_runner import JevEvaluationRunner  # noqa: E402
-from app.services.jev_budget import JevBudgetLedger  # noqa: E402
 from app.services.jev_runtime_settings_service import (  # noqa: E402
     JevRuntimeSettingsService,
 )
@@ -105,9 +103,8 @@ def _report_markdown(report: dict[str, object]) -> str:
         f"unavailable: {execution['unavailable']}; invalid: {execution['invalid']}.",
         "",
         f"Tokens: {execution['input_tokens']} input / "
-        f"{execution['output_tokens']} output. Confirmed microdollars: "
-        f"{execution['actual_microdollars']}; reserved microdollars in "
-        f"observation receipts: {execution['reserved_microdollars']}.",
+        f"{execution['output_tokens']} output. Provider-reported microdollars: "
+        f"{execution['provider_reported_microdollars']}.",
         "",
         f"Latency p50/p95 ms: {execution['latency_ms_p50'] or 'not_evaluable'} / "
         f"{execution['latency_ms_p95'] or 'not_evaluable'}.",
@@ -160,7 +157,6 @@ def _evaluation_session(args, api_key: str):
     engine = create_engine(f"sqlite:///{args.state_db}")
     for table in (
         JevRuntimeSettings.__table__,
-        JevBudgetReservation.__table__,
         JevRun.__table__,
         JevRunItem.__table__,
         JevRunAttempt.__table__,
@@ -173,8 +169,6 @@ def _evaluation_session(args, api_key: str):
             "endpoint": args.endpoint,
             "model": args.model,
             "api_key": api_key,
-            "allowance_microdollars": args.allowance_microdollars,
-            "max_request_reservation_microdollars": args.max_request_microdollars,
             "retry_limit": 0,
         }
     )
@@ -214,7 +208,6 @@ async def _run_paid(args) -> dict[str, object]:
             "selected": len(cases),
             "completed_observations": len(observations),
             "stopped_early": len(observations) < len(cases),
-            "allowance": JevBudgetLedger(db).snapshot(),
         }
     finally:
         await client.aclose()
@@ -236,8 +229,6 @@ def _parser() -> argparse.ArgumentParser:
         "--split", choices=("development", "held_out"), default="development"
     )
     plan.add_argument("--limit", type=int, default=1)
-    plan.add_argument("--max-request-microdollars", type=int, required=True)
-    plan.add_argument("--allowance-microdollars", type=int, default=10_000_000)
 
     export = sub.add_parser("export-real")
     export.add_argument("--database-url", required=True)
@@ -255,8 +246,6 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--endpoint", default="https://www.rsiai.net/v1/systemone")
     run.add_argument("--model", default="jev-latest")
     run.add_argument("--credential-file", type=Path)
-    run.add_argument("--allowance-microdollars", type=int, default=10_000_000)
-    run.add_argument("--max-request-microdollars", type=int, required=True)
     run.add_argument("--timeout-seconds", type=int, default=30)
     run.add_argument("--confirm-paid-evaluation", action="store_true")
 
@@ -286,15 +275,13 @@ def main(argv: list[str] | None = None) -> int:
                 for case in load_controlled_cases(args.controlled)
                 if case.split == args.split
             ][: args.limit]
-            maximum = len(cases) * args.max_request_microdollars
             result = {
                 "selected": len(cases),
-                "maximum_microdollars": maximum,
-                "fits_allowance": maximum <= args.allowance_microdollars,
+                "monetary_authority": "jev_api_console",
                 "paid_requests_started": 0,
             }
             print(json.dumps(result, sort_keys=True))
-            return 0 if result["fits_allowance"] else 3
+            return 0
         if args.command == "export-real":
             engine = create_engine(args.database_url)
             try:

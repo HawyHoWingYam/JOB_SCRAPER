@@ -9,7 +9,6 @@ from app.models.job import Job
 from app.models.jev import JevRunItem, JevSearchRerankEvaluation
 from app.search.deterministic_order import apply_deterministic_lexical_order
 from app.search.lexical_query import build_lexical_query
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.job_search_facets import JobSearchFacets
 from app.services.jev_run_service import JevRunService
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
@@ -99,15 +98,7 @@ class JevSearchRerankService:
         if evaluation.status in {"completed", "completed_with_failures"}:
             return evaluation
         runs = JevRunService(self.db)
-        try:
-            item = await runs.execute_next(evaluation.jev_run_id, evaluator=evaluator)
-        except JevBudgetExhaustedError:
-            evaluation.status = "completed_with_failures"
-            evaluation.error_code = "jev_allowance_exhausted"
-            evaluation.ordered_job_ids = list(evaluation.baseline_job_ids)
-            evaluation.completed_at = utc_now()
-            self.db.flush()
-            raise
+        item = await runs.execute_next(evaluation.jev_run_id, evaluator=evaluator)
         if item is None:
             raise RuntimeError("search rerank run did not yield its work item")
         self._apply_item(evaluation, item)

@@ -25,7 +25,6 @@ RUNTIME_TABLE_NAMES = (
     "enrichment_runs",
     "event_outbox",
     "job_embeddings",
-    "jev_budget_reservations",
     "jev_crawl_quality_evaluations",
     "jev_crawl_quality_observations",
     "jev_duplicate_associations",

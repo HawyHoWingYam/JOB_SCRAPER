@@ -38,6 +38,10 @@ Persistence is owned by `current_taxonomy_nodes`,
   silently promoted into ordinary Skill reads or filters.
 - Exact names, aliases, and explicit generic/rejected rules are deterministic;
   new governed Skills require operator confirmation.
+- Ordinary AI Skill evidence is a usable baseline. Current-evidence Jev
+  correction may add, reject, or remap automated evidence, while operator
+  decisions remain active across later AI/Jev projections. Changed Job evidence
+  invalidates Jev applicability without deleting its historical Mentions.
 - Taxonomy bootstrap is idempotent and never overwrites operator-owned nodes.
 - Baseline manifest upgrades are additive on a non-empty sandbox: missing
   governed nodes and aliases are installed, while existing/operator-owned

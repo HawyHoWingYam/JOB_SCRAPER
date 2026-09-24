@@ -9,9 +9,6 @@ import {
   decideSkillCandidate,
   fetchSkillCandidates,
   fetchSkillMaintenanceStatus,
-  previewJevSkillBackfill,
-  runSkillMaintenanceNow,
-  startJevSkillBackfill,
 } from '../../api/skillCandidates';
 
 vi.mock('../../api/currentTaxonomies', () => ({ fetchCurrentSkillTree: vi.fn() }));
@@ -20,9 +17,6 @@ vi.mock('../../api/skillCandidates', () => ({
   decideSkillCandidate: vi.fn(),
   fetchSkillCandidates: vi.fn(),
   fetchSkillMaintenanceStatus: vi.fn(),
-  previewJevSkillBackfill: vi.fn(),
-  runSkillMaintenanceNow: vi.fn(),
-  startJevSkillBackfill: vi.fn(),
 }));
 
 const candidate = {
@@ -53,9 +47,6 @@ describe('ClassificationBatchesPage', () => {
       eligibility: { enabled: true, eligible_count: 1, minimum_count: 50, can_start: false, reason: 'insufficient_candidates' },
       latest_batch: null,
     });
-    runSkillMaintenanceNow.mockResolvedValue({ dispatched: false, reason: 'insufficient_candidates', batch: null });
-    previewJevSkillBackfill.mockResolvedValue({ eligible_count: 12, already_current_count: 30, reserved_count: 2, selected_item_count: 12 });
-    startJevSkillBackfill.mockResolvedValue({ id: 'backfill-run-1', total_items: 12 });
     approveSkillMaintenance.mockResolvedValue({ status: 'applied', applied_changes: [], held_for_approval_count: 0 });
     decideSkillCandidate.mockResolvedValue({ resolved_skill_code: 'typescript' });
   });
@@ -135,7 +126,8 @@ describe('ClassificationBatchesPage', () => {
     render(<ClassificationBatchesPage />);
     expect(await screen.findByText('Frontend Engineer')).toBeInTheDocument();
     expect(await screen.findByText(/Could not load maintenance status: Maintenance offline/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run maintenance now' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: /Open Jev Operations to run maintenance/ }))
+      .toHaveAttribute('href', '#jev');
     expect(screen.getByText('Jev recommends keeping this Candidate')).toBeInTheDocument();
   });
 
@@ -157,15 +149,11 @@ describe('ClassificationBatchesPage', () => {
     expect(await screen.findByRole('heading', { name: 'Python' })).toBeInTheDocument();
   });
 
-  it('runs a free maintenance eligibility path without treating it as approval', async () => {
-    const user = userEvent.setup();
+  it('routes maintenance execution to the unified manual Jev console', async () => {
     render(<ClassificationBatchesPage />);
     await screen.findByRole('heading', { name: 'Skills to review' });
-
-    await user.click(screen.getByRole('button', { name: 'Run maintenance now' }));
-
-    await waitFor(() => expect(runSkillMaintenanceNow).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole('status')).toHaveTextContent('No provider call: insufficient_candidates.');
+    expect(screen.getByRole('link', { name: /Open Jev Operations to run maintenance/ }))
+      .toHaveAttribute('href', '#jev');
   });
 
   it('shows the complete new-Skill diff before aggregate approval', async () => {
@@ -193,20 +181,10 @@ describe('ClassificationBatchesPage', () => {
     expect(screen.getByRole('button', { name: 'Approve proposed Skills' })).toBeVisible();
   });
 
-  it('previews a free bounded historical backfill before queueing it', async () => {
-    const user = userEvent.setup();
+  it('routes historical correction execution to the unified manual Jev console', async () => {
     render(<ClassificationBatchesPage />);
     await screen.findByRole('heading', { name: 'Skills to review' });
-
-    await user.clear(screen.getByLabelText('Jev Skill backfill limit'));
-    await user.type(screen.getByLabelText('Jev Skill backfill limit'), '12');
-    await user.click(screen.getByRole('button', { name: 'Preview backfill' }));
-
-    await waitFor(() => expect(previewJevSkillBackfill).toHaveBeenCalledWith(12));
-    expect(screen.getByText(/12 eligible · 30 already current · 2 reserved · 12 selected/)).toBeVisible();
-    expect(screen.getByRole('status')).toHaveTextContent('free database read');
-    await user.click(screen.getByRole('button', { name: 'Start bounded backfill' }));
-    await waitFor(() => expect(startJevSkillBackfill).toHaveBeenCalledWith(12));
-    expect(await screen.findByRole('status')).toHaveTextContent('backfill-run-1');
+    expect(screen.getByRole('link', { name: 'Open Jev Operations' }))
+      .toHaveAttribute('href', '#jev');
   });
 });

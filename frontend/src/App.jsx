@@ -20,6 +20,7 @@ const OfferTodayKeywordPacksPage = lazy(
 );
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
+const JevOperationsPage = lazy(() => import('./components/jev/JevOperationsPage'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
 const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
 const TaskControlWizard = lazy(
@@ -99,6 +100,7 @@ function App() {
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
+            {activeView === 'jev' && <JevOperationsPage />}
             {activeView === 'classification' && (
               <ClassificationBatchesPage
                 routeHash={locationHash}

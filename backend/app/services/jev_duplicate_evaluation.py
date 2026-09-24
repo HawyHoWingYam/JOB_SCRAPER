@@ -363,11 +363,8 @@ def score_duplicate_evaluation(
         "execution": {
             "input_tokens": sum(item.input_tokens for item in observations),
             "output_tokens": sum(item.output_tokens for item in observations),
-            "actual_microdollars": sum(
-                item.actual_microdollars for item in observations
-            ),
-            "reserved_microdollars": sum(
-                item.reserved_microdollars for item in observations
+            "provider_reported_microdollars": sum(
+                item.actual_microdollars or 0 for item in observations
             ),
             "latency_ms_p50": _percentile(latencies, 0.50),
             "latency_ms_p95": _percentile(latencies, 0.95),

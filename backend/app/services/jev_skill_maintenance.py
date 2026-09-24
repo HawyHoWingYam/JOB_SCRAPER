@@ -24,7 +24,6 @@ from app.services.classification_domain_adapters import (
     SkillPlacementDecision,
 )
 from app.services.jev_evaluation import SkillOption, rank_skill_options
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.jev_run_service import JevRunService
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
 from app.utils.time import as_utc, utc_now
@@ -146,7 +145,6 @@ class JevSkillMaintenanceService:
             candidate_ids=[str(candidate.id) for candidate in candidates],
             settings_snapshot={
                 "model": settings.maintenance_model,
-                "allowance_microdollars": settings.maintenance_allowance_microdollars,
                 "interval_days": settings.maintenance_interval_days,
                 "minimum_candidates": settings.maintenance_min_candidates,
                 "batch_size": settings.maintenance_batch_size,
@@ -184,21 +182,10 @@ class JevSkillMaintenanceService:
             raise ValueError("maintenance batch has no Jev run")
         batch.status = "running"
         batch.started_at = batch.started_at or utc_now()
-        try:
-            item = await JevRunService(self.db).execute_next(
-                batch.jev_run_id,
-                evaluator=evaluator,
-            )
-        except JevBudgetExhaustedError:
-            batch.status = "unavailable"
-            batch.error_code = "jev_allowance_exhausted"
-            batch.receipt = {
-                "status": "unavailable",
-                "error_code": batch.error_code,
-            }
-            batch.completed_at = utc_now()
-            self.db.flush()
-            return batch
+        item = await JevRunService(self.db).execute_next(
+            batch.jev_run_id,
+            evaluator=evaluator,
+        )
         if item is None:
             raise ValueError("maintenance run has no executable item")
         if item.status != "completed":

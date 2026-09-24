@@ -27,6 +27,7 @@ from app.models.source_job_attributes import (
 from app.schemas.job_search import (
     JobSearchFiltersSchema,
     JobSearchLayerSchema,
+    JobSearchRequestSchema,
     JobSearchScopeSchema,
 )
 from app.services.job_search_facets import JobSearchFacets
@@ -613,7 +614,7 @@ def test_semantic_and_hybrid_facets_use_the_candidate_scope_without_ranking():
         engine.dispose()
 
 
-def test_post_job_search_applies_layered_date_and_experience_windows():
+def test_post_job_search_applies_layered_date_and_experience_windows(monkeypatch):
     db, engine = _facet_session()
     try:
         company = Company(
@@ -668,6 +669,18 @@ def test_post_job_search_applies_layered_date_and_experience_windows():
                     experience_min_years=None,
                     experience_max_years=None,
                 ),
+                Job(
+                    job_id="wide-range-role",
+                    source_site="jobsdb",
+                    source_job_id="wide-range-role",
+                    company=company,
+                    title="Wide range role",
+                    posted_date=datetime(2026, 7, 15, 12, 30),
+                    experience_level="mid_level",
+                    experience_min_years=1,
+                    experience_max_years=5,
+                    experience_evidence=["One to five years of experience"],
+                ),
             ]
         )
         db.commit()
@@ -699,7 +712,16 @@ def test_post_job_search_applies_layered_date_and_experience_windows():
             "date-boundary-unspecified",
             "date-boundary-senior",
             "unknown-without-entry-signal",
+            "wide-range-role",
         }
+        senior_payload = next(
+            job
+            for job in date_response.json()["jobs"]
+            if job["job_id"] == "date-boundary-senior"
+        )
+        assert senior_payload["experience_level"] == "senior"
+        assert senior_payload["experience_min_years"] == 5
+        assert senior_payload["experience_max_years"] == 8
 
         layered_response = client.post(
             "/api/jobs/search",
@@ -727,8 +749,61 @@ def test_post_job_search_applies_layered_date_and_experience_windows():
         )
         assert layered_response.status_code == 200
         assert [job["job_id"] for job in layered_response.json()["jobs"]] == [
-            "date-boundary-unspecified"
+            "date-boundary-unspecified",
+            "wide-range-role",
         ]
+
+        overlap_response = client.post(
+            "/api/jobs/search",
+            json={
+                "scope": {
+                    "layers": [
+                        {
+                            "client_id": "root",
+                            "structured_filters": {
+                                "experience_years_from": 3,
+                                "experience_years_to": 4,
+                            },
+                        }
+                    ]
+                },
+                "include_facets": False,
+            },
+        )
+        assert overlap_response.status_code == 200
+        assert [job["job_id"] for job in overlap_response.json()["jobs"]] == [
+            "wide-range-role"
+        ]
+        assert overlap_response.json()["jobs"][0]["experience_evidence"] == [
+            "One to five years of experience"
+        ]
+
+        overlap_scope = JobSearchScopeSchema(
+            layers=[
+                JobSearchLayerSchema(
+                    client_id="root",
+                    structured_filters=JobSearchFiltersSchema(
+                        experience_years_from=3,
+                        experience_years_to=4,
+                    ),
+                )
+            ]
+        )
+        monkeypatch.setattr(
+            jobs_api,
+            "_build_export_rows",
+            lambda query: [job.job_id for job, _company in query.all()],
+        )
+        for retrieval_mode in ("lexical", "semantic", "hybrid"):
+            request = JobSearchRequestSchema(
+                scope=overlap_scope,
+                retrieval_mode=retrieval_mode,
+                include_facets=False,
+            )
+            service = retrieval_service_module.RetrievalService(db)
+            result = service.search(request)
+            assert [job.job_id for job in result.jobs] == ["wide-range-role"]
+            assert service._collect_export_rows(request) == ["wide-range-role"]
 
         reversed_response = client.post(
             "/api/jobs/search",

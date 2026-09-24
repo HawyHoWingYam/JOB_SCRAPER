@@ -28,36 +28,8 @@ export async function getCrawlQuality(taskId, { signal } = {}) {
   );
 }
 
-export async function previewCrawlQuality(taskId, limit) {
-  return apiFetchJson(
-    apiPath(`/crawl-jobs/tasks/${encodeURIComponent(taskId)}/quality/preview`),
-    json({ limit }),
-  );
-}
-
-export async function evaluateCrawlQuality(taskId, limit) {
-  return apiFetchJson(
-    apiPath(`/crawl-jobs/tasks/${encodeURIComponent(taskId)}/quality/evaluations`),
-    json({ limit }),
-  );
-}
-
 export async function getIncidentTriage({ signal } = {}) {
   return apiFetchJson(apiPath('/crawl-jobs/incident-triage'), { signal });
-}
-
-export async function previewIncidentTriage(eventLimit) {
-  return apiFetchJson(
-    apiPath('/crawl-jobs/incident-triage/preview'),
-    json({ event_limit: eventLimit }),
-  );
-}
-
-export async function evaluateIncidentTriage(evaluationId) {
-  return apiFetchJson(
-    apiPath(`/crawl-jobs/incident-triage/evaluations/${encodeURIComponent(evaluationId)}`),
-    json({}),
-  );
 }
 
 export async function transitionAutomation(automationId, action) {

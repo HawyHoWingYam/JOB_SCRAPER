@@ -1,0 +1,16 @@
+.jev-page { display: grid; gap: 1.25rem; }
+.jev-page-header, .jev-row-between, .jev-actions, .jev-preview { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.jev-page-header h1, .jev-section h2, .jev-tool-grid h3 { margin: 0; }
+.jev-lead, .jev-muted { color: var(--text-secondary); }
+.jev-section { padding: 1.25rem; display: grid; gap: 1rem; }
+.jev-form-grid, .jev-tool-grid, .jev-progress-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .85rem; }
+.jev-form-grid label, .jev-tool-grid article, .jev-operation-picker, .jev-force { display: grid; gap: .45rem; }
+.jev-form-grid input, .jev-form-grid textarea, .jev-form-grid select, .jev-tool-grid input { width: 100%; }
+.jev-operation-picker { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); border: 1px solid var(--glass-border); padding: .85rem; }
+.jev-operation-picker legend { padding: 0 .4rem; }
+.jev-operation-picker label, .jev-force { display: flex; align-items: center; gap: .45rem; }
+.jev-preview { padding: .85rem; border: 1px solid var(--glass-border); border-radius: .75rem; }
+.jev-batch-card { padding: 1rem; display: grid; gap: .75rem; }
+.jev-item-list { max-height: 14rem; overflow: auto; }
+.jev-tool-grid article { padding: 1rem; border: 1px solid var(--glass-border); border-radius: .75rem; align-content: start; }
+.jev-tool-grid pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; font-size: .75rem; }

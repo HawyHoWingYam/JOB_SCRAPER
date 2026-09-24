@@ -117,6 +117,7 @@ class JevDuplicateAssociationService:
         *,
         candidate_limit: int = 3,
         corpus_limit: int = 200,
+        force: bool = False,
     ) -> DuplicateEvaluationPlan:
         if not 1 <= candidate_limit <= 10:
             raise ValueError("candidate_limit must be between 1 and 10")
@@ -171,10 +172,12 @@ class JevDuplicateAssociationService:
             left_job = jobs_by_identity[candidate.left_identity]
             right_job = jobs_by_identity[candidate.right_identity]
             canonical = _canonical_pair(left_job, right_job)
-            if self._exact(canonical[4], canonical[5]) is not None:
+            existing = self._exact(canonical[4], canonical[5])
+            if existing is not None and not force:
                 skipped += 1
                 continue
-            items.append(self._run_item(candidate, canonical))
+            generation = (existing.attempt_generation if existing is not None else 0) + 1
+            items.append(self._run_item(candidate, canonical, generation=generation))
         if not items:
             return DuplicateEvaluationPlan(None, 0, skipped)
         run = JevRunService(self.db).start(
@@ -286,7 +289,8 @@ class JevDuplicateAssociationService:
         metadata = item.payload.get("association") or {}
         pair_key = str(metadata["pair_key"])
         fingerprint = str(metadata["input_fingerprint"])
-        existing = self._exact(pair_key, fingerprint)
+        generation = int(metadata.get("attempt_generation") or 1)
+        existing = self._exact(pair_key, fingerprint, attempt_generation=generation)
         if existing is not None:
             return existing
         result = item.result if isinstance(item.result, dict) else {}
@@ -306,6 +310,7 @@ class JevDuplicateAssociationService:
         row = JevDuplicateAssociation(
             pair_key=pair_key,
             input_fingerprint=fingerprint,
+            attempt_generation=generation,
             left_job_id=UUID(str(metadata["left_job_id"])),
             right_job_id=UUID(str(metadata["right_job_id"])),
             left_source_identity=str(metadata["left_source_identity"]),
@@ -326,7 +331,13 @@ class JevDuplicateAssociationService:
         self.db.flush()
         return row
 
-    def _run_item(self, candidate: DuplicateCandidate, canonical) -> dict[str, object]:
+    def _run_item(
+        self,
+        candidate: DuplicateCandidate,
+        canonical,
+        *,
+        generation: int,
+    ) -> dict[str, object]:
         left_job, left, right_job, right, pair_key, fingerprint = canonical
         return {
             "subject_id": pair_key,
@@ -356,6 +367,7 @@ class JevDuplicateAssociationService:
                 "association": {
                     "pair_key": pair_key,
                     "input_fingerprint": fingerprint,
+                    "attempt_generation": generation,
                     "left_job_id": str(left_job.id),
                     "right_job_id": str(right_job.id),
                     "left_source_identity": _identity(left),
@@ -421,12 +433,23 @@ class JevDuplicateAssociationService:
             raise KeyError(job_id)
         return job
 
-    def _exact(self, pair_key: str, input_fingerprint: str):
-        return self.db.scalar(
-            select(JevDuplicateAssociation).where(
+    def _exact(
+        self,
+        pair_key: str,
+        input_fingerprint: str,
+        *,
+        attempt_generation: int | None = None,
+    ):
+        query = select(JevDuplicateAssociation).where(
                 JevDuplicateAssociation.pair_key == pair_key,
                 JevDuplicateAssociation.input_fingerprint == input_fingerprint,
             )
+        if attempt_generation is not None:
+            query = query.where(
+                JevDuplicateAssociation.attempt_generation == attempt_generation
+            )
+        return self.db.scalar(
+            query.order_by(JevDuplicateAssociation.attempt_generation.desc()).limit(1)
         )
 
     def _is_current(self, row: JevDuplicateAssociation) -> bool:

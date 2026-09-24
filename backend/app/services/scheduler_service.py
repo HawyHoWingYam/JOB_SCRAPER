@@ -26,7 +26,6 @@ from app.services.source_sites import is_supported_source_site
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
-JEV_MAINTENANCE_JOB_ID = "system:jev-skill-maintenance"
 
 
 def _build_runtime_scheduler() -> AsyncIOScheduler:
@@ -51,11 +50,6 @@ async def run_scheduled_crawl_job(
         UUID(str(schedule_id)),
         trigger_type=trigger_type,
     )
-
-
-async def run_scheduled_jev_skill_maintenance():
-    """Serializable APScheduler entrypoint for durable Skill maintenance."""
-    return await SchedulerService.get_instance()._run_jev_skill_maintenance()
 
 
 class SchedulerService:
@@ -119,7 +113,6 @@ class SchedulerService:
         self._started_at = utc_now()
 
         await self.reconcile_schedules()
-        self._register_jev_maintenance_job()
         self._write_runtime_heartbeat(status="running")
 
         if self._heartbeat_task is None or self._heartbeat_task.done():
@@ -214,20 +207,6 @@ class SchedulerService:
             logger.exception("Failed to add job %s", schedule.name)
             return False
 
-    def _register_jev_maintenance_job(self) -> None:
-        if self.scheduler is None:
-            return
-        self.scheduler.add_job(
-            run_scheduled_jev_skill_maintenance,
-            trigger="interval",
-            seconds=settings.jev_maintenance_poll_interval_seconds,
-            id=JEV_MAINTENANCE_JOB_ID,
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            next_run_time=utc_now(),
-        )
-
     async def reconcile_schedules(self) -> None:
         """Rebuild APScheduler state from `scrape_schedules`."""
         if self.scheduler is None:
@@ -249,8 +228,6 @@ class SchedulerService:
                     db.add(schedule)
 
             for job in list(self.scheduler.get_jobs()):
-                if str(job.id) == JEV_MAINTENANCE_JOB_ID:
-                    continue
                 if str(job.id) not in active_job_ids:
                     self.scheduler.remove_job(job.id)
                     try:
@@ -278,55 +255,6 @@ class SchedulerService:
             )
             raise
         finally:
-            db.close()
-
-    async def _run_jev_skill_maintenance(self):
-        """Resume pending maintenance or perform one free scheduled eligibility check."""
-        from app.services.jev_evaluator_factory import build_jev_evaluator
-        from app.services.jev_run_service import JevRunConfigurationError, JevRunService
-        from app.services.jev_skill_maintenance import JevSkillMaintenanceService
-
-        db = SessionLocal()
-        evaluator = None
-        batch = None
-        try:
-            service = JevSkillMaintenanceService(db)
-            batch = service.pending()
-            if batch is None:
-                eligibility, batch = service.start(trigger="scheduled")
-                db.commit()
-                if batch is None:
-                    logger.debug(
-                        "Jev Skill maintenance not dispatched: %s",
-                        eligibility.reason,
-                    )
-                    return None
-            else:
-                db.commit()
-            run = JevRunService(db).get(batch.jev_run_id)
-            evaluator = build_jev_evaluator(db, run)
-            batch = await service.execute(batch.id, evaluator=evaluator)
-            db.commit()
-            return batch
-        except JevRunConfigurationError:
-            db.rollback()
-            if batch is not None:
-                service = JevSkillMaintenanceService(db)
-                service.mark_unavailable(
-                    batch.id,
-                    error_code="configuration_error",
-                )
-                db.commit()
-            logger.exception("Scheduled Jev Skill maintenance configuration failed")
-            return None
-        except Exception:
-            db.rollback()
-            logger.exception("Scheduled Jev Skill maintenance failed")
-            return None
-        finally:
-            close = getattr(evaluator, "aclose", None)
-            if close is not None:
-                await close()
             db.close()
 
     def _write_runtime_heartbeat(

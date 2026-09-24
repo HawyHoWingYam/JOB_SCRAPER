@@ -114,6 +114,10 @@ _Avoid_: Verified Job fact, automatic correction
 A reviewable relationship between separately retained Job records that may describe the same vacancy. It does not establish shared identity or replace either source record.
 _Avoid_: Merged Job, confirmed duplicate
 
+**Related Job**:
+A separately retained Job recommended because its work or requirements are relevant to another Job. Relatedness does not assert that the two records describe the same vacancy.
+_Avoid_: Duplicate Job, same vacancy
+
 **Stale Job Intelligence**:
 Previously generated Job Intelligence whose supporting Job facts have since changed. It remains traceable but does not represent the current Job until successful replacement.
 _Avoid_: Current enrichment, failed enrichment
@@ -163,6 +167,14 @@ Unresolved company-level industry evidence awaiting a Taxonomy Operator decision
 _Avoid_: AI-assigned industry, free-text Industry
 
 ## Skill taxonomy
+
+**AI Skill Baseline**:
+The Skill findings produced by ordinary AI enrichment for a Job, before a separate Jev correction. Findings may resolve to governed Skills or remain unresolved evidence.
+_Avoid_: Jev-validated Skills, new taxonomy Skills
+
+**Jev Skill Correction**:
+A second-pass assessment that may add, correct, or remove AI-generated Skill findings for a Job. It does not override operator-authored corrections or itself authorize creation of new governed Skills.
+_Avoid_: Initial Skill extraction, automatic taxonomy approval
 
 **Skill**:
 A governed technical capability accepted into the project's Skill Taxonomy. Only Skills participate in ordinary skill search, recommendations, and analytics.

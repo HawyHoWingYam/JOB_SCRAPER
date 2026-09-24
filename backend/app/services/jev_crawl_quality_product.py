@@ -16,7 +16,6 @@ from app.models.jev import (
     JevCrawlQualityObservation,
     JevRunItem,
 )
-from app.services.jev_budget import JevBudgetExhaustedError
 from app.services.jev_run_service import JevRunService
 from app.utils.time import utc_now
 
@@ -188,28 +187,10 @@ class JevCrawlQualityProductService:
         evaluation.status = "running"
         runs = JevRunService(self.db)
         while True:
-            try:
-                item = await runs.execute_next(
-                    evaluation.jev_run_id,
-                    evaluator=evaluator,
-                )
-            except JevBudgetExhaustedError:
-                failed_item = self.db.scalar(
-                    select(JevRunItem)
-                    .where(
-                        JevRunItem.run_id == evaluation.jev_run_id,
-                        JevRunItem.error_code == "jev_allowance_exhausted",
-                    )
-                    .order_by(JevRunItem.position.desc())
-                    .limit(1)
-                )
-                if failed_item is not None:
-                    self._persist_observation(evaluation, failed_item)
-                evaluation.status = "completed_with_failures"
-                evaluation.error_code = "jev_allowance_exhausted"
-                evaluation.completed_at = utc_now()
-                self.db.flush()
-                raise
+            item = await runs.execute_next(
+                evaluation.jev_run_id,
+                evaluator=evaluator,
+            )
             if item is None:
                 break
             self._persist_observation(evaluation, item)

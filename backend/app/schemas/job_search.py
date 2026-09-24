@@ -209,6 +209,10 @@ class JobWithCompanySchema(BaseModel):
     employment_type: Optional[str] = None
     company_name: Optional[str] = None
     posted_date: Optional[str] = None
+    experience_level: Optional[str] = None
+    experience_min_years: Optional[int] = None
+    experience_max_years: Optional[int] = None
+    experience_evidence: Optional[List[str]] = None
     source_classification_paths: List[SourceClassificationPathSchema] = Field(
         default_factory=list
     )

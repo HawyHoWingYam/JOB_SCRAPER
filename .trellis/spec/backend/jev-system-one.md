@@ -1,13 +1,14 @@
-# Jev System One Settings and Bounded Runs
+# Jev System One Settings and Manually Started Runs
 
-## Scenario: budgeted native System One decisions
+## Scenario: native System One decisions with provider-managed monetary limits
 
 ### 1. Scope / Trigger
 
 Use this contract whenever code configures Jev, sends a native System One
-request, accounts for Jev allowance, exposes a bounded run, or renders Jev run
-operations in the Settings UI. Jev is not an LLM chat-provider profile and must
-not be routed through the existing chat/completions clients.
+request, exposes a bounded run, or renders Jev operations. Jev is not an LLM
+chat-provider profile and must not be routed through the existing
+chat/completions clients. Monetary limits belong exclusively to the Jev API
+Console; this application must not keep a parallel allowance or spending gate.
 
 ### 2. Signatures
 
@@ -23,13 +24,18 @@ POST /api/jev/runs/{run_id}/execute-next
 POST /api/jev/runs/{run_id}/stop
 POST /api/jev/runs/{run_id}/resume
 POST /api/jev/runs/{run_id}/retry-failed
+POST /api/jev/operations/preview
+POST /api/jev/operations/batches
+GET  /api/jev/operations/batches
+POST /api/jev/operations/batches/{batch_id}/stop
+POST /api/jev/operations/batches/{batch_id}/resume
+POST /api/jev/operations/batches/{batch_id}/retry-failed
 ```
 
 Owned database tables:
 
 ```text
 jev_runtime_settings
-jev_budget_reservations
 jev_runs
 jev_run_items
 jev_run_attempts
@@ -45,54 +51,49 @@ credential. Do not append `/v1/systemone` in the adapter.
 
 ### 3. Contracts
 
-- Settings store `enabled`, full endpoint, model, masked secret state, integer
-  microdollar allowance/rates/maximum request reservation, sample and question
-  limits, concurrency, retry limit, timeout, and fixed-millis evidence and
-  recommendation thresholds.
-- Default cumulative allowance is `10_000_000` microdollars (USD 10). Spent and
-  reserved amounts survive retries and process restarts. A Settings update may
-  not lower allowance below `spent + reserved`.
+- Settings store `enabled`, full endpoint, model, masked secret state, sample
+  and question limits, concurrency, retry limit, timeout, and fixed-millis
+  evidence and recommendation thresholds. They contain no allowance, local
+  price, reservation, or cost-ceiling fields.
 - Blank `jev.api_key` preserves the saved secret. GET responses expose only
   `has_api_key` and `api_key_preview`; run snapshots store only a SHA-256 key
   fingerprint, never the credential.
-- A run freezes endpoint, model, price bounds, work membership/order, rubric,
+- A run freezes endpoint, model, work membership/order, rubric,
   retry/concurrency limits, thresholds, and key fingerprint. Later Settings
   edits affect only later runs.
-- Every external attempt atomically reserves its configured positive
-  `max_request_reservation_microdollars` before dispatch. Known input/output
-  token rates reconcile validated usage in integer microdollars, rounded up:
-
-  ```text
-  ceil((input_tokens * input_rate + output_tokens * output_rate) / 1_000_000)
-  ```
-
-  An explicitly validated provider `usage.cost` in USD takes precedence and is
-  rounded up to integer microdollars. Without provider cost or both verified
-  rates, a successful request conservatively settles the full maximum.
-  Transport ambiguity or a calculated charge above the maximum
-  retains the reservation as `uncertain`; it is never silently released.
+- Provider `usage.cost`, when present and validated, may be rounded to integer
+  microdollars and retained strictly as audit telemetry. Missing provider cost
+  stays unknown: never estimate it from tokens, reserve it, compare it with a
+  local ceiling, or block dispatch. The Jev API Console is the sole monetary
+  authority.
 - Native request JSON is `{state, model, questions}`. Named questions use
   `noul`, `choice`, or `score`. Responses must return the exact question names
   and matching answer types, a model, bounded probabilities, non-negative token
   usage, and measured `latency_ms` in the persisted receipt. OpenRouter's
   documented `id`, `provider`, and `usage.cost` receipt fields are accepted and
   persisted when present; unrecognized fields remain schema errors.
-- Reading Settings/run state and saving defaults never calls System One. Paid
-  work starts only at the explicit `execute-next` seam (the UI smoke action
-  first creates one bounded run, then explicitly executes its only item).
-- The Settings page owns basic/advanced controls and run operations. It renders
-  allowance as locally calculated guardrail data, not provider billing truth.
+- Reading Settings/run state, saving defaults and previewing work never calls
+  System One. Provider work starts only after an explicit operator action from
+  the unified Jev Operations page. The smoke action first creates one bounded
+  run, then explicitly executes its only item.
+- The Settings page owns credentials, model and operational defaults. Preview,
+  Start, Stop, Resume, Retry, smoke and all other Jev execution controls live on
+  the unified Jev Operations page.
 - Online Skill classification and historical backfill use the same dispatch
   builder for the input fingerprint. Backfill preview recomputes that exact
   fingerprint from frozen original candidate/evidence plus the current Job,
   taxonomy and runtime identity; a parallel approximation is forbidden.
+- Ordinary AI enrichment never creates or executes Online Skill classification.
+  It first publishes a usable AI Skill baseline. Jev Skill classification is a
+  separately and explicitly started correction pass; unavailable Jev preserves
+  the current usable projection.
 - Job Detail and Candidate reads whitelist audit fields (`status`, model,
   request ID, reported cost and error code). They never expose credentials,
   endpoint configuration, full answers or evidence snapshots and never call the
   provider.
-- Stronger-model Skill maintenance has a separate model and cumulative budget.
-  Its scheduler performs a free eligibility check, persists recoverable work
-  before dispatch, and allows at most one pending/running batch. SQLite
+- Stronger-model Skill maintenance has a separate model. It has no scheduler or
+  automatic start path: an operator starts it from Jev Operations. It persists
+  recoverable work before dispatch and allows at most one pending/running batch. SQLite
   timestamps read without `tzinfo` are interpreted as UTC before comparison.
 - New Skill proposals remain a visible aggregate diff containing the frozen
   batch/taxonomy identity, candidate, parent Technology and both confidences.
@@ -103,29 +104,28 @@ credential. Do not append `/v1/systemone` in the adapter.
 | Condition | Required behavior |
 |---|---|
 | Public non-HTTPS endpoint | Settings `422`; loopback HTTP is test/local only |
-| Blank model, invalid limit/threshold/rate | Settings `422` with field location |
-| Allowance below spent plus reserved | Settings `422`; ledger is unchanged |
-| Disabled Jev, missing key, or missing max reservation | Run create `409`; no provider call |
+| Blank model or invalid operational limit/threshold | Settings `422` with field location |
+| Monetary field sent by an obsolete client | Settings `422`; no parallel local limit is accepted |
+| Disabled Jev or missing key | Run create `409`; no provider call |
 | Duplicate active purpose or invalid work | Run create `422`; no provider call |
-| Allowance reservation cannot fit | Execute `409` with `jev_allowance_exhausted` and remaining microdollars |
 | Key changed after run creation | Execute `409`; frozen run is not silently rebound |
-| Timeout/network/non-2xx | Item fails with secret-safe unavailable receipt; charge remains uncertain |
-| Malformed JSON/schema or answer mismatch | Item fails as invalid; charge remains uncertain |
-| Stop before dispatch | Pending items become cancelled; no new reservation |
+| Timeout/network/non-2xx | Item fails with a secret-safe unavailable receipt; no implicit retry |
+| Malformed JSON/schema or answer mismatch | Item fails as invalid; no local cost is invented |
+| Stop before dispatch | Pending items become cancelled; no provider call |
 | Resume non-cancelled run or retry beyond frozen limit | `409`; existing receipts remain unchanged |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** an operator saves masked settings, creates a bounded run, reserves
-  allowance, receives typed answers plus usage/latency, settles actual priced
-  usage, and sees the frozen model and remaining allowance in the UI.
+- **Good:** an operator saves masked settings, previews work for free, explicitly
+  starts a bounded run, receives typed answers plus usage/latency, and sees the
+  frozen model and optional provider-reported cost in the UI.
 - **Base:** Jev is disabled or unavailable. Existing deterministic Job/Skill
   behavior remains unchanged and read surfaces remain usable.
-- **Bad:** page render, Settings save, retry, or process restart creates a new
-  USD 10 pool or sends an unreserved request.
-- **Bad:** treat token usage as a trustworthy dollar amount without configured
-  rates, release a timeout reservation, return upstream bodies, or persist the
-  bearer credential in run JSON/logs/test artifacts.
+- **Bad:** page render, Settings save, scheduler startup or process restart
+  starts Jev work.
+- **Bad:** recreate provider monetary limits locally, estimate money from token
+  usage, block on a local ceiling, return upstream bodies, or persist the bearer
+  credential in run JSON/logs/test artifacts.
 
 ### 6. Tests Required
 
@@ -133,16 +133,18 @@ credential. Do not append `/v1/systemone` in the adapter.
   usage, deterministic latency, bounded values, non-2xx, transport failure,
   malformed response, answer mismatch, and secret-safe diagnostics.
 - Settings tests assert defaults, partial update, mask/blank-secret behavior,
-  HTTPS/public-HTTP validation, allowance floor, and zero provider calls.
-- Ledger/run tests assert atomic conditional reservation, exact integer
-  settlement, exhaustion, idempotency, uncertain charges, frozen configuration,
-  stable order, stop/resume/retry, retry limit, and no maximum/no dispatch.
-- Route tests assert create/read/list/stop/resume/execute and structured budget
-  exhaustion. The real HTTP integration test uses only a loopback fake server.
+  HTTPS/public-HTTP validation, rejection of obsolete monetary fields, and zero
+  provider calls.
+- Run tests assert optional provider-cost audit, missing-cost non-estimation,
+  idempotency, frozen configuration, stable order, stop/resume/retry and retry
+  limit.
+- Route tests assert create/read/list/stop/resume/execute without allowance
+  projections. The real HTTP integration test uses only a loopback fake server.
 - Browser E2E uses an isolated backend database and loopback fake System One;
   assert save/reload, masked secret, exactly one provider request, typed receipt,
-  usage, allowance change, and old-run frozen model after a Settings edit.
-- Disposable PostgreSQL cutover rehearsal asserts all five Jev tables are
+  usage, optional provider cost, explicit manual start, and old-run frozen model
+  after a Settings edit.
+- Disposable PostgreSQL cutover rehearsal asserts all four core Jev run tables are
   excluded from retained artifacts and empty after rebuild/import/verification.
 
 ### 7. Wrong vs Correct
@@ -150,22 +152,21 @@ credential. Do not append `/v1/systemone` in the adapter.
 #### Wrong
 
 ```python
-# Dispatch first, account later; a concurrent caller can overspend.
-result = await client.evaluate(request)
-settings.spent_microdollars += estimate(result.usage)
+# Recreate provider billing rules locally and block on an estimate.
+if estimated_cost(request) > local_allowance:
+    raise LocalAllowanceExhausted()
 ```
 
 #### Correct
 
 ```python
-reservation = ledger.reserve(attempt_key=attempt_key, microdollars=maximum)
 result = await client.evaluate(request)
-ledger.settle(reservation.id, actual_microdollars=priced_usage)
+attempt.actual_microdollars = provider_reported_cost(result.usage)
 ```
 
-For ambiguous transport failure, call `ledger.mark_uncertain(...)`, not
-`release(...)`. Only a request proven not to have been dispatched may release a
-reservation.
+If the provider omits cost, persist `None`. Operational safety still comes from
+explicit manual start, finite work membership, timeout, concurrency and retry
+bounds—not a second monetary policy engine.
 
 ## Scenario: offline source-preserving duplicate evaluation
 
@@ -188,8 +189,8 @@ hide, delete, canonicalize, or otherwise mutate source Jobs.
   `candidate-pairs.jsonl`, and `policy.json`, with every content file SHA-256
   bound. Raw payloads, raw descriptions, contacts, credentials, and vectors are
   excluded.
-- Each pair asks one bounded choice question. Unavailable, invalid,
-  budget-skipped, and `insufficient` outcomes never become negative evidence.
+- Each pair asks one bounded choice question. Unavailable, invalid, and
+  `insufficient` outcomes never become negative evidence.
 - Frozen gates are candidate recall@10 `>= 0.95`, answered precision `>= 0.95`,
   positive recall `>= 0.80`, false-association rate `<= 0.02`, actionable
   coverage `>= 0.60`, technical failure `<= 0.05`, and option-order stability
@@ -210,7 +211,7 @@ hide, delete, canonicalize, or otherwise mutate source Jobs.
 ## Scenario: offline crawl-content quality evaluation
 
 - Route deterministic WAF/IP block/terminal-unavailable evidence before Jev;
-  do not spend model budget to rediscover source/runtime facts.
+  do not call the provider to rediscover source/runtime facts.
 - Transport/parser failure and missing evidence are `insufficient`, not content
   negatives. Only structurally successful but semantically uncertain content is
   eligible for Jev.
@@ -221,8 +222,8 @@ hide, delete, canonicalize, or otherwise mutate source Jobs.
 - Evaluation may write only Jev run/attempt receipts and local artifacts. It may
   not invoke repair, retry, resume, reset, dispatch, browser-helper, event, or
   product-flag writes.
-- One ambiguous provider failure retains its reservation, stops the sequence,
-  and makes the quality result inconclusive; it is never retried implicitly or
+- One ambiguous provider failure stops the sequence and makes the quality
+  result inconclusive; it is never retried implicitly or
   converted into a quality label.
 
 ## Scenario: offline bounded search relevance evaluation
@@ -234,7 +235,7 @@ hide, delete, canonicalize, or otherwise mutate source Jobs.
   scope.
 - Search pages and exports must slice the same complete deterministic ordering;
   source identity is the final tie key in evaluation artifacts.
-- Provider unavailable/invalid/budget failure returns the baseline order and
+- Provider unavailable/invalid failure returns the baseline order and
   remains a technical evaluation failure.
 - Do not claim relevance improvement without a measured NDCG/MRR comparison on
   frozen held-out judgments. Provider ambiguity yields `inconclusive` and no
@@ -269,7 +270,7 @@ The offline entry point is `backend/scripts/jev_skill_evaluation.py` with
 `validate`, `plan`, `export-real`, `run`, and `report` commands. Controlled
 fixtures are strict JSONL. Real artifacts contain exactly `manifest.json`,
 `cases.jsonl`, and `taxonomy.json`. Paid observations bind the run ID, fixture
-manifest hash, rubric/model identity, reservation receipt, typed outcome,
+manifest hash, rubric/model identity, provider receipt, typed outcome,
 usage, latency, and safe error code.
 
 ### 3. Contracts
@@ -289,13 +290,13 @@ usage, latency, and safe error code.
 - Evidence support and Candidate recommendation are scored separately. Every
   eligible abstained, unavailable, invalid, and unresolved case stays in the
   coverage/error denominator. Reports include provenance/language/source
-  strata, p50/p95 latency, tokens, and integer-microdollar spend.
+  strata, p50/p95 latency, tokens, and optional provider-reported cost.
 - Frozen held-out gates are: evidence answered correctness `>= 0.90`, Candidate
   top-1 correctness `>= 0.85`, technical failure `<= 0.05`, actionable coverage
   `>= 0.60`, and option-reordering stability `>= 0.95`.
-- `run` requires an explicit paid confirmation, a persistent state database,
-  and a positive maximum request reservation. A technical or uncertain result
-  stops the sequence. Process restart must not create a fresh USD 10 pool.
+- `run` requires an explicit paid confirmation and a persistent state database.
+  A technical or uncertain result stops the sequence. Monetary enforcement is
+  delegated to the Jev API Console.
 
 ### 4. Validation & Error Matrix
 
@@ -304,22 +305,22 @@ usage, latency, and safe error code.
 | Fixture hash drift, duplicate ID, or group leakage | Reject before any provider request |
 | Non-PostgreSQL real export | Reject; do not simulate read-only guarantees |
 | Artifact file/hash/schema drift | Fail closed; do not score |
-| Missing paid confirmation or maximum reservation | Reject with zero requests |
-| HTTP/transport/schema failure | Persist safe unavailable/invalid receipt, retain uncertain reservation, stop |
+| Missing paid confirmation | Reject with zero requests |
+| HTTP/transport/schema failure | Persist safe unavailable/invalid receipt and stop |
 | Missing controlled denominator or bilingual independent reference | Report `inconclusive`, never pass |
 | Frozen controlled gate missed | Report `defer` |
 | Every gate/reference requirement met | Report `proceed_limited_review` only |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** validate frozen artifacts, plan against the remaining cumulative
-  allowance, pass one development smoke, run the bounded set, and emit a
+- **Good:** validate frozen artifacts, preview the selected cases without
+  dispatch, pass one development smoke, run the bounded set, and emit a
   reproducible report without product-data writes.
 - **Base:** credentials are invalid or independent references are absent. Keep
   current deterministic behavior and report `inconclusive`.
 - **Bad:** call model agreement accuracy, omit abstentions/errors from a
   denominator, split duplicate/company-connected rows, or rerun after an
-  ambiguous failure without accounting for the uncertain reservation.
+  ambiguous failure without an explicit operator retry.
 
 ### 6. Tests Required
 
@@ -327,8 +328,8 @@ usage, latency, and safe error code.
   coverage, and reordered options.
 - Corpus tests cover PostgreSQL enforcement, minimization, connected grouping,
   temporal split integrity, manifest hashes, and forbidden raw fields.
-- Runner tests cover explicit bounded dispatch, observation bindings,
-  cumulative allowance, stop-on-failure, idempotent resume, and secret safety.
+- Runner tests cover explicit bounded dispatch, observation bindings, optional
+  provider cost, stop-on-failure, idempotent resume, and secret safety.
 - Metric tests cover zero denominators, unresolved/error retention, stability,
   provenance/language strata, latency percentiles, and proceed/defer outcomes.
 - A live smoke uses the configured real endpoint only after local tests pass;
@@ -370,7 +371,7 @@ POST /api/jobs/{job_id}/duplicate-associations/{association_id}/review
 Owned storage is `jev_duplicate_associations`. Future-run Settings fields are
 `duplicate_enabled`, `duplicate_candidate_limit` (1..10), and
 `duplicate_corpus_limit` (2..1000). Product execution uses the existing online
-model, online cumulative allowance and maximum-request reservation.
+model and provider-managed monetary policy.
 
 ### 3. Contracts
 
@@ -384,7 +385,7 @@ model, online cumulative allowance and maximum-request reservation.
 - `same_vacancy` creates only `proposed`; a local operator explicitly confirms
   or rejects it. Neither action mutates either Job.
 - `different_vacancy` is retained as a non-visible rejection. Insufficient,
-  invalid, unavailable and over-budget outcomes never become an association.
+  invalid and unavailable outcomes never become an association.
 - Job Detail reads only current-fingerprint `proposed` and `confirmed` rows.
   Changed/deleted Job evidence makes an old claim non-current without deleting
   its audit record.
@@ -403,7 +404,7 @@ model, online cumulative allowance and maximum-request reservation.
 | No eligible pair or exact current receipt | Return zero new candidates, no paid request |
 | Jev says same vacancy | Persist `proposed`; preserve both Jobs |
 | Jev says different/insufficient | No visible association |
-| Provider unavailable/invalid or budget exhausted | Preserve both Jobs; no confirm control |
+| Provider unavailable/invalid | Preserve both Jobs; no confirm control |
 | Evidence changes after a result | Old result is not returned as current; new fingerprint may run |
 | Same idempotency key/same review | Replay first result and one effective mutation |
 | Same idempotency key/different review | `409` conflict |
@@ -468,12 +469,11 @@ POST /api/crawl-jobs/tasks/{crawl_job_id}/quality/evaluations
 Owned storage is `jev_crawl_quality_evaluations` plus
 `jev_crawl_quality_observations`. Settings fields are
 `crawl_quality_enabled` and `crawl_quality_batch_limit` (default 20, range
-1..100). The slice reuses the frozen online Jev endpoint, model, allowance and
-maximum-request reservation.
+1..100). The slice reuses the frozen online Jev endpoint and model.
 
 ### 3. Contracts
 
-- Preview is a database-only read. It creates no run, reservation or provider
+- Preview is a database-only read. It creates no run or provider
   request and separates eligible, deterministic-excluded and insufficient rows.
 - `manual_action_required`, `terminal_unavailable` and `identity_conflict` are
   deterministic exclusions. Non-completed or evidence-empty rows are
@@ -484,9 +484,8 @@ maximum-request reservation.
 - The typed questions are `quality` and `problem_kind`; source content is
   untrusted evidence, never instructions. Receipts expose only secret-safe model,
   request ID, cost, status, probabilities and error code.
-- Provider unavailable and budget exhaustion are terminal observations, not a
-  negative quality label. Budget exhaustion sends zero provider requests and is
-  persisted as `completed_with_failures / jev_allowance_exhausted`.
+- Provider unavailable is a terminal observation, not a negative quality
+  label. Local monetary admission failures do not exist.
 - The advisory service never changes `CrawlJob.status`,
   `CrawlJobListing.detail_status`, Jobs, events, or dispatch state and exposes no
   retry, repair, resume, cancel or reset action.
@@ -507,7 +506,6 @@ maximum-request reservation.
 | Exact fingerprint already exists | Return/reuse the existing evaluation |
 | Jev answers | Persist observation and secret-safe receipt |
 | Provider unavailable/invalid | Persist failed observation; preserve crawl/listing state |
-| Allowance cannot cover reservation | Persist budget failure; zero provider requests; preserve state |
 | Test database lacks `_test` suffix | Refuse before engine open, DDL or cleanup |
 
 ### 5. Good / Base / Bad Cases
@@ -515,7 +513,7 @@ maximum-request reservation.
 - **Good:** preview one eligible listing for free, explicitly evaluate it, show
   `quality_problem / listing_or_template` with receipt and leave crawl state
   completed.
-- **Base:** no eligible rows, provider unavailable or allowance exhausted. Show
+- **Base:** no eligible rows or provider unavailable. Show
   a bounded unresolved/failed advisory while the Task Details page remains
   usable and source state stays unchanged.
 - **Bad:** infer WAF/IP facts through Jev, automatically retry or repair a crawl,
@@ -525,7 +523,7 @@ maximum-request reservation.
 ### 6. Tests Required
 
 - PostgreSQL service tests cover free deterministic preview, successful receipt,
-  provider unavailable, zero-call budget exhaustion and unchanged Crawl Job and
+  provider unavailable and unchanged Crawl Job and
   listing statuses.
 - Settings tests cover defaults, validation and secret-safe serialization.
 - Component tests cover the exact quality endpoint distinction, saved-limit
@@ -592,7 +590,7 @@ most 10,000 complete result identities.
   frozen membership. New matching Jobs are excluded. A missing/deleted frozen
   Job fails closed and requires a new preview.
 - Preview and ordinary search send no provider requests. Only explicit Evaluate
-  creates a run and reservation. Provider/answer/budget failure persists a
+  creates a run. Provider/answer failure persists a
   terminal failure and applies the exact deterministic baseline order.
 - Receipts expose only status, model/provider/request ID, cost, candidate scores
   and error code. Search text and Job text are untrusted evidence, never
@@ -611,14 +609,13 @@ most 10,000 complete result identities.
 | Frozen member disappears | `422` requiring a fresh preview |
 | New matching Job appears | Exclude it from the saved membership |
 | Provider unavailable/invalid | Persist failure; retain exact baseline |
-| Allowance cannot cover reservation | Zero provider calls; persist allowance failure; retain baseline |
 
 ### 5. Good / Base / Bad Cases
 
 - **Good:** preview five lexical candidates for free, evaluate once, then use the
   same frozen order for pages and CSV while membership and totals remain fixed.
-- **Base:** no results, disabled feature, unavailable provider or exhausted
-  allowance. Ordinary search stays usable in deterministic baseline order.
+- **Base:** no results, disabled feature or unavailable provider. Ordinary
+  search stays usable in deterministic baseline order.
 - **Bad:** rerank only the visible page, silently accept a changed filter,
   include newly matching Jobs in a saved order, change facets, or make ordinary
   search call Jev.
@@ -627,7 +624,7 @@ most 10,000 complete result identities.
 
 - PostgreSQL service tests cover total baseline order, bounded prefix reorder,
   complete membership freeze, new/missing-member behavior, scope drift,
-  provider fallback and zero-call allowance exhaustion.
+  and provider fallback.
 - Component tests prove ordinary search is free, Preview then Evaluate is
   explicit, and the evaluation ID is reused in later search/export requests.
 - Playwright proves zero calls for ordinary search and preview, exactly one typed
@@ -690,9 +687,8 @@ question batch limit bounds clusters sent in one request.
   cancel, reset, dismiss, browser or event-write dependency belongs in the
   product service or advisory UI.
 - Preview/read are free. Explicit Evaluate creates one bounded run over the
-  frozen cluster snapshot. Unavailable, invalid and over-budget outcomes retain
-  the deterministic clusters with no disposition; budget exhaustion sends zero
-  provider requests.
+  frozen cluster snapshot. Unavailable and invalid outcomes retain the
+  deterministic clusters with no disposition.
 - The feature defaults off because repeated-event compression alone does not
   demonstrate prioritization quality or operator time savings. Production use
   should collect ordinary operational outcomes without claiming accuracy.
@@ -709,15 +705,14 @@ question batch limit bounds clusters sent in one request.
 | Exact frozen fingerprint repeats | Reuse evaluation and receipt |
 | Provider answers every cluster | Persist typed advice and one safe receipt |
 | Provider unavailable/invalid | Persist terminal failure; clusters remain unprioritized |
-| Allowance cannot cover reservation | Zero provider calls; persist allowance failure |
 | Crawl/event rows after either path | Status, count and content remain unchanged |
 
 ### 5. Good / Base / Bad Cases
 
 - **Good:** three equivalent failures become one traceable secret-safe cluster;
   one explicit paid request marks it `investigate_now` without lifecycle writes.
-- **Base:** no events, disabled feature, unavailable provider or exhausted
-  allowance. Deterministic clusters remain visible and actionable systems are
+- **Base:** no events, disabled feature or unavailable provider. Deterministic
+  clusters remain visible and actionable systems are
   untouched.
 - **Bad:** expose raw payloads/URLs/tokens, call retry from a recommendation,
   rewrite issue class/severity, delete event logs, or present disposition as a
@@ -727,11 +722,11 @@ question batch limit bounds clusters sent in one request.
 
 - PostgreSQL tests cover safe normalization, full event-reference retention,
   deterministic compression, successful receipt, unavailable fallback,
-  zero-call budget exhaustion and unchanged Crawl Job/Event rows.
+  and unchanged Crawl Job/Event rows.
 - Component tests cover explicit Preview then Evaluate, free-preview copy,
   receipt/fallback and the absence of operational action controls.
-- Playwright verifies UI/API/PostgreSQL/provider request accounting for success,
-  unavailable and over-budget cases, and confirms Crawl Job status/event count
+- Playwright verifies UI/API/PostgreSQL/provider request accounting for success
+  and unavailable cases, and confirms Crawl Job status/event count
   remain unchanged.
 
 ### 7. Wrong vs Correct

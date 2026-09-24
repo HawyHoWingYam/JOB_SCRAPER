@@ -49,7 +49,9 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
   fails closed before the LLM boundary without consulting Job taxonomy state.
 - `AIEnrichmentService`, the outer enrichment transaction owner, extracts Job
   intelligence and Skill mentions, projects Governed Skills/Candidate evidence,
-  then commits the enrichment result once.
+  then commits the enrichment result once. It does not create, start, resume,
+  or execute Jev work. Nonempty and empty AI Skill baselines are usable without
+  Jev configuration; Jev Skill correction is a later explicit operation.
 - The item `error_message` stores the stable evidence reason. `/api/ai`
   exclusion projections group and display that persisted reason; they must not
   derive a replacement reason from legacy Source scalar labels.
@@ -105,6 +107,8 @@ Use this contract when changing job-enrichment candidate selection, run scheduli
 - Assert Manual Entry origin has no Source paths; blank descriptions are counted
   separately; stale/current hashes drive pending state; omitted/matching/conflicting
   experience cases preserve operator authority; failure preserves stale state.
+- Assert ordinary enrichment publishes AI Skill assignments/Candidates with
+  zero Jev classifications, runs, attempts, or provider calls.
 
 ## 7. Wrong vs Correct
 

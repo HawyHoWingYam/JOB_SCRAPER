@@ -20,13 +20,11 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.ai.system_one import NativeSystemOneClient  # noqa: E402
 from app.models.jev import (  # noqa: E402
-    JevBudgetReservation,
     JevRun,
     JevRunAttempt,
     JevRunItem,
     JevRuntimeSettings,
 )
-from app.services.jev_budget import JevBudgetLedger  # noqa: E402
 from app.services.jev_duplicate_corpus import (  # noqa: E402
     build_duplicate_corpus_artifact,
     verify_duplicate_corpus_artifact,
@@ -57,8 +55,6 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--split", choices=("development", "held_out", "all"), default="development"
     )
-    plan.add_argument("--max-request-microdollars", type=int, required=True)
-    plan.add_argument("--remaining-microdollars", type=int, required=True)
 
     export = commands.add_parser("export-real")
     export.add_argument("--database-url", required=True)
@@ -76,8 +72,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--endpoint", default="https://openrouter.ai/api/alpha/decisions")
     run.add_argument("--model", default="typesafe/jev-1.13")
-    run.add_argument("--allowance-microdollars", type=int, default=10_000_000)
-    run.add_argument("--max-request-microdollars", type=int, required=True)
     run.add_argument("--timeout-seconds", type=int, default=30)
     run.add_argument("--confirm-paid-evaluation", action="store_true")
 
@@ -102,7 +96,6 @@ def _state_session(args, api_key: str):
     engine = create_engine(f"sqlite:///{args.state_db}")
     for table in (
         JevRuntimeSettings.__table__,
-        JevBudgetReservation.__table__,
         JevRun.__table__,
         JevRunItem.__table__,
         JevRunAttempt.__table__,
@@ -115,8 +108,6 @@ def _state_session(args, api_key: str):
             "endpoint": args.endpoint,
             "model": args.model,
             "api_key": api_key,
-            "allowance_microdollars": args.allowance_microdollars,
-            "max_request_reservation_microdollars": args.max_request_microdollars,
             "retry_limit": 0,
         }
     )
@@ -163,7 +154,6 @@ async def _run_controlled(args) -> dict[str, object]:
             "selected": len(cases),
             "observations": len(observations),
             "run_status": runner.runs.get(run.id).status,
-            "allowance": JevBudgetLedger(db).snapshot(),
         }
     finally:
         await client.aclose()
@@ -204,7 +194,7 @@ def _markdown(report: dict[str, object]) -> str:
             "## Execution",
             "",
             f"Tokens: {execution['input_tokens']} input / {execution['output_tokens']} output.",
-            f"Confirmed cost: {execution['actual_microdollars']} microdollars.",
+            f"Provider-reported cost: {execution['provider_reported_microdollars']} microdollars.",
             f"Latency p50/p95: {execution['latency_ms_p50']} / {execution['latency_ms_p95']} ms.",
             "",
             "## Limitations",
@@ -233,15 +223,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "plan":
             selected = len(_select_cases(args.controlled, args.split))
-            maximum = selected * args.max_request_microdollars
             result = {
                 "selected": selected,
-                "maximum_microdollars": maximum,
-                "fits_remaining": maximum <= args.remaining_microdollars,
+                "monetary_authority": "jev_api_console",
                 "paid_requests_started": 0,
             }
             print(json.dumps(result, sort_keys=True))
-            return 0 if result["fits_remaining"] else 3
+            return 0
         if args.command == "export-real":
             engine = create_engine(args.database_url)
             try:
