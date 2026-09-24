@@ -467,3 +467,36 @@ Unified all Jev execution under explicit manual controls, removed local Jev mone
 ### Next Steps
 
 - None - task complete
+
+
+## Session 69: Scale manual Jev batch operations
+
+**Date**: 2026-09-25
+**Task**: Scale manual Jev batch operations
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Completed the Manual Jev batch orchestration follow-up: unified Skills correction, suspected-duplicate, and Related Jobs work behind one explicit confirmation; added date, all-or-bounded Job scope, execution batch size and starting batch; removed mandatory large-scope Preview in favor of fast durable freezing and deferred per-Job eligibility; preserved sticky Stop/manual Resume/idempotent retry; removed local Jev monetary/count ceilings; hardened provider timeout handling and Settings testing; compacted history payloads; clarified Job-versus-operation progress; and changed active-history polling to silent, non-overlapping 60-second reads. Updated issue #82 and left it open only for explicit manual QA acceptance. Quality gate: backend 34 passed/8 skipped, frontend 47 passed, Ruff, ESLint, build, and diff checks passed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b8ae7d4` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
