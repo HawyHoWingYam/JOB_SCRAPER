@@ -434,3 +434,36 @@ Completed Crawl Tasks context-preserving monitoring/events/recovery, AI preview 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 68: Unified manual Jev operations and experience search
+
+**Date**: 2026-09-24
+**Task**: Unified manual Jev operations and experience search
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Unified all Jev execution under explicit manual controls, removed local Jev monetary limits, preserved provider cost as audit-only telemetry, separated AI Skill extraction from Jev correction, added persisted Related Jobs, compact experience display/search consistency, and verified backend/frontend/PostgreSQL/browser E2E coverage.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4d3e7270` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
