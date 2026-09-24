@@ -252,4 +252,56 @@ describe('api client', () => {
     expect(logErrorSpy).not.toHaveBeenCalled();
   });
 
+  it('reports an internal request timeout instead of the browser abort reason', async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch = vi.fn((_url, init) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(new DOMException('signal is aborted without reason', 'AbortError'));
+        });
+      }));
+
+      const request = apiFetchJson('/api/jev/runs/run-1/execute-next', {
+        method: 'POST',
+        timeoutMs: 25,
+      });
+      const rejection = request.catch((error) => error);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(rejection).resolves.toMatchObject({
+        name: 'ApiRequestError',
+        message: 'Request timed out after 25 ms',
+        code: 'REQUEST_TIMEOUT',
+      });
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        'api.request_failed',
+        expect.objectContaining({ detail: 'Request timed out after 25 ms' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('supports requests governed by a server-side timeout only', async () => {
+    vi.useFakeTimers();
+    let requestSignal;
+    try {
+      globalThis.fetch = vi.fn((_url, init) => {
+        requestSignal = init.signal;
+        return new Promise(() => {});
+      });
+
+      apiFetchJson('/api/jev/runs/run-1/execute-next', {
+        method: 'POST',
+        timeoutMs: null,
+      });
+      await vi.advanceTimersByTimeAsync(700_000);
+
+      expect(requestSignal).toBeUndefined();
+      expect(logErrorSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });

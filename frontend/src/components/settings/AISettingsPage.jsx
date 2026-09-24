@@ -268,8 +268,8 @@ function createFormState(payload) {
     ),
     jev: {
       enabled: Boolean(jev.enabled),
-      endpoint: jev.endpoint || "https://www.rsiai.net/v1/systemone",
-      model: jev.model || "jev-latest",
+      endpoint: jev.endpoint || "https://openrouter.ai/api/alpha/decisions",
+      model: jev.model || "~typesafe/jev-latest",
       api_key: "",
       sample_limit: String(jev.sample_limit ?? 100),
       question_batch_limit: String(jev.question_batch_limit ?? 10),
@@ -290,7 +290,7 @@ function createFormState(payload) {
       incident_triage_enabled: Boolean(jev.incident_triage_enabled),
       incident_triage_event_limit: String(jev.incident_triage_event_limit ?? 200),
       maintenance_enabled: Boolean(jev.maintenance_enabled),
-      maintenance_model: jev.maintenance_model || "jev-latest",
+      maintenance_model: jev.maintenance_model || "~typesafe/jev-latest",
       maintenance_interval_days: String(jev.maintenance_interval_days ?? 30),
       maintenance_min_candidates: String(
         jev.maintenance_min_candidates ?? 50,
@@ -827,6 +827,7 @@ function AIRuntimeSettings({ profileFocus }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingProfile, setTestingProfile] = useState(null);
+  const [testingJev, setTestingJev] = useState(false);
   const [error, setError] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [secretVisibility, setSecretVisibility] = useState(
@@ -1050,6 +1051,60 @@ function AIRuntimeSettings({ profileFocus }) {
     }
   }
 
+  async function handleTestJev() {
+    setTestingJev(true);
+    setFeedback(null);
+
+    try {
+      const response = await fetch(apiPath("/settings/ai/jev/test"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: formState.jev.endpoint,
+          model: formState.jev.model,
+          api_key: formState.jev.api_key,
+          timeout_seconds: Number(formState.jev.timeout_seconds),
+        }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        const detail = payload?.detail;
+        const lines = Array.isArray(detail)
+          ? formatValidationErrors(detail)
+          : [detail?.error_message || "Jev connection test failed"];
+        setFeedback({
+          tone: "error",
+          title: "Jev connection test failed",
+          lines,
+        });
+        return;
+      }
+
+      const usage = payload?.usage || {};
+      const usageLine = Number.isFinite(usage.cost)
+        ? `Provider-reported cost: $${usage.cost.toFixed(6)}.`
+        : "The provider did not report a cost.";
+      setFeedback({
+        tone: "success",
+        title: "Jev connection test passed",
+        lines: [
+          `${payload.model || formState.jev.model} answered in ${payload.latency_ms ?? 0} ms.`,
+          usageLine,
+          "The draft was not saved and no Jev run or batch history was created.",
+        ],
+      });
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        title: "Jev connection test failed",
+        lines: [err.message],
+      });
+    } finally {
+      setTestingJev(false);
+    }
+  }
+
   if (loading) {
     return (
       <section className="ai-settings-page">
@@ -1196,7 +1251,7 @@ function AIRuntimeSettings({ profileFocus }) {
             </div>
             <div className="ai-settings-edit-actions">
             <span role="status">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
-            <button type="button" disabled={!dirty || saving || Boolean(testingProfile)} onClick={() => {
+            <button type="button" disabled={!dirty || saving || Boolean(testingProfile) || testingJev} onClick={() => {
               setFormState(createFormState(settingsPayload));
               setSecretVisibility(createSecretVisibilityState());
               setFeedback({ tone: 'success', title: 'Changes discarded', lines: ['The saved configuration is restored.'] });
@@ -1204,7 +1259,7 @@ function AIRuntimeSettings({ profileFocus }) {
             <button
               className="ai-settings-save-button"
               type="submit"
-              disabled={saving || Boolean(testingProfile)}
+              disabled={saving || Boolean(testingProfile) || testingJev}
             >
               <Save size={16} />
               <span>{saving ? "Saving..." : "Save settings"}</span>
@@ -1241,20 +1296,50 @@ function AIRuntimeSettings({ profileFocus }) {
           onTestProfile={handleTestProfile}
         />
 
-        <section id="settings-jev" tabIndex={-1} className="ai-settings-panel glass-panel">
-          <div className="ai-settings-section-heading">
+        <section id="settings-jev" tabIndex={-1} className="ai-settings-panel ai-settings-jev-panel glass-panel">
+          <div className="ai-settings-section-heading ai-settings-jev-heading">
             <div>
+              <div className="ai-settings-jev-title-row">
+                <span className="ai-settings-jev-kicker">Native decision provider</span>
+                <span className={`ai-settings-jev-status ${formState.jev.enabled ? "enabled" : "disabled"}`}>
+                  {formState.jev.enabled ? "Enabled" : "Disabled"}
+                </span>
+              </div>
               <h2>Jev System One</h2>
               <p>
-                Configure native bounded decisions. Monetary limits are managed
-                in the Jev API Console; saving here does not call the provider.
+                Configure the connection, future-run defaults, and available
+                advisory capabilities. Saving never calls the provider.
               </p>
+            </div>
+            <div className="ai-settings-jev-heading-actions">
+              <button
+                type="button"
+                className="ai-settings-save-button"
+                onClick={handleTestJev}
+                disabled={saving || Boolean(testingProfile) || testingJev}
+              >
+                <FlaskConical size={16} />
+                <span>{testingJev ? "Testing Jev..." : "Test Jev connection"}</span>
+              </button>
+              <a className="ai-settings-save-button" href="#jev">Open Jev Operations</a>
             </div>
           </div>
 
-          <div className="ai-settings-form-grid">
-            <label className="ai-settings-field">
-              <span>Enable Jev</span>
+          <p className="ai-settings-test-note ai-settings-jev-test-note">
+            Testing sends one potentially billable request using this draft. It
+            does not save changes or create Jev run or batch history.
+          </p>
+
+          <div className="ai-settings-jev-boundaries" aria-label="Jev operating boundaries">
+            <div><ShieldCheck size={18} /><span><strong>Manual execution</strong><small>Runs start only in Jev Operations.</small></span></div>
+            <div><Gauge size={18} /><span><strong>Provider-managed spend</strong><small>Monetary limits are managed in the Jev API Console.</small></span></div>
+            <div><Save size={18} /><span><strong>Safe configuration</strong><small>Save changes without sending a Jev request.</small></span></div>
+          </div>
+
+          <fieldset className="ai-settings-jev-connection">
+            <legend>Connection</legend>
+            <label className="ai-settings-jev-enable-row">
+              <span><strong>Enable Jev</strong><small>Make Jev available for future manually started operations.</small></span>
               <input
                 aria-label="Enable Jev"
                 type="checkbox"
@@ -1265,56 +1350,68 @@ function AIRuntimeSettings({ profileFocus }) {
                 disabled={saving}
               />
             </label>
-            <label className="ai-settings-field">
-              <span>Jev endpoint</span>
-              <input
-                aria-label="Jev endpoint"
-                type="url"
-                value={formState.jev.endpoint}
-                onChange={(event) =>
-                  updateJevField("endpoint", event.target.value)
-                }
-                disabled={saving}
-              />
-            </label>
-            <label className="ai-settings-field">
-              <span>Jev model</span>
-              <input
-                aria-label="Jev model"
-                value={formState.jev.model}
-                onChange={(event) => updateJevField("model", event.target.value)}
-                disabled={saving}
-              />
-            </label>
-            <label className="ai-settings-field">
-              <span>Jev API key</span>
-              <input
-                aria-label="Jev API key"
-                type={secretVisibility.jev ? "text" : "password"}
-                value={formState.jev.api_key}
-                onChange={(event) =>
-                  updateJevField("api_key", event.target.value)
-                }
-                autoComplete="new-password"
-                disabled={saving}
-              />
-              <span className="ai-settings-field-hint">
-                {settingsPayload?.jev?.api_key_preview || "No saved key"}
-              </span>
-              <button
-                className="ai-settings-password-toggle"
-                type="button"
-                aria-label={`${secretVisibility.jev ? "Hide" : "Show"} Jev API key`}
-                onClick={() => toggleSecretVisibility("jev")}
-                disabled={saving}
-              >
-                {secretVisibility.jev ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </label>
-          </div>
+            <div className="ai-settings-form-grid ai-settings-jev-connection-grid">
+              <label className="ai-settings-field">
+                <span>Jev endpoint</span>
+                <input
+                  aria-label="Jev endpoint"
+                  type="url"
+                  value={formState.jev.endpoint}
+                  onChange={(event) =>
+                    updateJevField("endpoint", event.target.value)
+                  }
+                  disabled={saving}
+                />
+                <small className="ai-settings-field-hint">Use the complete native System One endpoint.</small>
+              </label>
+              <label className="ai-settings-field">
+                <span>Jev model</span>
+                <input
+                  aria-label="Jev model"
+                  value={formState.jev.model}
+                  onChange={(event) => updateJevField("model", event.target.value)}
+                  disabled={saving}
+                />
+                <small className="ai-settings-field-hint">Applied to newly created runs only.</small>
+              </label>
+              <label className="ai-settings-field ai-settings-secret-field">
+                <div className="ai-settings-field-label-row">
+                  <span>Jev API key</span>
+                  {settingsPayload?.jev?.has_api_key ? <span className="ai-settings-saved-badge"><KeyRound size={12} /><span>API key saved</span></span> : null}
+                </div>
+                <div className="ai-settings-password-row">
+                  <input
+                    aria-label="Jev API key"
+                    type={secretVisibility.jev ? "text" : "password"}
+                    value={formState.jev.api_key}
+                    onChange={(event) =>
+                      updateJevField("api_key", event.target.value)
+                    }
+                    placeholder={settingsPayload?.jev?.has_api_key ? "Leave blank to keep existing key" : "Enter Jev API key"}
+                    autoComplete="new-password"
+                    disabled={saving}
+                  />
+                  <button
+                    className="ai-settings-password-toggle"
+                    type="button"
+                    aria-label={`${secretVisibility.jev ? "Hide" : "Show"} Jev API key`}
+                    onClick={() => toggleSecretVisibility("jev")}
+                    disabled={saving}
+                  >
+                    {secretVisibility.jev ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <div className="ai-settings-secret-value">
+                  <KeyRound size={16} />
+                  <strong>{settingsPayload?.jev?.has_api_key ? "API key saved" : "No API key saved"}</strong>
+                  {settingsPayload?.jev?.api_key_preview ? <code>{settingsPayload.jev.api_key_preview}</code> : null}
+                </div>
+              </label>
+            </div>
+          </fieldset>
 
-          <details>
-            <summary>Advanced Jev controls</summary>
+          <details className="ai-settings-jev-advanced">
+            <summary><span><strong>Advanced Jev controls</strong><small>Concurrency, retry, timeout, sampling, and decision thresholds</small></span><span aria-hidden="true">+</span></summary>
             <div className="ai-settings-form-grid">
               {[
                 ["sample_limit", "Jev sample limit", 1, 10000],
@@ -1357,7 +1454,12 @@ function AIRuntimeSettings({ profileFocus }) {
             </div>
           </details>
 
-          <div className="ai-settings-throughput-note">
+          <div className="ai-settings-jev-capability-heading">
+            <div><span className="ai-settings-jev-kicker">Future-run availability</span><h3>Advisory capabilities</h3></div>
+            <p>Enable only the capabilities operators should be able to start manually.</p>
+          </div>
+          <div className="ai-settings-jev-capability-grid">
+          <article className={`ai-settings-jev-capability ${formState.jev.duplicate_enabled ? "enabled" : ""}`}>
             <div className="ai-settings-section-heading">
               <div>
                 <h3>Suspected duplicate associations</h3>
@@ -1409,9 +1511,9 @@ function AIRuntimeSettings({ profileFocus }) {
                 />
               </label>
             </div>
-          </div>
+          </article>
 
-          <div className="ai-settings-throughput-note">
+          <article className={`ai-settings-jev-capability ${formState.jev.search_rerank_enabled ? "enabled" : ""}`}>
             <div className="ai-settings-section-heading">
               <div>
                 <h3>Search relevance reranking</h3>
@@ -1450,9 +1552,9 @@ function AIRuntimeSettings({ profileFocus }) {
                 />
               </label>
             </div>
-          </div>
+          </article>
 
-          <div className="ai-settings-throughput-note">
+          <article className={`ai-settings-jev-capability ${formState.jev.incident_triage_enabled ? "enabled" : ""}`}>
             <div className="ai-settings-section-heading">
               <div>
                 <h3>Repeated incident triage</h3>
@@ -1491,9 +1593,9 @@ function AIRuntimeSettings({ profileFocus }) {
                 />
               </label>
             </div>
-          </div>
+          </article>
 
-          <div className="ai-settings-throughput-note">
+          <article className={`ai-settings-jev-capability ${formState.jev.crawl_quality_enabled ? "enabled" : ""}`}>
             <div className="ai-settings-section-heading">
               <div>
                 <h3>Crawl content quality advisory</h3>
@@ -1531,9 +1633,9 @@ function AIRuntimeSettings({ profileFocus }) {
                 />
               </label>
             </div>
-          </div>
+          </article>
 
-          <div className="ai-settings-throughput-note">
+          <article className={`ai-settings-jev-capability ai-settings-jev-capability-wide ${formState.jev.maintenance_enabled ? "enabled" : ""}`}>
             <div className="ai-settings-section-heading">
               <div>
                 <h3>Skill taxonomy maintenance</h3>
@@ -1603,9 +1705,10 @@ function AIRuntimeSettings({ profileFocus }) {
                 />
               </label>
             </div>
+          </article>
           </div>
 
-          <div className="ai-settings-throughput-note">
+          <div className="ai-settings-jev-handoff">
             <div className="ai-settings-section-heading">
               <div>
                 <h3>Jev execution moved to one console</h3>
@@ -1615,7 +1718,6 @@ function AIRuntimeSettings({ profileFocus }) {
                   are manual actions in Jev Operations.
                 </p>
               </div>
-              <a className="ai-settings-save-button" href="#jev">Open Jev Operations</a>
             </div>
           </div>
         </section>

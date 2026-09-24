@@ -127,8 +127,8 @@ const defaultProviderCatalog = {
 };
 const defaultJevRequest = {
   enabled: false,
-  endpoint: "https://www.rsiai.net/v1/systemone",
-  model: "jev-latest",
+  endpoint: "https://openrouter.ai/api/alpha/decisions",
+  model: "~typesafe/jev-latest",
   api_key: "",
   sample_limit: 100,
   question_batch_limit: 10,
@@ -147,7 +147,7 @@ const defaultJevRequest = {
   incident_triage_enabled: false,
   incident_triage_event_limit: 200,
   maintenance_enabled: false,
-  maintenance_model: "jev-latest",
+  maintenance_model: "~typesafe/jev-latest",
   maintenance_interval_days: 30,
   maintenance_min_candidates: 50,
   maintenance_batch_size: 100,
@@ -282,6 +282,7 @@ describe("AISettingsPage", () => {
   let currentSettingsPayload;
   let putSettingsResponse;
   let testProfileResponse;
+  let testJevResponse;
 
   beforeEach(() => {
     window.history.replaceState(null, "", "#settings");
@@ -333,6 +334,17 @@ describe("AISettingsPage", () => {
         config_fingerprint: "jobs:test-fingerprint",
       }),
     );
+    testJevResponse = vi.fn(async () =>
+      mockJsonResponse({
+        ok: true,
+        status: "answered",
+        model: "jev-latest",
+        provider: "fake-jev",
+        request_id: "jev-request-1",
+        latency_ms: 17,
+        usage: { input_tokens: 9, output_tokens: 3, cost: 0.00005 },
+      }),
+    );
 
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = String(input);
@@ -355,6 +367,9 @@ describe("AISettingsPage", () => {
       }
 
       if (url.includes("/api/settings/ai")) {
+        if (url.includes("/api/settings/ai/jev/test")) {
+          return testJevResponse(url, init);
+        }
         if (url.includes("/api/settings/ai/test")) {
           return testProfileResponse(url, init);
         }
@@ -487,9 +502,9 @@ describe("AISettingsPage", () => {
       screen.getByRole("heading", { level: 2, name: /jev system one/i }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/jev endpoint/i)).toHaveValue(
-      "https://www.rsiai.net/v1/systemone",
+      "https://openrouter.ai/api/alpha/decisions",
     );
-    expect(screen.getByLabelText(/jev model/i)).toHaveValue("jev-latest");
+    expect(screen.getByLabelText(/jev model/i)).toHaveValue("~typesafe/jev-latest");
     expect(screen.getByText("jev-...alue")).toBeInTheDocument();
 
     await user.click(screen.getByLabelText(/^enable jev$/i));
@@ -523,13 +538,73 @@ describe("AISettingsPage", () => {
     ))).toBe(false);
   });
 
+  it("tests the current Jev draft without saving or creating run history", async () => {
+    const user = userEvent.setup();
+    render(<AISettingsPage />);
+    await waitForSettingsLoaded();
+
+    await user.clear(screen.getByLabelText(/jev endpoint/i));
+    await user.type(
+      screen.getByLabelText(/jev endpoint/i),
+      "https://draft.example/v1/systemone",
+    );
+    await user.clear(screen.getByLabelText(/jev model/i));
+    await user.type(screen.getByLabelText(/jev model/i), "jev-draft");
+    await user.type(screen.getByLabelText(/^jev api key$/i), "draft-secret");
+    await user.click(
+      screen.getByRole("button", { name: /test jev connection/i }),
+    );
+
+    await waitFor(() => expect(testJevResponse).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(testJevResponse.mock.calls[0][1].body)).toEqual({
+      endpoint: "https://draft.example/v1/systemone",
+      model: "jev-draft",
+      api_key: "draft-secret",
+      timeout_seconds: 30,
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /jev connection test passed/i,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/17 ms/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/\$0\.000050/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /no jev run or batch history was created/i,
+    );
+    expect(putSettingsResponse).not.toHaveBeenCalled();
+    expect(globalThis.fetch.mock.calls.some(([input]) =>
+      String(input).endsWith("/api/jev/runs"),
+    )).toBe(false);
+  });
+
+  it("shows the Jev connection diagnostic and keeps the draft", async () => {
+    testJevResponse.mockResolvedValueOnce(
+      await mockJsonResponse(
+        { detail: { error_message: "System One returned HTTP 401" } },
+        { ok: false, status: 422 },
+      ),
+    );
+    const user = userEvent.setup();
+    render(<AISettingsPage />);
+    await waitForSettingsLoaded();
+    await user.type(screen.getByLabelText(/^jev api key$/i), "wrong-secret");
+    await user.click(
+      screen.getByRole("button", { name: /test jev connection/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /system one returned http 401/i,
+    );
+    expect(screen.getByLabelText(/^jev api key$/i)).toHaveValue("wrong-secret");
+    expect(putSettingsResponse).not.toHaveBeenCalled();
+  });
+
   it("keeps Jev configuration visible while execution remains manual elsewhere", async () => {
     currentSettingsPayload.jev.enabled = true;
 
     render(<AISettingsPage />);
     await waitForSettingsLoaded();
     expect(screen.getByLabelText(/^enable jev$/i)).toBeChecked();
-    expect(screen.getByLabelText(/jev model/i)).toHaveValue("jev-latest");
+    expect(screen.getByLabelText(/jev model/i)).toHaveValue("~typesafe/jev-latest");
     expect(screen.getByText(/Preview, Start, Stop, Resume, retry, history, and smoke execution/))
       .toBeInTheDocument();
   });

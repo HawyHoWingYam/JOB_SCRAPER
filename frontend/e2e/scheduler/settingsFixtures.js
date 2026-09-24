@@ -56,8 +56,8 @@ const defaultProviderCatalog = {
 };
 const defaultJevRequest = {
   enabled: false,
-  endpoint: "https://www.rsiai.net/v1/systemone",
-  model: "jev-latest",
+  endpoint: "https://openrouter.ai/api/alpha/decisions",
+  model: "~typesafe/jev-latest",
   api_key: "",
   sample_limit: 100,
   question_batch_limit: 10,
@@ -76,7 +76,7 @@ const defaultJevRequest = {
   incident_triage_enabled: false,
   incident_triage_event_limit: 200,
   maintenance_enabled: false,
-  maintenance_model: "jev-latest",
+  maintenance_model: "~typesafe/jev-latest",
   maintenance_interval_days: 30,
   maintenance_min_candidates: 50,
   maintenance_batch_size: 100,

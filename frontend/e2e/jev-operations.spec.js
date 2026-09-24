@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 
-test('previews for free and manually completes a source-preserving duplicate batch', async ({
+test('manually starts and completes a source-preserving duplicate batch', async ({
   page,
   request,
 }) => {
@@ -32,24 +32,19 @@ test('previews for free and manually completes a source-preserving duplicate bat
   const beforeCount = (await before.json()).count;
 
   await page.goto('/#jev');
-  await expect(page.getByRole('heading', { name: 'Jev Operations' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Jev Operations', exact: true })).toBeVisible();
   await page.getByLabel('Skills correction').uncheck();
   await page.getByLabel('Possible same vacancy').check();
   await page.getByLabel('Explicit Job UUIDs').fill(seeded.left_job_id);
-  await page.getByRole('button', { name: 'Preview batch' }).click();
-
-  const preview = page.getByRole('status');
-  await expect(preview).toContainText('1 Jobs selected');
-  await expect(preview).toContainText('duplicate: 1 eligible / 0 skipped');
-  const afterPreview = await request.get('http://127.0.0.1:18001/fake/requests');
-  expect((await afterPreview.json()).count).toBe(beforeCount);
-
-  await page.getByRole('button', { name: 'Start selected operations' }).click();
+  await page.getByRole('button', { name: 'Start Jev batch…' }).click();
+  await expect(page.getByRole('dialog')).toContainText('Possible same vacancy');
+  const beforeConfirmation = await request.get('http://127.0.0.1:18001/fake/requests');
+  expect((await beforeConfirmation.json()).count).toBe(beforeCount);
+  await page.getByRole('dialog').getByRole('button', { name: 'Confirm and start' }).click();
   const batch = page.getByLabel(/Jev batch /).first();
   await expect(batch).toContainText('completed', { timeout: 30_000 });
-  await expect(batch).toContainText('1/1 completed');
-  await batch.getByText('Per-operation items').click();
-  await expect(batch).toContainText(`duplicate · ${seeded.left_job_id} · completed`);
+  await expect(batch).toContainText('1 of 1 finished');
+  await expect(batch).toContainText('Possible same vacancy');
 
   const afterStart = await request.get('http://127.0.0.1:18001/fake/requests');
   const providerAudit = await afterStart.json();

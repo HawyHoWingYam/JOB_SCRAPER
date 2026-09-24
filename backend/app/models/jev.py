@@ -50,7 +50,9 @@ class JevRuntimeSettings(Base):
     incident_triage_enabled = Column(Boolean, nullable=False, default=False)
     incident_triage_event_limit = Column(Integer, nullable=False, default=200)
     maintenance_enabled = Column(Boolean, nullable=False, default=False)
-    maintenance_model = Column(String(255), nullable=False, default="jev-latest")
+    maintenance_model = Column(
+        String(255), nullable=False, default="~typesafe/jev-latest"
+    )
     maintenance_interval_days = Column(Integer, nullable=False, default=30)
     maintenance_min_candidates = Column(Integer, nullable=False, default=50)
     maintenance_batch_size = Column(Integer, nullable=False, default=100)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import app.services.jev_duplicate_evaluation as duplicate_evaluation
 from app.services.jev_duplicate_evaluation import (
     DuplicateCandidateJob,
     DuplicateCandidatePolicy,
@@ -9,6 +10,7 @@ from app.services.jev_duplicate_evaluation import (
     build_duplicate_candidates,
     candidate_recall_at_k,
     load_duplicate_cases,
+    rank_duplicate_candidates_for_subject,
 )
 
 
@@ -66,6 +68,48 @@ def test_candidates_are_symmetric_deterministic_and_union_directed_top_k() -> No
         ("controlled:a", "controlled:b"),
         ("controlled:a", "controlled:c"),
     }
+
+
+def test_product_candidates_rank_only_pairs_for_the_explicit_subject() -> None:
+    subject = _job("subject", title="Senior Python Engineer")
+    candidates = (
+        _job("unrelated", title="Office Manager", company="Other"),
+        _job("best", title="Senior Python Engineer"),
+        _job("second", title="Python Engineer"),
+        _job("missing", company=None, description=None),
+    )
+
+    ranked = rank_duplicate_candidates_for_subject(subject, candidates, limit=2)
+
+    assert [candidate.rank for candidate in ranked] == [1, 2]
+    assert [
+        next(identity for identity in (candidate.left_identity, candidate.right_identity) if identity != "controlled:subject")
+        for candidate in ranked
+    ] == [
+        "controlled:best",
+        "controlled:second",
+    ]
+    assert all("controlled:subject" in {
+        candidate.left_identity,
+        candidate.right_identity,
+    } for candidate in ranked)
+
+
+def test_product_candidate_ranking_scores_each_corpus_member_once(monkeypatch) -> None:
+    calls = []
+
+    def record_score(subject, candidate):
+        calls.append((subject.identity, candidate.identity))
+        return 0.5
+
+    monkeypatch.setattr(duplicate_evaluation, "_lexical_similarity", record_score)
+    subject = _job("subject")
+    candidates = tuple(_job(f"candidate-{index}") for index in range(20))
+
+    rank_duplicate_candidates_for_subject(subject, candidates, limit=3)
+
+    assert len(calls) == len(candidates)
+    assert {left for left, _right in calls} == {"controlled:subject"}
 
 
 def test_candidates_keep_hard_negatives_and_same_source_reposts_but_skip_missing_evidence() -> (

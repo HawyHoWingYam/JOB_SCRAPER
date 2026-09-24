@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
+import inspect
 import os
 import uuid
 
@@ -11,11 +12,15 @@ from sqlalchemy.orm import sessionmaker
 
 from app.ai.system_one import ChoiceAnswer, ScoreAnswer, SystemOneResult, SystemOneUsage
 from app.database import Base
+from app.api.jev_operations import JevOperationSelectionRequest
 from app.models.company import Company
 from app.models.job import Job
 from app.models.jev import JevDuplicateAssociation, JevOperationBatchItem
 from app.services.jev_duplicate_association import JevDuplicateAssociationService
-from app.services.jev_operation_batch import JevOperationBatchService
+from app.services.jev_operation_batch import (
+    JevOperationBatchService,
+    execute_jev_operation_batch,
+)
 from app.services.jev_related_jobs import JevRelatedJobsService
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
 import app.models  # noqa: F401
@@ -108,14 +113,80 @@ class _Request:
     source_sites = ["jobsdb"]
     keyword = None
     job_ids = []
+    posted_date_from = None
+    posted_date_to = None
     processing_status = "all"
+    job_offset = 0
     max_jobs = 10
+    execution_batch_size = 5
+    start_execution_batch = 1
     operations = ["duplicate"]
     force_reevaluation = False
 
 
 class _TwoJobRequest(_Request):
     source_sites = []
+
+
+def test_background_batch_entry_point_is_synchronous_for_threadpool_isolation() -> None:
+    assert not inspect.iscoroutinefunction(execute_jev_operation_batch)
+
+
+def test_operation_scope_accepts_inclusive_posted_date_window() -> None:
+    request = JevOperationSelectionRequest(
+        posted_date_from="2026-09-01",
+        posted_date_to="2026-09-30",
+        operations=["skills"],
+    )
+
+    assert request.posted_date_from == date(2026, 9, 1)
+    assert request.posted_date_to == date(2026, 9, 30)
+    assert request.job_offset == 0
+    assert request.execution_batch_size == 500
+    assert request.start_execution_batch == 1
+
+
+def test_operation_scope_has_no_application_job_count_ceiling() -> None:
+    request = JevOperationSelectionRequest(
+        max_jobs=25_000,
+        job_offset=2_000_000,
+        execution_batch_size=500,
+        start_execution_batch=9,
+        operations=["skills", "duplicate", "related_jobs"],
+    )
+
+    assert request.max_jobs == 25_000
+    assert request.job_offset == 2_000_000
+    assert request.execution_batch_size == 500
+    assert request.start_execution_batch == 9
+
+    unlimited = JevOperationSelectionRequest(
+        max_jobs=None,
+        operations=["skills", "duplicate", "related_jobs"],
+    )
+    assert unlimited.max_jobs is None
+
+
+def test_operation_scope_rejects_a_start_batch_outside_a_bounded_scope() -> None:
+    with pytest.raises(
+        ValueError,
+        match="start_execution_batch must fall within the maximum matching Jobs",
+    ):
+        JevOperationSelectionRequest(
+            max_jobs=4_000,
+            execution_batch_size=500,
+            start_execution_batch=9,
+            operations=["skills"],
+        )
+
+
+def test_operation_scope_rejects_reversed_posted_date_window() -> None:
+    with pytest.raises(ValueError, match="posted_date_from must be on or before"):
+        JevOperationSelectionRequest(
+            posted_date_from="2026-09-30",
+            posted_date_to="2026-09-01",
+            operations=["skills"],
+        )
 
 
 def test_preview_is_provider_free_and_start_is_idempotent() -> None:
@@ -143,6 +214,25 @@ def test_preview_is_provider_free_and_start_is_idempotent() -> None:
         assert [(item.operation, item.status) for item in batch.items] == [
             ("duplicate", "pending")
         ]
+    finally:
+        _dispose(db, engine)
+
+
+def test_direct_start_freezes_scope_and_defers_expensive_eligibility() -> None:
+    engine, db, subject, _candidate = _session()
+    try:
+        service = JevOperationBatchService(db)
+        batch = service.start(
+            _Request(),
+            preview_fingerprint=None,
+            idempotency_key="direct-manual-start",
+        )
+
+        assert batch.selected_job_ids == [str(subject.id)]
+        assert [(item.operation, item.status, item.eligibility_reason) for item in batch.items] == [
+            ("duplicate", "pending", "deferred")
+        ]
+        assert db.execute(text("SELECT count(*) FROM jev_runs")).scalar_one() == 0
     finally:
         _dispose(db, engine)
 

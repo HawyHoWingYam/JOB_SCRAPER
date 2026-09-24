@@ -243,8 +243,8 @@ def _parser() -> argparse.ArgumentParser:
         "--split", choices=("development", "held_out"), default="development"
     )
     run.add_argument("--limit", type=int, default=1)
-    run.add_argument("--endpoint", default="https://www.rsiai.net/v1/systemone")
-    run.add_argument("--model", default="jev-latest")
+    run.add_argument("--endpoint", default="https://openrouter.ai/api/alpha/decisions")
+    run.add_argument("--model", default="~typesafe/jev-latest")
     run.add_argument("--credential-file", type=Path)
     run.add_argument("--timeout-seconds", type=int, default=30)
     run.add_argument("--confirm-paid-evaluation", action="store_true")

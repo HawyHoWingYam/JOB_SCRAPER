@@ -18,9 +18,8 @@ from app.models.job import Job
 from app.services.jev_duplicate_evaluation import (
     DuplicateCandidate,
     DuplicateCandidateJob,
-    DuplicateCandidatePolicy,
     DuplicateJobSnapshot,
-    build_duplicate_candidates,
+    rank_duplicate_candidates_for_subject,
 )
 from app.services.jev_run_service import JevRunService
 from app.utils.time import utc_now
@@ -140,7 +139,7 @@ class JevDuplicateAssociationService:
         )
         snapshots = {_identity(subject_snapshot): subject_snapshot}
         jobs_by_identity = {_identity(subject_snapshot): subject}
-        candidate_jobs = [DuplicateCandidateJob(snapshot=subject_snapshot)]
+        candidate_jobs = []
         for job in rows:
             try:
                 snapshot = _snapshot(job)
@@ -152,23 +151,14 @@ class JevDuplicateAssociationService:
             snapshots[identity] = snapshot
             jobs_by_identity[identity] = job
             candidate_jobs.append(DuplicateCandidateJob(snapshot=snapshot))
-        candidates = build_duplicate_candidates(
+        candidates = rank_duplicate_candidates_for_subject(
+            DuplicateCandidateJob(snapshot=subject_snapshot),
             tuple(candidate_jobs),
-            policy=DuplicateCandidatePolicy(
-                lexical_top_k=candidate_limit,
-                embedding_top_k=0,
-                max_pairs=max(corpus_limit * candidate_limit, 1),
-            ),
+            limit=candidate_limit,
         )
-        subject_identity = _identity(subject_snapshot)
-        selected = [
-            candidate
-            for candidate in candidates
-            if subject_identity in {candidate.left_identity, candidate.right_identity}
-        ][:candidate_limit]
         items: list[dict[str, object]] = []
         skipped = 0
-        for candidate in selected:
+        for candidate in candidates:
             left_job = jobs_by_identity[candidate.left_identity]
             right_job = jobs_by_identity[candidate.right_identity]
             canonical = _canonical_pair(left_job, right_job)

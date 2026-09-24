@@ -1,25 +1,31 @@
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.job_intelligence.foundation import normalized_content_hash
 from app.models.company import Company
+from app.models.current_taxonomy import CurrentJobSkillMention
 from app.models.job import Job
 from app.models.jev import (
+    JevOnlineSkillClassification,
     JevOperationBatch,
     JevOperationBatchItem,
 )
 from app.services.jev_duplicate_association import JevDuplicateAssociationService
 from app.services.jev_evaluator_factory import build_jev_evaluator
-from app.services.jev_online_skill_case_builder import build_online_skill_case
+from app.services.jev_online_skill_case_builder import (
+    OnlineSkillCaseBuildContext,
+    build_online_skill_case,
+)
 from app.services.jev_online_skill_runner import JevOnlineSkillRunner
-from app.services.jev_online_skill_store import JevOnlineSkillStore
 from app.services.jev_related_jobs import JevRelatedJobsService
 from app.services.jev_run_service import JevRunService
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
@@ -50,8 +56,21 @@ class JevOperationBatchService:
     def preview(self, request) -> dict[str, object]:
         operations = self._operations(request.operations)
         jobs = self._select_jobs(request)
+        skill_context = OnlineSkillCaseBuildContext(self.db) if "skills" in operations else None
+        skill_mentions, latest_skills = (
+            self._load_skill_preview_inputs(jobs)
+            if "skills" in operations
+            else ({}, {})
+        )
         states = [
-            self._eligibility(job, operation, force=request.force_reevaluation)
+            self._eligibility(
+                job,
+                operation,
+                force=request.force_reevaluation,
+                skill_context=skill_context,
+                extracted_skills=skill_mentions.get(job.id, ()),
+                latest_skill=latest_skills.get(job.id),
+            )
             for job in jobs
             for operation in operations
         ]
@@ -78,15 +97,7 @@ class JevOperationBatchService:
                 "skipped": sum(not state.eligible for state in selected),
                 "reasons": self._reason_counts(selected),
             }
-        snapshot = {
-            "source_sites": list(request.source_sites),
-            "keyword": request.keyword,
-            "job_ids": [str(value) for value in request.job_ids],
-            "processing_status": request.processing_status,
-            "max_jobs": request.max_jobs,
-            "operations": list(operations),
-            "force_reevaluation": request.force_reevaluation,
-        }
+        snapshot = self._selection_snapshot(request, operations=operations)
         identity = {
             "selection": snapshot,
             "selected_job_ids": [str(job.id) for job in jobs],
@@ -115,38 +126,84 @@ class JevOperationBatchService:
             "items": states,
         }
 
+    @staticmethod
+    def _selection_snapshot(request, *, operations: Iterable[str]) -> dict[str, object]:
+        return {
+            "source_sites": list(request.source_sites),
+            "keyword": request.keyword,
+            "job_ids": [str(value) for value in request.job_ids],
+            "posted_date_from": (
+                request.posted_date_from.isoformat()
+                if request.posted_date_from is not None
+                else None
+            ),
+            "posted_date_to": (
+                request.posted_date_to.isoformat()
+                if request.posted_date_to is not None
+                else None
+            ),
+            "processing_status": request.processing_status,
+            "job_offset": request.job_offset,
+            "max_jobs": request.max_jobs,
+            "execution_batch_size": request.execution_batch_size,
+            "start_execution_batch": request.start_execution_batch,
+            "operations": list(operations),
+            "force_reevaluation": request.force_reevaluation,
+        }
+
     def start(
         self,
         request,
         *,
-        preview_fingerprint: str,
+        preview_fingerprint: str | None,
         idempotency_key: str,
     ) -> JevOperationBatch:
+        operations = self._operations(request.operations)
+        snapshot = self._selection_snapshot(request, operations=operations)
         existing = self.db.scalar(
             select(JevOperationBatch).where(
                 JevOperationBatch.idempotency_key == idempotency_key
             )
         )
         if existing is not None:
-            if existing.preview_fingerprint != preview_fingerprint:
-                raise ValueError("Idempotency key was used for a different preview")
+            if existing.selection_snapshot != snapshot:
+                raise ValueError("Idempotency key was used for a different Jev batch scope")
             return existing
-        preview = self.preview(request)
-        if preview["preview_fingerprint"] != preview_fingerprint:
-            raise ValueError("Preview is stale; preview the batch again")
+        if preview_fingerprint is not None:
+            preview = self.preview(request)
+            if preview["preview_fingerprint"] != preview_fingerprint:
+                raise ValueError("Preview is stale; preview the batch again")
+            jobs = [self.db.get(Job, UUID(job_id)) for job_id in preview["selected_job_ids"]]
+            jobs = [job for job in jobs if job is not None]
+            item_states = preview["items"]
+            plan_fingerprint = preview_fingerprint
+        else:
+            jobs = self._select_jobs(request)
+            item_states = None
+            plan_fingerprint = normalized_content_hash(
+                {
+                    "selection": snapshot,
+                    "selected_job_ids": [str(job.id) for job in jobs],
+                }
+            )
         batch = JevOperationBatch(
             idempotency_key=idempotency_key,
-            preview_fingerprint=preview_fingerprint,
+            preview_fingerprint=plan_fingerprint,
             status="pending",
-            selection_snapshot=preview["selection"],
-            selected_job_ids=preview["selected_job_ids"],
-            operations=list(self._operations(request.operations)),
+            selection_snapshot=snapshot,
+            selected_job_ids=[str(job.id) for job in jobs],
+            operations=list(operations),
             force_reevaluation=request.force_reevaluation,
         )
         self.db.add(batch)
         self.db.flush()
         items = []
-        for position, state in enumerate(preview["items"]):
+        states = item_states or [
+            OperationEligibility(operation, job.id, True, "deferred", None, 0)
+            for job in jobs
+            for operation in operations
+        ]
+        for position, state in enumerate(states):
             items.append(
                 JevOperationBatchItem(
                     batch_id=batch.id,
@@ -197,6 +254,11 @@ class JevOperationBatchService:
                 self._finish(batch)
                 self.db.commit()
                 return batch
+            if item.eligibility_reason == "deferred":
+                self._prepare_job_items(batch, item.job_id)
+                self._refresh_counts(batch)
+                self.db.commit()
+                continue
             item.status = "running"
             item.attempt_count += 1
             item.started_at = utc_now()
@@ -221,6 +283,55 @@ class JevOperationBatchService:
             batch = self.get(batch_id)
             self._refresh_counts(batch)
             self.db.commit()
+
+    def _prepare_job_items(self, batch: JevOperationBatch, job_id: UUID) -> None:
+        job = self.db.get(Job, job_id)
+        job_items = [
+            item
+            for item in batch.items
+            if item.job_id == job_id and item.eligibility_reason == "deferred"
+        ]
+        if job is None:
+            for item in job_items:
+                item.status = "skipped"
+                item.eligibility_reason = "job_unavailable"
+                item.completed_at = utc_now()
+            return
+        skill_context = (
+            OnlineSkillCaseBuildContext(self.db)
+            if any(item.operation == "skills" for item in job_items)
+            else None
+        )
+        skill_mentions, latest_skills = (
+            self._load_skill_preview_inputs([job])
+            if skill_context is not None
+            else ({}, {})
+        )
+        states = {
+            item.operation: self._eligibility(
+                job,
+                item.operation,
+                force=batch.force_reevaluation,
+                skill_context=skill_context,
+                extracted_skills=skill_mentions.get(job.id, ()),
+                latest_skill=latest_skills.get(job.id),
+            )
+            for item in job_items
+        }
+        wanted = (batch.selection_snapshot or {}).get("processing_status", "all")
+        allowed = wanted == "all" or any(
+            (wanted == "eligible" and state.eligible)
+            or (wanted == "successful" and state.reason == "successful_unchanged")
+            or (wanted == "failed" and state.reason == "previously_failed")
+            for state in states.values()
+        )
+        for item in job_items:
+            state = states[item.operation]
+            item.eligibility_reason = state.reason
+            item.input_fingerprint = state.input_fingerprint
+            if not allowed or not state.eligible:
+                item.status = "skipped"
+                item.completed_at = utc_now()
 
     def request_stop(self, batch_id: str) -> JevOperationBatch:
         batch = self.get(batch_id)
@@ -308,6 +419,10 @@ class JevOperationBatchService:
             query = query.where(Job.id.in_(request.job_ids))
         if request.source_sites:
             query = query.where(Job.source_site.in_(request.source_sites))
+        if request.posted_date_from is not None:
+            query = query.where(func.date(Job.posted_date) >= request.posted_date_from)
+        if request.posted_date_to is not None:
+            query = query.where(func.date(Job.posted_date) <= request.posted_date_to)
         if request.keyword:
             term = f"%{request.keyword.strip()}%"
             query = query.where(
@@ -317,36 +432,46 @@ class JevOperationBatchService:
                     Company.name.ilike(term),
                 )
             )
-        return list(
-            self.db.scalars(
-                query.order_by(Job.created_at.asc(), Job.id.asc()).limit(request.max_jobs)
-            ).unique()
+        execution_offset = (
+            request.start_execution_batch - 1
+        ) * request.execution_batch_size
+        query = query.order_by(Job.created_at.asc(), Job.id.asc()).offset(
+            request.job_offset + execution_offset
         )
+        if request.max_jobs is not None:
+            query = query.limit(request.max_jobs - execution_offset)
+        return list(self.db.scalars(query).unique())
 
     def _eligibility(
-        self, job: Job, operation: str, *, force: bool
+        self,
+        job: Job,
+        operation: str,
+        *,
+        force: bool,
+        skill_context: OnlineSkillCaseBuildContext | None = None,
+        extracted_skills: tuple[dict[str, object], ...] = (),
+        latest_skill: JevOnlineSkillClassification | None = None,
     ) -> OperationEligibility:
         if operation == "skills":
-            skills = JevSkillBackfillService._reconstruct_skills(self.db, job.id)
             case = build_online_skill_case(
                 self.db,
                 job_id=job.id,
                 source_site=job.source_site,
                 title=job.title,
                 evidence_text=job.description or "",
-                extracted_skills=skills,
+                extracted_skills=extracted_skills,
+                context=skill_context,
             )
             if case is None:
                 return OperationEligibility(operation, job.id, False, "missing_skill_evidence", None, 0)
             runner = JevOnlineSkillRunner(self.db)
             fingerprint = runner.dispatch(case).input_fingerprint
-            latest = JevOnlineSkillStore(self.db).latest_for_job(job.id)
             if force:
                 return OperationEligibility(operation, job.id, True, "force_reevaluation", fingerprint, 1)
-            if latest is not None and latest.input_fingerprint == fingerprint:
-                if latest.status == "answered":
+            if latest_skill is not None and latest_skill.input_fingerprint == fingerprint:
+                if latest_skill.status == "answered":
                     return OperationEligibility(operation, job.id, False, "successful_unchanged", fingerprint, 0)
-                if latest.status in {"pending", "running"}:
+                if latest_skill.status in {"pending", "running"}:
                     return OperationEligibility(operation, job.id, False, "already_running", fingerprint, 0)
                 return OperationEligibility(operation, job.id, True, "previously_failed", fingerprint, 1)
             return OperationEligibility(operation, job.id, True, "eligible", fingerprint, 1)
@@ -381,6 +506,55 @@ class JevOperationBatchService:
             "force_reevaluation" if force else "eligible",
             fingerprint,
             settings.duplicate_candidate_limit,
+        )
+
+    def _load_skill_preview_inputs(
+        self,
+        jobs: list[Job],
+    ) -> tuple[
+        dict[UUID, tuple[dict[str, object], ...]],
+        dict[UUID, JevOnlineSkillClassification],
+    ]:
+        job_ids = [job.id for job in jobs]
+        if not job_ids:
+            return {}, {}
+        grouped_mentions: dict[UUID, list[dict[str, object]]] = defaultdict(list)
+        mentions = self.db.scalars(
+            select(CurrentJobSkillMention)
+            .where(
+                CurrentJobSkillMention.job_id.in_(job_ids),
+                CurrentJobSkillMention.status == "active",
+                CurrentJobSkillMention.resolution.in_(("match_existing", "candidate")),
+            )
+            .order_by(
+                CurrentJobSkillMention.job_id,
+                CurrentJobSkillMention.created_at,
+                CurrentJobSkillMention.id,
+            )
+        )
+        for mention in mentions:
+            grouped_mentions[mention.job_id].append(
+                {
+                    "name": mention.raw_name,
+                    "existing_skill": mention.skill_code,
+                    "evidence": "Historical active Skill mention; inspect the Job text.",
+                }
+            )
+        latest_by_job: dict[UUID, JevOnlineSkillClassification] = {}
+        classifications = self.db.scalars(
+            select(JevOnlineSkillClassification)
+            .where(JevOnlineSkillClassification.job_id.in_(job_ids))
+            .order_by(
+                JevOnlineSkillClassification.job_id,
+                JevOnlineSkillClassification.created_at.desc(),
+                JevOnlineSkillClassification.id.desc(),
+            )
+        )
+        for classification in classifications:
+            latest_by_job.setdefault(classification.job_id, classification)
+        return (
+            {job_id: tuple(values) for job_id, values in grouped_mentions.items()},
+            latest_by_job,
         )
 
     async def _execute_item(
@@ -471,7 +645,18 @@ class JevOperationBatchService:
         batch.completed_at = utc_now()
 
 
-async def execute_jev_operation_batch(batch_id: str) -> None:
+def execute_jev_operation_batch(batch_id: str) -> None:
+    """Run a durable batch outside the API event loop.
+
+    Starlette dispatches synchronous background tasks through its worker thread
+    pool. The batch service contains CPU-heavy candidate preparation and
+    synchronous SQLAlchemy work around its awaited provider calls, so exposing
+    this entry point as ``async`` would otherwise monopolize the API loop.
+    """
+    asyncio.run(_execute_jev_operation_batch(batch_id))
+
+
+async def _execute_jev_operation_batch(batch_id: str) -> None:
     db = SessionLocal()
     try:
         await JevOperationBatchService(db).execute(batch_id)

@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from app.models.jev import JevRuntimeSettings
 
 
-DEFAULT_ENDPOINT = "https://www.rsiai.net/v1/systemone"
-DEFAULT_MODEL = "jev-latest"
+DEFAULT_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
+DEFAULT_MODEL = "~typesafe/jev-latest"
+LEGACY_ENDPOINT = "https://www.rsiai.net/v1/systemone"
+LEGACY_MODEL = "jev-latest"
 
 
 class JevSettingsValidationError(ValueError):
@@ -55,11 +57,32 @@ class JevRuntimeSettingsService:
             )
             self.db.add(row)
             self.db.flush()
+        elif row.endpoint in {LEGACY_ENDPOINT, DEFAULT_ENDPOINT}:
+            migrated = False
+            if row.endpoint == LEGACY_ENDPOINT:
+                row.endpoint = DEFAULT_ENDPOINT
+                migrated = True
+            if row.model == LEGACY_MODEL:
+                row.model = DEFAULT_MODEL
+                migrated = True
+            if row.maintenance_model == LEGACY_MODEL:
+                row.maintenance_model = DEFAULT_MODEL
+                migrated = True
+            if migrated:
+                self.db.flush()
         return row
 
     def update(self, values: dict[str, object]) -> JevRuntimeSettings:
         row = self.get_or_create()
-        candidate = self._values(row)
+        candidate = self.draft_values(values)
+        for key, value in candidate.items():
+            setattr(row, key, value)
+        self.db.flush()
+        return row
+
+    def draft_values(self, values: dict[str, object]) -> dict[str, object]:
+        """Validate a draft against saved values without mutating the settings row."""
+        candidate = self._values(self.get_or_create())
         for key, value in values.items():
             if key == "api_key":
                 normalized = str(value or "").strip()
@@ -76,10 +99,7 @@ class JevRuntimeSettingsService:
             else:
                 candidate[key] = value
         self._validate(candidate)
-        for key, value in candidate.items():
-            setattr(row, key, value)
-        self.db.flush()
-        return row
+        return candidate
 
     def serialize(self) -> dict[str, object]:
         row = self.get_or_create()

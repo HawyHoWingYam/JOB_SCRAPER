@@ -199,6 +199,47 @@ def build_duplicate_candidates(
     return tuple(candidates[: policy.max_pairs])
 
 
+def rank_duplicate_candidates_for_subject(
+    subject: DuplicateCandidateJob,
+    candidates: tuple[DuplicateCandidateJob, ...],
+    *,
+    limit: int,
+) -> tuple[DuplicateCandidate, ...]:
+    """Rank a bounded product candidate set against one subject Job.
+
+    The offline evaluator needs a symmetric all-subject union to measure corpus
+    recall. Product execution already has one explicit subject and must not pay
+    that quadratic cost merely to discard every unrelated pair afterwards.
+    """
+    if limit < 1:
+        raise ValueError("candidate limit must be positive")
+    if not _has_pair_evidence(subject.snapshot):
+        return ()
+    ranked: list[tuple[float, str, DuplicateCandidateJob]] = []
+    seen = {subject.identity}
+    for candidate in candidates:
+        if candidate.identity in seen or not _has_pair_evidence(candidate.snapshot):
+            continue
+        seen.add(candidate.identity)
+        ranked.append((_lexical_similarity(subject, candidate), candidate.identity, candidate))
+    ranked.sort(key=lambda value: (-value[0], value[1]))
+    selected = []
+    for rank, (score, candidate_identity, _candidate) in enumerate(ranked[:limit], 1):
+        pair = _canonical_pair(subject.identity, candidate_identity)
+        selected.append(
+            DuplicateCandidate(
+                pair_id=hashlib.sha256("\0".join(pair).encode("utf-8")).hexdigest(),
+                left_identity=pair[0],
+                right_identity=pair[1],
+                lexical_score=score,
+                embedding_score=None,
+                methods=("lexical",),
+                rank=rank,
+            )
+        )
+    return tuple(selected)
+
+
 def candidate_recall_at_k(
     cases: tuple[ControlledDuplicateCase, ...],
     candidates: tuple[DuplicateCandidate, ...],
@@ -525,6 +566,7 @@ __all__ = [
     "DuplicateArtifactError",
     "DuplicateJobSnapshot",
     "build_duplicate_candidates",
+    "rank_duplicate_candidates_for_subject",
     "candidate_recall_at_k",
     "score_duplicate_evaluation",
     "duplicate_pair_hash",

@@ -94,9 +94,12 @@ export async function apiFetchJson(url, options = {}) {
 
   headers.set('X-Request-ID', effectiveRequestId);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const { signal, cleanup } = mergeAbortSignals(fetchOptions.signal, controller.signal);
+  const hasInternalTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
+  const controller = hasInternalTimeout ? new AbortController() : null;
+  const timeout = hasInternalTimeout
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
+  const { signal, cleanup } = mergeAbortSignals(fetchOptions.signal, controller?.signal);
 
   try {
     let retryCount = 0;
@@ -181,17 +184,27 @@ export async function apiFetchJson(url, options = {}) {
     }
   } catch (error) {
     const callerCancelled = error?.name === 'AbortError' && fetchOptions.signal?.aborted;
+    const requestTimedOut =
+      error?.name === 'AbortError'
+      && controller?.signal.aborted
+      && !fetchOptions.signal?.aborted;
+    const normalizedError = requestTimedOut
+      ? new ApiRequestError(`Request timed out after ${timeoutMs} ms`, {
+          code: 'REQUEST_TIMEOUT',
+          requestId: effectiveRequestId,
+        })
+      : error;
     if (!failureLogged && !callerCancelled) {
       logError('api.request_failed', {
         requestId: effectiveRequestId,
         method,
         url,
         durationMs: Date.now() - startedAt,
-        detail: error,
+        detail: normalizedError?.message || normalizedError,
       });
     }
 
-    throw error;
+    throw normalizedError;
   } finally {
     clearTimeout(timeout);
     cleanup();

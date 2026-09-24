@@ -32,6 +32,12 @@ POST /api/jev/operations/batches/{batch_id}/resume
 POST /api/jev/operations/batches/{batch_id}/retry-failed
 ```
 
+Frontend transport contract:
+
+```text
+apiFetchJson(..., { timeoutMs: null })  # manually started Jev receipt/work actions
+```
+
 Owned database tables:
 
 ```text
@@ -48,6 +54,19 @@ introduce another queue or bypass the enrichment outbox/worker.
 
 The provider call is exactly `POST <configured-full-endpoint>` with a bearer
 credential. Do not append `/v1/systemone` in the adapter.
+
+The managed OpenRouter defaults are:
+
+```text
+endpoint = https://openrouter.ai/api/alpha/decisions
+model = ~typesafe/jev-latest
+```
+
+`typesafe/jev-1.13` may be selected when a workflow needs a pinned model. The
+legacy managed values `https://www.rsiai.net/v1/systemone` and `jev-latest`
+are upgraded only when the settings row still belongs to the recognized
+managed OpenRouter configuration; arbitrary custom endpoints/models are not
+rewritten.
 
 ### 3. Contracts
 
@@ -76,6 +95,66 @@ credential. Do not append `/v1/systemone` in the adapter.
   System One. Provider work starts only after an explicit operator action from
   the unified Jev Operations page. The smoke action first creates one bounded
   run, then explicitly executes its only item.
+- Jev operation scope accepts optional inclusive `posted_date_from` and
+  `posted_date_to` calendar dates. A bounded date window excludes Jobs without a
+  `posted_date`, is frozen into the plan fingerprint/selection snapshot, and
+  rejects a reversed range before any provider work can start.
+- Jev operation scope also freezes a deterministic `job_offset` plus `max_jobs`.
+  Neither field has an application-defined upper bound; `max_jobs=null` means
+  all matching Jobs after the deterministic offset. The UI exposes this as
+  Include all matching Jobs plus an optional Maximum matching Jobs value.
+  Items inside the durable batch execute sequentially; changing scope never
+  starts provider work automatically.
+- One manually confirmed durable batch may freeze an `execution_batch_size` and
+  a one-based `start_execution_batch`, and expose virtual execution-batch
+  progress. For example, 20,000 selected Jobs at 500 Jobs per execution batch
+  yields 40 sequential execution batches; starting at batch 9 skips the first
+  4,000 Jobs in that frozen ordered scope and automatically processes batches
+  9 through 40. The next segment continues automatically under the original
+  manual authorization; Stop remains sticky and Resume is always manual. These
+  are checkpoints inside one durable parent batch, not independently scheduled
+  provider work.
+- The Job batch builder does not require a separate eligibility Preview. Its
+  single Start control opens the final confirmation dialog; only Confirm and
+  start freezes the deterministic Job IDs and creates the durable batch. Item
+  eligibility and fingerprints are then evaluated sequentially inside that
+  recorded batch before each Job's selected operations may dispatch. This keeps
+  a 1,000-Job scope from synchronously planning all operations twice while
+  preserving manual provider authority, unchanged-result skipping and durable
+  Stop/Resume behavior. The legacy provider-free preview endpoint remains
+  available to API callers but is not part of the Job batch UI workflow.
+- Preview and batch-history list responses return aggregate counts and frozen
+  scope metadata without expanding every selected Job ID or operation item.
+  The single-batch detail endpoint may include that batch's item records. This
+  keeps all-matching scopes usable when one durable plan contains tens of
+  thousands of Jobs and multiple operations.
+- A manually created operation batch executes through a synchronous background
+  entry point so Starlette places its mixed CPU/SQLAlchemy/async-provider loop
+  in a worker thread. The batch runner must not monopolize the API event loop;
+  health, history and manual Stop controls remain responsive while it runs.
+- While a batch or general run is active, Jev Operations polls its history at
+  most once per minute. Automatic polling is silent and deduplicates overlapping
+  reads; only an explicit Refresh history action exposes a refreshing state.
+  Polling must not make history copy or controls flash on every interval.
+- The frozen backend `timeout_seconds` governs each provider request. Frontend
+  calls that synchronously await explicit Jev provider work or durable batch
+  creation disable their own request timer (`timeoutMs: null`) so a competing
+  browser deadline cannot hide a receipt that commits later. Opening the final
+  confirmation owns one idempotency key for all attempts to start that exact
+  scope; a transport retry must reuse it. Other ordinary reads retain their
+  normal frontend timeouts.
+  Caller-driven abort signals remain valid cancellation controls.
+- A multi-Job Skills preview constructs one request-scoped taxonomy index. It
+  normalizes taxonomy labels/aliases once and caches deterministic ranked codes
+  by normalized extracted Skill plus option limit. Preview and start must still
+  produce the same case fingerprints and option ordering; per-Job rebuilding of
+  the taxonomy-wide fuzzy-search corpus is forbidden.
+- A multi-Job Skills preview bulk-loads active Skill mentions and latest online
+  classifications for the selected Job IDs. Per-Job mention/classification
+  queries are forbidden. Because an operator may preview all matching Jobs with
+  no application-defined count ceiling and previewing is provider-free, the
+  frontend does not impose its ordinary 15s deadline on this explicit Preview
+  action.
 - The Settings page owns credentials, model and operational defaults. Preview,
   Start, Stop, Resume, Retry, smoke and all other Jev execution controls live on
   the unified Jev Operations page.
@@ -110,19 +189,29 @@ credential. Do not append `/v1/systemone` in the adapter.
 | Duplicate active purpose or invalid work | Run create `422`; no provider call |
 | Key changed after run creation | Execute `409`; frozen run is not silently rebound |
 | Timeout/network/non-2xx | Item fails with a secret-safe unavailable receipt; no implicit retry |
+| Frontend waits on explicit provider work | No frontend-generated deadline; backend frozen timeout owns the result |
+| Frontend waits on durable batch creation | No frontend-generated deadline; retries for the same confirmed scope reuse its idempotency key |
+| Local preview exceeds its frontend deadline | Say the local preview was slow and that no provider request was sent; never label it as a Jev provider timeout |
 | Malformed JSON/schema or answer mismatch | Item fails as invalid; no local cost is invented |
 | Stop before dispatch | Pending items become cancelled; no provider call |
 | Resume non-cancelled run or retry beyond frozen limit | `409`; existing receipts remain unchanged |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** an operator saves masked settings, previews work for free, explicitly
-  starts a bounded run, receives typed answers plus usage/latency, and sees the
-  frozen model and optional provider-reported cost in the UI.
+- **Good:** an operator saves masked settings, configures a deterministic Job
+  scope, explicitly confirms a bounded durable batch, receives typed answers
+  plus usage/latency, and sees the frozen model and optional provider-reported
+  cost in the UI.
 - **Base:** Jev is disabled or unavailable. Existing deterministic Job/Skill
   behavior remains unchanged and read surfaces remain usable.
+- **Good:** a provider consumes its full configured timeout and the backend can
+  still persist and return the unavailable receipt without a browser timer
+  aborting the request first.
 - **Bad:** page render, Settings save, scheduler startup or process restart
   starts Jev work.
+- **Bad:** set a frontend provider-action timeout equal to, or slightly above,
+  the backend timeout. Network and commit overhead make that a cancellation
+  race rather than an operational bound.
 - **Bad:** recreate provider monetary limits locally, estimate money from token
   usage, block on a local ceiling, return upstream bodies, or persist the bearer
   credential in run JSON/logs/test artifacts.
@@ -140,6 +229,16 @@ credential. Do not append `/v1/systemone` in the adapter.
   limit.
 - Route tests assert create/read/list/stop/resume/execute without allowance
   projections. The real HTTP integration test uses only a loopback fake server.
+- Frontend client tests assert `timeoutMs: null` creates no internal abort
+  signal while finite timeouts still normalize browser `AbortError` to
+  `REQUEST_TIMEOUT`. Jev Operations tests advance beyond the maximum backend
+  timeout and assert the provider action was not aborted by the frontend. Batch
+  start tests assert there is no frontend abort signal, no mandatory operation
+  Preview request, and a transport retry reuses the same idempotency key.
+- Online Skill case-builder tests reuse one request context across Jobs and
+  assert repeated normalized Skill names are ranked once. A representative
+  100-Job Skills preview must preserve counts/fingerprints while staying well
+  below the ordinary frontend request deadline on the sandbox corpus.
 - Browser E2E uses an isolated backend database and loopback fake System One;
   assert save/reload, masked secret, exactly one provider request, typed receipt,
   usage, optional provider cost, explicit manual start, and old-run frozen model
@@ -162,6 +261,14 @@ if estimated_cost(request) > local_allowance:
 ```python
 result = await client.evaluate(request)
 attempt.actual_microdollars = provider_reported_cost(result.usage)
+```
+
+```javascript
+// Wrong: races the backend provider timeout and receipt commit.
+apiFetchJson(executeUrl, { method: "POST", timeoutMs: 610_000 });
+
+// Correct: the frozen backend timeout owns explicit provider execution.
+apiFetchJson(executeUrl, { method: "POST", timeoutMs: null });
 ```
 
 If the provider omits cost, persist `None`. Operational safety still comes from
@@ -376,7 +483,9 @@ model and provider-managed monetary policy.
 ### 3. Contracts
 
 - Candidate generation is a bounded lexical top-K over active Source Jobs and
-  reuses the deterministic offline scorer. It does not use Related Jobs title
+  reuses the deterministic offline scorer. Product execution ranks only the
+  explicit subject against its bounded corpus; the quadratic symmetric union is
+  reserved for offline recall evaluation. It does not use Related Jobs title
   deduplication and does not infer transitive clusters.
 - Each pair is canonicalized by ordered `source_site:source_job_id` identities.
   Its evidence fingerprint binds both minimized snapshots and rubric version.

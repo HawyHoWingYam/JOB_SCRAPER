@@ -22,7 +22,7 @@ from app.models.jev import (
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
 
 
-def _client(*, endpoint: str = "https://www.rsiai.net/v1/systemone"):
+def _client(*, endpoint: str = "https://openrouter.ai/api/alpha/decisions"):
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -90,7 +90,7 @@ def test_jev_run_http_lifecycle_freezes_reads_and_stops_without_dispatch() -> No
         body = created.json()
         assert body["status"] == "pending"
         assert body["total_items"] == 1
-        assert body["settings_snapshot"]["model"] == "jev-latest"
+        assert body["settings_snapshot"]["model"] == "~typesafe/jev-latest"
         assert "api_key" not in body["settings_snapshot"]
         assert body["items"][0]["status"] == "pending"
 
@@ -186,7 +186,7 @@ def test_jev_http_end_to_end_uses_provider_console_limits_and_receipt() -> None:
                 "authorization": "Bearer test-secret",
                 "body": {
                     "state": {"text": "Python is required."},
-                    "model": "jev-latest",
+                    "model": "~typesafe/jev-latest",
                     "questions": {
                         "support": {
                             "type": "noul",

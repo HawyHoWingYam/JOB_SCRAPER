@@ -1,0 +1,28 @@
+.control-dialog-overlay {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(2, 6, 23, 0.82);
+}
+
+.control-dialog {
+  width: min(38rem, 100%);
+  padding: 1.1rem;
+  border: 1px solid rgba(106, 165, 255, 0.48);
+  border-radius: 0.85rem;
+  background: #111827;
+}
+
+.control-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.7rem;
+}
+
+.control-danger {
+  border-color: rgba(248, 113, 113, 0.48) !important;
+  background: rgba(127, 29, 29, 0.28) !important;
+}

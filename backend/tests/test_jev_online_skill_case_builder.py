@@ -9,7 +9,10 @@ from app.models.current_taxonomy import (
     CurrentTaxonomyAliasRecord,
     CurrentTaxonomyNodeRecord,
 )
-from app.services.jev_online_skill_case_builder import build_online_skill_case
+from app.services.jev_online_skill_case_builder import (
+    OnlineSkillCaseBuildContext,
+    build_online_skill_case,
+)
 
 
 def _session():
@@ -124,6 +127,40 @@ def test_builder_changes_snapshot_when_alias_changes_and_skips_empty_work() -> N
             )
             is None
         )
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_request_context_reuses_taxonomy_and_ranked_skill_options(monkeypatch) -> None:
+    engine, db = _session()
+    try:
+        import app.services.jev_online_skill_case_builder as builder
+
+        rank_calls = 0
+        original_rank = builder.rank_prepared_skill_options
+
+        def counted_rank(*args, **kwargs):
+            nonlocal rank_calls
+            rank_calls += 1
+            return original_rank(*args, **kwargs)
+
+        monkeypatch.setattr(builder, "rank_prepared_skill_options", counted_rank)
+        context = OnlineSkillCaseBuildContext(db)
+        for _ in range(2):
+            case = build_online_skill_case(
+                db,
+                job_id=uuid4(),
+                source_site="jobsdb",
+                title="Backend Engineer",
+                evidence_text="Python is required.",
+                extracted_skills=({"name": "Python"},),
+                context=context,
+            )
+            assert case is not None
+
+        assert rank_calls == 1
+        assert len(context.ranked_codes) == 1
     finally:
         db.close()
         engine.dispose()

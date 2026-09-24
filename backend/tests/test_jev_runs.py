@@ -54,8 +54,8 @@ def test_run_freezes_configuration_and_ordered_work_membership() -> None:
         db.commit()
 
         frozen = dict(run.settings_snapshot)
-        assert frozen["endpoint"] == "https://www.rsiai.net/v1/systemone"
-        assert frozen["model"] == "jev-latest"
+        assert frozen["endpoint"] == "https://openrouter.ai/api/alpha/decisions"
+        assert frozen["model"] == "~typesafe/jev-latest"
         assert "max_request_reservation_microdollars" not in frozen
         assert "allowance_microdollars" not in frozen
         assert "api_key" not in frozen

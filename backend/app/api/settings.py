@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ from app.ai.llm_client import (
     reset_client,
     safe_llm_error_message,
 )
+from app.ai.system_one import NativeSystemOneClient, SystemOneRequest
 from app.crawl_cancellation import ACTIVE_MANUAL_DETAIL_STATUSES
 from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
@@ -179,6 +181,15 @@ class AISettingsTestRequest(BaseModel):
 
     scope: str
     profile: DraftProfilePayload
+
+
+class JevSettingsTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    timeout_seconds: Optional[int] = None
 
 
 def _format_validation_errors(exc: RuntimeSettingsValidationError) -> list[dict]:
@@ -426,3 +437,71 @@ async def test_ai_settings_profile(
                 "config_fingerprint": fingerprint,
             },
         ) from exc
+
+
+@router.post("/ai/jev/test")
+async def test_jev_settings_connection(
+    request: JevSettingsTestRequest,
+    db: Session = Depends(get_db),
+):
+    service = JevRuntimeSettingsService(db)
+    client = None
+    try:
+        draft = service.draft_values(request.model_dump(exclude_unset=True))
+        api_key = str(draft.get("api_key") or "").strip()
+        if not api_key:
+            raise JevSettingsValidationError(
+                [
+                    {
+                        "loc": ["api_key"],
+                        "msg": "API key is required",
+                        "type": "value_error",
+                    }
+                ]
+            )
+        client = NativeSystemOneClient(
+            endpoint=str(draft["endpoint"]),
+            api_key=api_key,
+            http_client=httpx.AsyncClient(timeout=float(draft["timeout_seconds"])),
+        )
+        result = await client.evaluate(
+            SystemOneRequest.model_validate(
+                {
+                    "state": {"purpose": "Confirm the configured Jev connection."},
+                    "model": str(draft["model"]),
+                    "questions": {
+                        "ready": {
+                            "type": "choice",
+                            "instructions": "Is this request readable?",
+                            "criteria": {"yes": "Readable", "no": "Not readable"},
+                        }
+                    },
+                }
+            )
+        )
+        if result.status != "answered":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "ok": False,
+                    "error_message": result.error_message
+                    or "Jev connection test failed",
+                    "error_code": result.error_code,
+                },
+            )
+        return {
+            "ok": True,
+            "status": result.status,
+            "model": result.model,
+            "provider": result.provider,
+            "request_id": result.request_id,
+            "latency_ms": result.latency_ms,
+            "usage": result.usage.model_dump() if result.usage else None,
+        }
+    except JevSettingsValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail=_format_validation_errors(exc)
+        ) from exc
+    finally:
+        if client is not None:
+            await client.aclose()

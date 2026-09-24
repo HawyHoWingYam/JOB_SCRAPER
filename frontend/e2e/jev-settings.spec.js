@@ -16,7 +16,7 @@ async function configureJev(page) {
   await expect(page.getByRole('alert')).toContainText('AI runtime settings saved');
 }
 
-test('keeps money in the provider console and starts smoke only from Jev Operations', async ({
+test('tests the draft connection in Settings and keeps runtime smoke in Jev Operations', async ({
   page,
   request,
 }) => {
@@ -25,16 +25,29 @@ test('keeps money in the provider console and starts smoke only from Jev Operati
     .toBeVisible();
   await expect(page.getByLabel(/allowance|reservation|microdollars/i)).toHaveCount(0);
 
+  const beforeTestCount = await providerRequestCount(request);
+  const beforeTestRunsResponse = await request.get('http://127.0.0.1:18001/api/jev/runs');
+  const beforeTestRuns = (await beforeTestRunsResponse.json()).runs;
+  await page.getByRole('button', { name: 'Test Jev connection' }).click();
+  await expect(page.getByRole('alert')).toContainText('Jev connection test passed');
+  expect(await providerRequestCount(request)).toBe(beforeTestCount + 1);
+  const testRuns = await request.get('http://127.0.0.1:18001/api/jev/runs');
+  expect((await testRuns.json()).runs).toHaveLength(beforeTestRuns.length);
+
   const beforeCount = await providerRequestCount(request);
   await page.goto('/#jev');
-  await expect(page.getByRole('heading', { name: 'Jev Operations' })).toBeVisible();
-  await expect(page.getByText(/nothing on this page starts until/i)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Jev Operations', exact: true })).toBeVisible();
+  await expect(page.getByText(/jev work starts only after/i)).toBeVisible();
   expect(await providerRequestCount(request)).toBe(beforeCount);
 
+  await page.getByRole('tab', { name: /Advisory tools/ }).click();
   await page.getByRole('button', { name: 'Run one Jev smoke request' }).click();
-  await expect(page.getByText(/"status": "completed"/)).toBeVisible();
-  await expect(page.getByLabel(/Jev run /).first()).toContainText(
-    'configuration_smoke_test',
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Latest smoke response' }),
+  ).toContainText('completed');
+  await page.getByRole('tab', { name: /Run history/ }).click();
+  await expect(page.getByLabel(/^Jev run [0-9a-f-]+$/).first()).toContainText(
+    'configuration smoke test',
   );
   expect(await providerRequestCount(request)).toBe(beforeCount + 1);
 });
@@ -46,7 +59,8 @@ test('starts Skill maintenance manually in the unified console and approves in r
   await request.post('http://127.0.0.1:18001/fake/mode/normal');
   const beforeCount = await providerRequestCount(request);
   await page.goto('/#jev');
-  const tool = page.getByRole('heading', { name: 'Skill taxonomy maintenance' }).locator('..');
+  await page.getByRole('tab', { name: /Advisory tools/ }).click();
+  const tool = page.getByRole('heading', { name: 'Skill taxonomy maintenance' }).locator('xpath=ancestor::article');
   await tool.getByRole('button', { name: 'Run maintenance now' }).click();
   await expect(tool).toContainText('ready_for_approval');
   expect(await providerRequestCount(request)).toBe(beforeCount + 1);
@@ -71,7 +85,8 @@ test('previews crawl quality without dispatch and evaluates only after the manua
   const beforeCount = await providerRequestCount(request);
 
   await page.goto('/#jev');
-  const tool = page.getByRole('heading', { name: 'Crawl content quality' }).locator('..');
+  await page.getByRole('tab', { name: /Advisory tools/ }).click();
+  const tool = page.getByRole('heading', { name: 'Crawl content quality' }).locator('xpath=ancestor::article');
   await tool.getByLabel('Crawl Job UUID').fill(seeded.crawl_job_id);
   await tool.getByRole('button', { name: 'Preview listings' }).click();
   await expect(tool.getByRole('button', { name: 'Evaluate listings with Jev' }))
@@ -103,7 +118,8 @@ test('previews and evaluates redacted incident clusters only from Jev Operations
   const beforeCount = await providerRequestCount(request);
 
   await page.goto('/#jev');
-  const tool = page.getByRole('heading', { name: 'Repeated incident triage' }).locator('..');
+  await page.getByRole('tab', { name: /Advisory tools/ }).click();
+  const tool = page.getByRole('heading', { name: 'Repeated incident triage' }).locator('xpath=ancestor::article');
   await tool.getByLabel('Event limit').fill('100');
   await tool.getByRole('button', { name: 'Preview incidents' }).click();
   await expect(tool.getByRole('button', { name: 'Evaluate clusters with Jev' }))
@@ -139,7 +155,8 @@ test('uses a saved Job Browser scope for a manually started relevance advisory',
   expect(await providerRequestCount(request)).toBe(beforeCount);
 
   await page.goto('/#jev');
-  const tool = page.getByRole('heading', { name: 'Search relevance advisory' }).locator('..');
+  await page.getByRole('tab', { name: /Advisory tools/ }).click();
+  const tool = page.getByRole('heading', { name: 'Search relevance advisory' }).locator('xpath=ancestor::article');
   await tool.getByRole('button', { name: 'Preview saved search' }).click();
   await expect(tool.getByRole('button', { name: 'Evaluate preview with Jev' }))
     .toBeEnabled();

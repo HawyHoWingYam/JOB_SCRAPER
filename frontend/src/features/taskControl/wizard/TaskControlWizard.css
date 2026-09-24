@@ -47,10 +47,6 @@
 .control-empty { border-style: dashed; border-color: rgba(148, 163, 184, 0.3); background: transparent; color: var(--color-text-secondary, #a9b1c4); text-align: center; }
 .control-conflict { display: grid; gap: 0.5rem; }
 .control-conflict h3, .control-conflict p { margin: 0; }
-.control-dialog-overlay { position: fixed; z-index: 1100; inset: 0; display: grid; place-items: center; padding: 1rem; background: rgba(2, 6, 23, 0.82); }
-.control-dialog { width: min(38rem, 100%); padding: 1.1rem; border: 1px solid rgba(106, 165, 255, 0.48); border-radius: 0.85rem; background: #111827; }
-.control-dialog-actions { justify-content: flex-end; }
-.control-danger { border-color: rgba(248, 113, 113, 0.48) !important; background: rgba(127, 29, 29, 0.28) !important; }
 @media (max-width: 980px) { .wizard-layout { flex-direction: column; } .wizard-summary { position: static; width: 100%; } }
 @media (max-width: 760px) { .wizard-progress, .intent-grid, .control-field-grid { grid-template-columns: 1fr; } .scope-node { align-items: stretch; flex-direction: column; } .scope-node-actions { justify-content: flex-start; } }
 

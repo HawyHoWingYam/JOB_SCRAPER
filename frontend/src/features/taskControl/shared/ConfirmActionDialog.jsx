@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
+import './ConfirmActionDialog.css';
 
-export default function ConfirmActionDialog({ title, summary, confirmLabel, pending, error, onCancel, onConfirm, restoreFocusRef }) {
+export default function ConfirmActionDialog({ title, summary, confirmLabel, pendingLabel = 'Working…', pending, error, onCancel, onConfirm, restoreFocusRef }) {
   const dialogRef = useRef(null);
   const cancelRef = useRef(null);
   const cancelCallback = useRef(onCancel);
@@ -49,7 +50,7 @@ export default function ConfirmActionDialog({ title, summary, confirmLabel, pend
         {error && <p role="alert" className="control-error">{error.message}</p>}
         <div className="control-dialog-actions">
           <button ref={cancelRef} type="button" disabled={pending} onClick={onCancel}>Cancel</button>
-          <button type="button" className="control-danger" disabled={pending} onClick={onConfirm}>{pending ? 'Working…' : confirmLabel}</button>
+          <button type="button" className="control-danger" disabled={pending} onClick={onConfirm}>{pending ? pendingLabel : confirmLabel}</button>
         </div>
       </section>
     </div>

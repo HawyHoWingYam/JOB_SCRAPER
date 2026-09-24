@@ -88,9 +88,7 @@ def _display_name(option: SkillOption) -> str:
     )
 
 
-def _skill_similarity(left: str, right: str) -> float:
-    left_key = normalize_exact_skill_key(left)
-    right_key = normalize_exact_skill_key(right)
+def _skill_similarity_keys(left_key: str, right_key: str) -> float:
     if not left_key or not right_key:
         return 0.0
     if left_key == right_key:
@@ -111,8 +109,24 @@ def _skill_similarity(left: str, right: str) -> float:
             * min(len(left_key), len(right_key))
             / max(len(left_key), len(right_key))
         )
+    # SequenceMatcher cannot exceed twice the shorter length divided by the
+    # combined length. Skip pairs that cannot possibly reach our acceptance
+    # threshold; this preserves results while avoiding most taxonomy-wide
+    # fuzzy comparisons during Jev batch previews.
+    maximum_ratio = (2 * min(len(left_key), len(right_key))) / (
+        len(left_key) + len(right_key)
+    )
+    if maximum_ratio < 0.82:
+        return 0.0
     ratio = SequenceMatcher(None, left_key, right_key).ratio()
     return ratio if ratio >= 0.82 else 0.0
+
+
+def _skill_similarity(left: str, right: str) -> float:
+    return _skill_similarity_keys(
+        normalize_exact_skill_key(left),
+        normalize_exact_skill_key(right),
+    )
 
 
 def deterministic_skill_baseline(
@@ -150,20 +164,39 @@ def deterministic_skill_baseline(
     return {"outcome": "unresolved", "skill_code": None, "reason": None}
 
 
-def rank_skill_options(
+PreparedSkillOptions = tuple[
+    tuple[SkillOption, tuple[tuple[str, str], ...]], ...
+]
+
+
+def prepare_skill_options(options: tuple[SkillOption, ...]) -> PreparedSkillOptions:
+    return tuple(
+        (
+            option,
+            tuple(
+                (normalize_exact_skill_key(value), reason)
+                for value, reason in (
+                    *((label, "label_similarity") for label in option.labels.values()),
+                    *((alias, "alias_similarity") for alias in option.aliases),
+                )
+            ),
+        )
+        for option in options
+    )
+
+
+def rank_prepared_skill_options(
     candidate: str,
-    options: tuple[SkillOption, ...],
+    prepared_options: PreparedSkillOptions,
     *,
     limit: int,
 ) -> list[dict[str, object]]:
+    candidate_key = normalize_exact_skill_key(candidate)
     ranked: list[tuple[float, str, SkillOption]] = []
-    for option in options:
-        values = [
-            *((label, "label_similarity") for label in option.labels.values()),
-            *((alias, "alias_similarity") for alias in option.aliases),
-        ]
+    for option, values in prepared_options:
         score, reason = max(
-            (_skill_similarity(candidate, value), reason) for value, reason in values
+            (_skill_similarity_keys(candidate_key, value_key), reason)
+            for value_key, reason in values
         )
         if score > 0:
             ranked.append((score, reason, option))
@@ -179,6 +212,19 @@ def rank_skill_options(
             ranked, key=lambda item: (-item[0], item[2].code)
         )[:limit]
     ]
+
+
+def rank_skill_options(
+    candidate: str,
+    options: tuple[SkillOption, ...],
+    *,
+    limit: int,
+) -> list[dict[str, object]]:
+    return rank_prepared_skill_options(
+        candidate,
+        prepare_skill_options(options),
+        limit=limit,
+    )
 
 
 def build_system_one_request(
@@ -431,11 +477,14 @@ __all__ = [
     "ControlledEvaluationCase",
     "EvaluationArtifactError",
     "EvaluationObservation",
+    "PreparedSkillOptions",
     "SkillOption",
     "build_system_one_request",
     "controlled_baseline_observations",
     "deterministic_skill_baseline",
     "load_controlled_cases",
+    "prepare_skill_options",
+    "rank_prepared_skill_options",
     "rank_skill_options",
     "score_evaluation",
     "write_json",
