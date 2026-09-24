@@ -36,7 +36,6 @@ def _session():
     settings = JevRuntimeSettingsService(db).get_or_create()
     settings.enabled = True
     settings.api_key = "test-secret"
-    settings.max_request_reservation_microdollars = 50_000
     settings.incident_triage_enabled = True
     settings.incident_triage_event_limit = 100
     job = CrawlJob(

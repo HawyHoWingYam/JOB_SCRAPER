@@ -41,7 +41,6 @@ def _session():
     settings = JevRuntimeSettingsService(db).get_or_create()
     settings.enabled = True
     settings.api_key = "test-secret"
-    settings.max_request_reservation_microdollars = 50_000
     settings.search_rerank_enabled = True
     settings.search_rerank_candidate_limit = 3
     company = Company(

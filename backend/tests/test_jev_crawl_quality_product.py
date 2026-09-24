@@ -36,7 +36,6 @@ def _session():
     settings = JevRuntimeSettingsService(db).get_or_create()
     settings.enabled = True
     settings.api_key = "test-secret"
-    settings.max_request_reservation_microdollars = 50_000
     settings.crawl_quality_enabled = True
     crawl_job = CrawlJob(
         id=uuid.uuid4(),
