@@ -23,6 +23,7 @@ from app.services.jev_operation_batch import (
     execute_jev_operation_batch,
 )
 from app.services.jev_related_jobs import JevRelatedJobsService
+from app.services.jev_run_service import JevRunService
 from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
 import app.models  # noqa: F401
 from scripts.bootstrap_db import bootstrap_database
@@ -100,7 +101,10 @@ def _recommendation(candidate: Job) -> dict[str, object]:
         "employment_types": [],
         "posted_date": None,
         "job_intelligence_availability": {
-            "source_attributes": {"available": False, "unavailable_code": "not_projected"},
+            "source_attributes": {
+                "available": False,
+                "unavailable_code": "not_projected",
+            },
             "skills": {"available": False, "unavailable_code": "not_projected"},
         },
         "semantic_score": 0.9,
@@ -230,9 +234,10 @@ def test_direct_start_freezes_scope_and_defers_expensive_eligibility() -> None:
         )
 
         assert batch.selected_job_ids == [str(subject.id)]
-        assert [(item.operation, item.status, item.eligibility_reason) for item in batch.items] == [
-            ("duplicate", "pending", "deferred")
-        ]
+        assert [
+            (item.operation, item.status, item.eligibility_reason)
+            for item in batch.items
+        ] == [("duplicate", "pending", "deferred")]
         assert db.execute(text("SELECT count(*) FROM jev_runs")).scalar_one() == 0
     finally:
         _dispose(db, engine)
@@ -324,6 +329,9 @@ class _ScoreEvaluator:
 
 
 class _DuplicateEvaluator:
+    async def aclose(self):
+        return None
+
     async def evaluate(self, request):
         return SystemOneResult(
             status="answered",
@@ -344,6 +352,19 @@ class _DuplicateEvaluator:
             },
             usage=SystemOneUsage(input_tokens=50, output_tokens=5, cost=0.001),
             latency_ms=5,
+        )
+
+
+class _UnavailableEvaluator:
+    async def aclose(self):
+        return None
+
+    async def evaluate(self, request):
+        return SystemOneResult(
+            status="unavailable",
+            model="jev-latest",
+            error_code="http_403",
+            error_message="System One returned HTTP 403",
         )
 
 
@@ -373,6 +394,62 @@ async def test_duplicate_force_reevaluation_preserves_same_evidence_history() ->
         )
         assert [row.attempt_generation for row in rows] == [1, 2]
         assert [row.jev_run_id for row in rows] == [first.run_id, forced.run_id]
+    finally:
+        _dispose(db, engine)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_failure_is_retryable_instead_of_being_current() -> None:
+    engine, db, subject, _candidate = _session()
+    try:
+        service = JevDuplicateAssociationService(db)
+        first = service.start_for_job(subject.id, candidate_limit=1)
+        assert first.run_id is not None
+        await service.execute(first.run_id, evaluator=_UnavailableEvaluator())
+        db.commit()
+
+        retry = service.start_for_job(subject.id, candidate_limit=1)
+
+        assert retry.run_id is not None
+        assert retry.run_id != first.run_id
+        rows = list(
+            db.query(JevDuplicateAssociation)
+            .order_by(JevDuplicateAssociation.attempt_generation)
+            .all()
+        )
+        assert [row.status for row in rows] == ["unavailable"]
+        assert retry.candidate_count == 1
+    finally:
+        _dispose(db, engine)
+
+
+@pytest.mark.asyncio
+async def test_outer_duplicate_item_fails_when_bounded_run_has_failures(
+    monkeypatch,
+) -> None:
+    engine, db, _subject, _candidate = _session()
+    try:
+        service = JevOperationBatchService(db)
+        preview = service.preview(_Request())
+        batch = service.start(
+            _Request(),
+            preview_fingerprint=preview["preview_fingerprint"],
+            idempotency_key="duplicate-provider-failure",
+        )
+        monkeypatch.setattr(
+            "app.services.jev_operation_batch.build_jev_evaluator",
+            lambda _db, _run: _UnavailableEvaluator(),
+        )
+
+        completed = await service.execute(batch.id)
+
+        assert completed.status == "completed_with_failures"
+        assert completed.failed_items == 1
+        assert completed.items[0].status == "failed"
+        assert completed.items[0].error_code == "JevDuplicateRunFailed"
+        assert completed.items[0].error_message == (
+            "duplicate_run_completed_with_failures"
+        )
     finally:
         _dispose(db, engine)
 
@@ -439,6 +516,141 @@ def test_retry_failed_only_requeues_failed_items() -> None:
 
         retried = service.retry_failed(batch.id)
         assert [item.status for item in retried.items] == ["pending", "completed"]
+    finally:
+        _dispose(db, engine)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("attempt_count", "expected_retry"),
+    ((1, False), (2, True)),
+)
+async def test_skills_execution_forwards_outer_retry_intent(
+    monkeypatch,
+    attempt_count: int,
+    expected_retry: bool,
+) -> None:
+    engine, db, subject, _candidate = _session()
+    try:
+        item = JevOperationBatchItem(
+            batch_id=str(uuid.uuid4()),
+            job_id=subject.id,
+            operation="skills",
+            position=0,
+            status="running",
+            eligibility_reason="eligible",
+            attempt_count=attempt_count,
+        )
+        observed = []
+
+        async def enrich_job_id(
+            _service,
+            job_id,
+            *,
+            force,
+            retry_terminal_failure,
+        ):
+            observed.append((job_id, force, retry_terminal_failure))
+            return {
+                "status": "success",
+                "jev_skill_classification": {"status": "answered"},
+            }
+
+        monkeypatch.setattr(
+            "app.services.jev_operation_batch.JevSkillBackfillService.enrich_job_id",
+            enrich_job_id,
+        )
+
+        result = await JevOperationBatchService(db)._execute_item(item, force=False)
+
+        assert result["status"] == "success"
+        assert observed == [(subject.id, False, expected_retry)]
+    finally:
+        _dispose(db, engine)
+
+
+def test_reconcile_legacy_duplicate_failure_is_provider_free_and_idempotent() -> None:
+    engine, db, _subject, _candidate = _session()
+    try:
+        service = JevOperationBatchService(db)
+        preview = service.preview(_Request())
+        batch = service.start(
+            _Request(),
+            preview_fingerprint=preview["preview_fingerprint"],
+            idempotency_key="reconcile-legacy-duplicate",
+        )
+        run = JevRunService(db).start(
+            purpose="duplicate_association_product",
+            rubric_version="test",
+            items=[
+                {
+                    "subject_id": "pair",
+                    "evidence_refs": [],
+                    "payload": {
+                        "state": {},
+                        "questions": {
+                            "decision": {
+                                "type": "choice",
+                                "criteria": {"yes": "yes", "no": "no"},
+                            }
+                        },
+                    },
+                }
+            ],
+        )
+        run.status = "completed_with_failures"
+        run.pending_items = 0
+        run.failed_items = 1
+        item = batch.items[0]
+        item.status = "completed"
+        item.result = {"status": "completed", "jev_run_id": run.id}
+        batch.status = "stopped"
+        db.commit()
+
+        assert service.reconcile_duplicate_failures(batch.id) == 1
+        assert item.status == "failed"
+        assert item.error_code == "JevDuplicateRunFailed"
+        assert service.reconcile_duplicate_failures(batch.id) == 0
+        assert db.query(JevDuplicateAssociation).count() == 0
+        assert (
+            db.execute(text("SELECT count(*) FROM jev_run_attempts")).scalar_one() == 0
+        )
+    finally:
+        _dispose(db, engine)
+
+
+@pytest.mark.asyncio
+async def test_failed_only_retry_returns_to_stopped_when_suspended_work_remains(
+    monkeypatch,
+) -> None:
+    engine, db, _subject, _candidate = _session()
+    try:
+        service = JevOperationBatchService(db)
+        preview = service.preview(_TwoJobRequest())
+        batch = service.start(
+            _TwoJobRequest(),
+            preview_fingerprint=preview["preview_fingerprint"],
+            idempotency_key="retry-while-stopped",
+        )
+        batch.status = "stopped"
+        batch.items[0].status = "failed"
+        batch.items[1].status = "stopped"
+        db.commit()
+
+        retried = service.retry_failed(batch.id)
+        assert [item.status for item in retried.items] == ["pending", "stopped"]
+
+        async def execute_item(item, *, force):
+            return {"status": "completed"}
+
+        monkeypatch.setattr(service, "_execute_item", execute_item)
+        settled = await service.execute(batch.id)
+
+        assert settled.status == "stopped"
+        assert [item.status for item in settled.items] == ["completed", "stopped"]
+        resumed = service.resume(batch.id)
+        assert resumed.status == "pending"
+        assert [item.status for item in resumed.items] == ["completed", "pending"]
     finally:
         _dispose(db, engine)
 

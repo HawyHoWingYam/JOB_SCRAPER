@@ -35,20 +35,32 @@ class JevOnlineSkillStore:
         case: OnlineSkillCase,
         dispatch: OnlineSkillDispatch,
         force: bool = False,
+        retry_terminal_failure: bool = False,
     ) -> OnlineSkillReservation:
         existing = None if force else self._find(job_id, dispatch.input_fingerprint)
+        if (
+            retry_terminal_failure
+            and existing is not None
+            and existing.status in {"unavailable", "invalid"}
+        ):
+            existing = None
         if existing is not None:
             return OnlineSkillReservation(record=existing, created=False)
-        generation = int(
-            self.db.scalar(
-                select(func.max(JevOnlineSkillClassification.attempt_generation)).where(
-                    JevOnlineSkillClassification.job_id == job_id,
-                    JevOnlineSkillClassification.input_fingerprint
-                    == dispatch.input_fingerprint,
+        generation = (
+            int(
+                self.db.scalar(
+                    select(
+                        func.max(JevOnlineSkillClassification.attempt_generation)
+                    ).where(
+                        JevOnlineSkillClassification.job_id == job_id,
+                        JevOnlineSkillClassification.input_fingerprint
+                        == dispatch.input_fingerprint,
+                    )
                 )
+                or 0
             )
-            or 0
-        ) + 1
+            + 1
+        )
         record = JevOnlineSkillClassification(
             job_id=job_id,
             input_fingerprint=dispatch.input_fingerprint,
@@ -182,15 +194,17 @@ class JevOnlineSkillStore:
         attempt_generation: int | None = None,
     ) -> JevOnlineSkillClassification | None:
         query = select(JevOnlineSkillClassification).where(
-                JevOnlineSkillClassification.job_id == job_id,
-                JevOnlineSkillClassification.input_fingerprint == input_fingerprint,
-            )
+            JevOnlineSkillClassification.job_id == job_id,
+            JevOnlineSkillClassification.input_fingerprint == input_fingerprint,
+        )
         if attempt_generation is not None:
             query = query.where(
                 JevOnlineSkillClassification.attempt_generation == attempt_generation
             )
         return self.db.scalar(
-            query.order_by(JevOnlineSkillClassification.attempt_generation.desc()).limit(1)
+            query.order_by(
+                JevOnlineSkillClassification.attempt_generation.desc()
+            ).limit(1)
         )
 
     def _require(self, record_id: str) -> JevOnlineSkillClassification:

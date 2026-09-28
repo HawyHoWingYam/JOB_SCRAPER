@@ -27,6 +27,12 @@ from app.utils.time import utc_now
 
 RUBRIC_VERSION = "jev-duplicate-association-v1"
 PURPOSE = "duplicate_association_product"
+_SUCCESSFUL_CURRENT_STATUSES = {
+    "proposed",
+    "confirmed",
+    "rejected",
+    "insufficient",
+}
 _SUPPORTED_SOURCES = {"jobsdb", "ctgoodjobs", "offertoday"}
 
 
@@ -56,8 +62,14 @@ def _minimal_text(value: str | None) -> str | None:
 def _snapshot(job: Job) -> DuplicateJobSnapshot:
     source_site = str(job.source_site or "").strip().lower()
     if source_site not in _SUPPORTED_SOURCES:
-        raise DuplicateAssociationError("Job source is not eligible for duplicate evaluation")
-    posted_date = job.posted_date.date().isoformat() if isinstance(job.posted_date, datetime) else None
+        raise DuplicateAssociationError(
+            "Job source is not eligible for duplicate evaluation"
+        )
+    posted_date = (
+        job.posted_date.date().isoformat()
+        if isinstance(job.posted_date, datetime)
+        else None
+    )
     return DuplicateJobSnapshot(
         source_site=source_site,
         source_job_id=str(job.source_job_id),
@@ -85,7 +97,10 @@ def _canonical_pair(
     )
     canonical_left, canonical_left_snapshot = ordered[0]
     canonical_right, canonical_right_snapshot = ordered[1]
-    identities = (_identity(canonical_left_snapshot), _identity(canonical_right_snapshot))
+    identities = (
+        _identity(canonical_left_snapshot),
+        _identity(canonical_right_snapshot),
+    )
     pair_key = hashlib.sha256("\0".join(identities).encode("utf-8")).hexdigest()
     input_fingerprint = normalized_content_hash(
         {
@@ -163,10 +178,16 @@ class JevDuplicateAssociationService:
             right_job = jobs_by_identity[candidate.right_identity]
             canonical = _canonical_pair(left_job, right_job)
             existing = self._exact(canonical[4], canonical[5])
-            if existing is not None and not force:
+            if (
+                existing is not None
+                and existing.status in _SUCCESSFUL_CURRENT_STATUSES
+                and not force
+            ):
                 skipped += 1
                 continue
-            generation = (existing.attempt_generation if existing is not None else 0) + 1
+            generation = (
+                existing.attempt_generation if existing is not None else 0
+            ) + 1
             items.append(self._run_item(candidate, canonical, generation=generation))
         if not items:
             return DuplicateEvaluationPlan(None, 0, skipped)
@@ -308,7 +329,8 @@ class JevDuplicateAssociationService:
             status=status,
             confidence_millis=(
                 round(float(confidence) * 1000)
-                if isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+                if isinstance(confidence, (int, float))
+                and not isinstance(confidence, bool)
                 else None
             ),
             candidate_provenance=dict(metadata.get("candidate_provenance") or {}),
@@ -378,7 +400,9 @@ class JevDuplicateAssociationService:
         *,
         subject_job_id: UUID | None = None,
     ) -> dict[str, object]:
-        other_id = row.right_job_id if subject_job_id == row.left_job_id else row.left_job_id
+        other_id = (
+            row.right_job_id if subject_job_id == row.left_job_id else row.left_job_id
+        )
         other = self.db.get(Job, other_id)
         receipt = row.receipt if isinstance(row.receipt, dict) else {}
         usage = receipt.get("usage") if isinstance(receipt.get("usage"), dict) else {}
@@ -386,7 +410,9 @@ class JevDuplicateAssociationService:
             "id": row.id,
             "status": row.status,
             "confidence": (
-                row.confidence_millis / 1000 if row.confidence_millis is not None else None
+                row.confidence_millis / 1000
+                if row.confidence_millis is not None
+                else None
             ),
             "pair_key": row.pair_key,
             "other_job": (
@@ -395,10 +421,14 @@ class JevDuplicateAssociationService:
                     "source_site": str(other.source_site),
                     "source_job_id": str(other.source_job_id),
                     "title": other.title,
-                    "company_name": other.company.name if other.company is not None else None,
+                    "company_name": other.company.name
+                    if other.company is not None
+                    else None,
                     "location": other.location,
                     "posted_date": (
-                        other.posted_date.isoformat() if other.posted_date is not None else None
+                        other.posted_date.isoformat()
+                        if other.posted_date is not None
+                        else None
                     ),
                 }
                 if other is not None
@@ -406,11 +436,19 @@ class JevDuplicateAssociationService:
             ),
             "candidate_provenance": row.candidate_provenance,
             "receipt": {
-                "model": receipt.get("model") if isinstance(receipt.get("model"), str) else None,
-                "request_id": receipt.get("request_id") if isinstance(receipt.get("request_id"), str) else None,
-                "cost_usd": usage.get("cost") if isinstance(usage.get("cost"), (int, float)) else None,
+                "model": receipt.get("model")
+                if isinstance(receipt.get("model"), str)
+                else None,
+                "request_id": receipt.get("request_id")
+                if isinstance(receipt.get("request_id"), str)
+                else None,
+                "cost_usd": usage.get("cost")
+                if isinstance(usage.get("cost"), (int, float))
+                else None,
             },
-            "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at is not None else None,
+            "reviewed_at": row.reviewed_at.isoformat()
+            if row.reviewed_at is not None
+            else None,
         }
 
     def _job(self, job_id: UUID) -> Job:
@@ -431,9 +469,9 @@ class JevDuplicateAssociationService:
         attempt_generation: int | None = None,
     ):
         query = select(JevDuplicateAssociation).where(
-                JevDuplicateAssociation.pair_key == pair_key,
-                JevDuplicateAssociation.input_fingerprint == input_fingerprint,
-            )
+            JevDuplicateAssociation.pair_key == pair_key,
+            JevDuplicateAssociation.input_fingerprint == input_fingerprint,
+        )
         if attempt_generation is not None:
             query = query.where(
                 JevDuplicateAssociation.attempt_generation == attempt_generation
@@ -445,12 +483,7 @@ class JevDuplicateAssociationService:
     def _is_current(self, row: JevDuplicateAssociation) -> bool:
         left = self.db.get(Job, row.left_job_id)
         right = self.db.get(Job, row.right_job_id)
-        if (
-            left is None
-            or right is None
-            or left.is_deleted
-            or right.is_deleted
-        ):
+        if left is None or right is None or left.is_deleted or right.is_deleted:
             return False
         try:
             canonical = _canonical_pair(left, right)

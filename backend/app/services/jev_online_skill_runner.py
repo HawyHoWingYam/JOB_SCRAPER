@@ -39,6 +39,7 @@ class JevOnlineSkillRunner:
         job_id: UUID,
         case: OnlineSkillCase,
         force: bool = False,
+        retry_terminal_failure: bool = False,
     ) -> JevOnlineSkillClassification:
         settings = JevRuntimeSettingsService(self.db).get_or_create()
         dispatch = self.dispatch(case)
@@ -47,6 +48,7 @@ class JevOnlineSkillRunner:
             case=case,
             dispatch=dispatch,
             force=force,
+            retry_terminal_failure=retry_terminal_failure,
         )
         record = reservation.record
         if not reservation.created or record.jev_run_id is not None:

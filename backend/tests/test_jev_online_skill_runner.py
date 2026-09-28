@@ -225,3 +225,48 @@ def test_online_runner_explicit_retry_preserves_failed_receipt_history() -> None
     finally:
         db.close()
         engine.dispose()
+
+
+def test_online_runner_manual_batch_retry_creates_a_new_run_generation() -> None:
+    engine, db = _session()
+    try:
+        runner = JevOnlineSkillRunner(db)
+        case = _case()
+        job_id = uuid.uuid4()
+        first = runner.start(job_id=job_id, case=case)
+        failed = asyncio.run(
+            runner.execute(
+                first.id,
+                case=case,
+                evaluator=_Evaluator(
+                    SystemOneResult(
+                        status="unavailable",
+                        error_code="http_403",
+                        error_message="forbidden",
+                    )
+                ),
+            )
+        )
+
+        retry = runner.start(
+            job_id=job_id,
+            case=case,
+            retry_terminal_failure=True,
+        )
+        completed = asyncio.run(
+            runner.execute(
+                retry.id,
+                case=case,
+                evaluator=_Evaluator(_successful_result()),
+            )
+        )
+
+        assert failed.status == "unavailable"
+        assert retry.id != failed.id
+        assert retry.attempt_generation == 2
+        assert completed.status == "answered"
+        assert db.query(JevRun).count() == 2
+        assert db.query(JevRunAttempt).count() == 2
+    finally:
+        db.close()
+        engine.dispose()

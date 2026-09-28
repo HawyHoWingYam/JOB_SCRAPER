@@ -149,7 +149,13 @@ class JevSkillBackfillPlanner:
 class JevSkillBackfillService:
     """Run only Jev Skill classification for a historical Job."""
 
-    async def enrich_job_id(self, job_id: UUID, *, force: bool = False) -> dict[str, Any]:
+    async def enrich_job_id(
+        self,
+        job_id: UUID,
+        *,
+        force: bool = False,
+        retry_terminal_failure: bool = False,
+    ) -> dict[str, Any]:
         db = SessionLocal()
         evaluator = None
         try:
@@ -177,7 +183,12 @@ class JevSkillBackfillService:
                     "error_code": "no_active_skill_mentions",
                 }
             runner = JevOnlineSkillRunner(db)
-            record = runner.start(job_id=job.id, case=case, force=force)
+            record = runner.start(
+                job_id=job.id,
+                case=case,
+                force=force,
+                retry_terminal_failure=retry_terminal_failure,
+            )
             db.commit()
             if record.status not in {"answered", "unavailable", "invalid"}:
                 run = runner.runs.get(record.jev_run_id)

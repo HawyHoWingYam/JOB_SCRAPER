@@ -1,0 +1,35 @@
+{
+  "id": "repair-jev-batch-retry-failure-propagation",
+  "name": "repair-jev-batch-retry-failure-propagation",
+  "title": "Repair Jev batch retry and failure propagation",
+  "description": "Make Jev Skills retry dispatch real provider work, propagate duplicate run failures truthfully, and safely recover the stopped production batch.",
+  "status": "in_progress",
+  "dev_type": "bugfix",
+  "scope": "backend",
+  "package": "single-repo",
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-28",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/services/jev_operation_batch.py",
+    "backend/app/services/jev_skill_backfill.py",
+    "backend/app/services/jev_online_skill_runner.py",
+    "backend/app/services/jev_online_skill_store.py",
+    "backend/app/services/jev_duplicate_association.py"
+  ],
+  "notes": "Affected batch 8dfa61d9-f055-4dc9-88d3-a27fd5d5171f is stopped and must remain provider-idle until the recovery gate.",
+  "meta": {
+    "github_issue": 83,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/83"
+  }
+}

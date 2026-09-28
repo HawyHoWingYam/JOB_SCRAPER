@@ -18,6 +18,7 @@ from app.models.jev import (
     JevOnlineSkillClassification,
     JevOperationBatch,
     JevOperationBatchItem,
+    JevRun,
 )
 from app.services.jev_duplicate_association import JevDuplicateAssociationService
 from app.services.jev_evaluator_factory import build_jev_evaluator
@@ -35,6 +36,10 @@ from app.utils.time import utc_now
 
 OPERATIONS = ("skills", "duplicate", "related_jobs")
 ACTIVE_BATCH_STATUSES = ("pending", "running", "stopping")
+
+
+class JevDuplicateRunFailed(RuntimeError):
+    """A Job-level duplicate operation had failed bounded-run items."""
 
 
 @dataclass(frozen=True)
@@ -56,7 +61,9 @@ class JevOperationBatchService:
     def preview(self, request) -> dict[str, object]:
         operations = self._operations(request.operations)
         jobs = self._select_jobs(request)
-        skill_context = OnlineSkillCaseBuildContext(self.db) if "skills" in operations else None
+        skill_context = (
+            OnlineSkillCaseBuildContext(self.db) if "skills" in operations else None
+        )
         skill_mentions, latest_skills = (
             self._load_skill_preview_inputs(jobs)
             if "skills" in operations
@@ -81,7 +88,10 @@ class JevOperationBatchService:
                 for state in states
                 if (
                     (wanted == "eligible" and state.eligible)
-                    or (wanted == "successful" and state.reason == "successful_unchanged")
+                    or (
+                        wanted == "successful"
+                        and state.reason == "successful_unchanged"
+                    )
                     or (wanted == "failed" and state.reason == "previously_failed")
                 )
             }
@@ -167,13 +177,17 @@ class JevOperationBatchService:
         )
         if existing is not None:
             if existing.selection_snapshot != snapshot:
-                raise ValueError("Idempotency key was used for a different Jev batch scope")
+                raise ValueError(
+                    "Idempotency key was used for a different Jev batch scope"
+                )
             return existing
         if preview_fingerprint is not None:
             preview = self.preview(request)
             if preview["preview_fingerprint"] != preview_fingerprint:
                 raise ValueError("Preview is stale; preview the batch again")
-            jobs = [self.db.get(Job, UUID(job_id)) for job_id in preview["selected_job_ids"]]
+            jobs = [
+                self.db.get(Job, UUID(job_id)) for job_id in preview["selected_job_ids"]
+            ]
             jobs = [job for job in jobs if job is not None]
             item_states = preview["items"]
             plan_fingerprint = preview_fingerprint
@@ -358,6 +372,7 @@ class JevOperationBatchService:
 
     def retry_failed(self, batch_id: str) -> JevOperationBatch:
         batch = self.get(batch_id)
+        self.reconcile_duplicate_failures(batch_id)
         failed = [item for item in batch.items if item.status == "failed"]
         if not failed:
             raise ValueError("Jev batch has no failed items to retry")
@@ -372,6 +387,41 @@ class JevOperationBatchService:
         self._refresh_counts(batch)
         self.db.flush()
         return batch
+
+    def reconcile_duplicate_failures(self, batch_id: str) -> int:
+        """Correct legacy outer successes without dispatching provider work."""
+        batch = self.get(batch_id)
+        candidates: list[tuple[JevOperationBatchItem, str]] = []
+        for item in batch.items:
+            if item.operation != "duplicate" or item.status != "completed":
+                continue
+            result = item.result if isinstance(item.result, dict) else {}
+            run_id = result.get("jev_run_id")
+            if isinstance(run_id, str) and run_id:
+                candidates.append((item, run_id))
+        if not candidates:
+            return 0
+        runs = {
+            run.id: run
+            for run in self.db.scalars(
+                select(JevRun).where(
+                    JevRun.id.in_({run_id for _item, run_id in candidates})
+                )
+            )
+        }
+        reconciled = 0
+        for item, run_id in candidates:
+            run = runs.get(run_id)
+            if run is None or run.status != "completed_with_failures":
+                continue
+            item.status = "failed"
+            item.error_code = JevDuplicateRunFailed.__name__
+            item.error_message = "duplicate_run_completed_with_failures"
+            reconciled += 1
+        if reconciled:
+            self._refresh_counts(batch)
+            self.db.flush()
+        return reconciled
 
     def recover_interrupted(self) -> int:
         batches = list(
@@ -388,7 +438,9 @@ class JevOperationBatchService:
                 if item.status in {"pending", "running"}:
                     item.status = "stopped"
                     item.error_code = "service_restarted"
-                    item.error_message = "Manual resume is required after service restart."
+                    item.error_message = (
+                        "Manual resume is required after service restart."
+                    )
                     item.completed_at = utc_now()
             self._refresh_counts(batch)
         self.db.flush()
@@ -463,18 +515,33 @@ class JevOperationBatchService:
                 context=skill_context,
             )
             if case is None:
-                return OperationEligibility(operation, job.id, False, "missing_skill_evidence", None, 0)
+                return OperationEligibility(
+                    operation, job.id, False, "missing_skill_evidence", None, 0
+                )
             runner = JevOnlineSkillRunner(self.db)
             fingerprint = runner.dispatch(case).input_fingerprint
             if force:
-                return OperationEligibility(operation, job.id, True, "force_reevaluation", fingerprint, 1)
-            if latest_skill is not None and latest_skill.input_fingerprint == fingerprint:
+                return OperationEligibility(
+                    operation, job.id, True, "force_reevaluation", fingerprint, 1
+                )
+            if (
+                latest_skill is not None
+                and latest_skill.input_fingerprint == fingerprint
+            ):
                 if latest_skill.status == "answered":
-                    return OperationEligibility(operation, job.id, False, "successful_unchanged", fingerprint, 0)
+                    return OperationEligibility(
+                        operation, job.id, False, "successful_unchanged", fingerprint, 0
+                    )
                 if latest_skill.status in {"pending", "running"}:
-                    return OperationEligibility(operation, job.id, False, "already_running", fingerprint, 0)
-                return OperationEligibility(operation, job.id, True, "previously_failed", fingerprint, 1)
-            return OperationEligibility(operation, job.id, True, "eligible", fingerprint, 1)
+                    return OperationEligibility(
+                        operation, job.id, False, "already_running", fingerprint, 0
+                    )
+                return OperationEligibility(
+                    operation, job.id, True, "previously_failed", fingerprint, 1
+                )
+            return OperationEligibility(
+                operation, job.id, True, "eligible", fingerprint, 1
+            )
         if operation == "related_jobs":
             settings = JevRuntimeSettingsService(self.db).get_or_create()
             plan = JevRelatedJobsService(self.db).plan(job.id, force=force)
@@ -498,7 +565,9 @@ class JevOperationBatchService:
             }
         )
         if current and not force:
-            return OperationEligibility(operation, job.id, False, "successful_unchanged", fingerprint, 0)
+            return OperationEligibility(
+                operation, job.id, False, "successful_unchanged", fingerprint, 0
+            )
         return OperationEligibility(
             operation,
             job.id,
@@ -562,16 +631,27 @@ class JevOperationBatchService:
     ) -> dict[str, object]:
         if item.operation == "skills":
             result = await JevSkillBackfillService().enrich_job_id(
-                item.job_id, force=force
+                item.job_id,
+                force=force,
+                retry_terminal_failure=item.attempt_count > 1,
             )
             classification = result.get("jev_skill_classification") or {}
-            if result.get("status") != "success" or classification.get("status") != "answered":
-                raise RuntimeError(str(result.get("error") or classification.get("error_code") or "Jev Skill correction failed"))
+            if (
+                result.get("status") != "success"
+                or classification.get("status") != "answered"
+            ):
+                raise RuntimeError(
+                    str(
+                        result.get("error")
+                        or classification.get("error_code")
+                        or "Jev Skill correction failed"
+                    )
+                )
             return result
         if item.operation == "duplicate":
             settings = JevRuntimeSettingsService(self.db).get_or_create()
-            service = JevDuplicateAssociationService(self.db)
-            plan = service.start_for_job(
+            duplicate_service = JevDuplicateAssociationService(self.db)
+            plan = duplicate_service.start_for_job(
                 item.job_id,
                 candidate_limit=settings.duplicate_candidate_limit,
                 corpus_limit=settings.duplicate_corpus_limit,
@@ -579,29 +659,49 @@ class JevOperationBatchService:
             )
             self.db.commit()
             if plan.run_id is None:
-                return {"status": "completed", "candidate_count": 0, "skipped_current_count": plan.skipped_current_count}
+                return {
+                    "status": "completed",
+                    "candidate_count": 0,
+                    "skipped_current_count": plan.skipped_current_count,
+                }
             run = JevRunService(self.db).get(plan.run_id)
             evaluator = build_jev_evaluator(self.db, run)
             try:
-                await service.execute(run.id, evaluator=evaluator)
+                await duplicate_service.execute(run.id, evaluator=evaluator)
                 self.db.commit()
             finally:
                 await evaluator.aclose()
-            return {"status": "completed", "jev_run_id": run.id, "candidate_count": plan.candidate_count}
-        service = JevRelatedJobsService(self.db)
-        evaluation = service.start(item.job_id, force=force)
+            self.db.expire_all()
+            run = JevRunService(self.db).get(plan.run_id)
+            if run.status != "completed":
+                raise JevDuplicateRunFailed("duplicate_run_completed_with_failures")
+            return {
+                "status": "completed",
+                "jev_run_id": run.id,
+                "candidate_count": plan.candidate_count,
+            }
+        related_service = JevRelatedJobsService(self.db)
+        evaluation = related_service.start(item.job_id, force=force)
         self.db.commit()
         if evaluation.status == "completed":
-            return {"status": "completed", "evaluation_id": evaluation.id, "result_count": 0}
+            return {
+                "status": "completed",
+                "evaluation_id": evaluation.id,
+                "result_count": 0,
+            }
         run = JevRunService(self.db).get(evaluation.jev_run_id)
         evaluator = build_jev_evaluator(self.db, run)
         try:
-            evaluation = await service.execute(evaluation.id, evaluator=evaluator)
+            evaluation = await related_service.execute(
+                evaluation.id, evaluator=evaluator
+            )
             self.db.commit()
         finally:
             await evaluator.aclose()
         if evaluation.status != "completed":
-            raise RuntimeError(evaluation.error_code or "Related Jobs evaluation failed")
+            raise RuntimeError(
+                evaluation.error_code or "Related Jobs evaluation failed"
+            )
         return {
             "status": "completed",
             "evaluation_id": evaluation.id,
@@ -641,6 +741,10 @@ class JevOperationBatchService:
 
     def _finish(self, batch: JevOperationBatch) -> None:
         self._refresh_counts(batch)
+        if any(item.status == "stopped" for item in batch.items):
+            batch.status = "stopped"
+            batch.completed_at = None
+            return
         batch.status = "completed_with_failures" if batch.failed_items else "completed"
         batch.completed_at = utc_now()
 

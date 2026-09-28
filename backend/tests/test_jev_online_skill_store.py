@@ -119,6 +119,61 @@ def test_changed_evidence_creates_new_auditable_record() -> None:
         engine.dispose()
 
 
+def test_retry_terminal_failure_creates_new_auditable_generation() -> None:
+    engine, db = _session()
+    try:
+        store = JevOnlineSkillStore(db)
+        job_id = uuid.uuid4()
+        case = _case()
+        dispatch = build_online_skill_dispatch(case, model="typesafe/jev-1.13")
+        first = store.reserve(job_id=job_id, case=case, dispatch=dispatch)
+        first.record.status = "unavailable"
+        first.record.error_code = "http_403"
+        db.flush()
+
+        retry = store.reserve(
+            job_id=job_id,
+            case=case,
+            dispatch=dispatch,
+            retry_terminal_failure=True,
+        )
+
+        assert retry.created is True
+        assert retry.record.id != first.record.id
+        assert retry.record.attempt_generation == 2
+        assert first.record.status == "unavailable"
+        assert db.query(JevOnlineSkillClassification).count() == 2
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_retry_terminal_failure_still_reuses_answered_classification() -> None:
+    engine, db = _session()
+    try:
+        store = JevOnlineSkillStore(db)
+        job_id = uuid.uuid4()
+        case = _case()
+        dispatch = build_online_skill_dispatch(case, model="typesafe/jev-1.13")
+        first = store.reserve(job_id=job_id, case=case, dispatch=dispatch)
+        first.record.status = "answered"
+        db.flush()
+
+        replay = store.reserve(
+            job_id=job_id,
+            case=case,
+            dispatch=dispatch,
+            retry_terminal_failure=True,
+        )
+
+        assert replay.created is False
+        assert replay.record.id == first.record.id
+        assert db.query(JevOnlineSkillClassification).count() == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_terminal_receipt_is_idempotent_but_immutable() -> None:
     engine, db = _session()
     try:

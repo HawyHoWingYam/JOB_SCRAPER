@@ -114,6 +114,29 @@ rewritten.
   manual authorization; Stop remains sticky and Resume is always manual. These
   are checkpoints inside one durable parent batch, not independently scheduled
   provider work.
+- Failed-item retry is an executable retry, not only an outer status reset.
+  For online Skill correction, a terminal `unavailable` or `invalid` record
+  with the same input fingerprint must produce a new auditable attempt
+  generation (or prepare its bounded run for an allowed retry) before provider
+  dispatch. An unchanged `answered` record remains reusable and is never sent
+  again merely because the outer batch was retried.
+- A Job-level operation is completed only when its underlying bounded work is
+  successful. In particular, Possible same vacancy must propagate a bounded
+  run's `completed_with_failures` state to the outer operation item. Successful
+  candidate receipts remain durable, but partial candidate success is not a
+  completed Job-level operation. Provider-free/no-current-candidate work may
+  still complete normally.
+- Legacy operation reconciliation is explicit, idempotent and provider-free.
+  It may correct an outer duplicate item from completed to failed when the
+  referenced bounded run proves `completed_with_failures`; it must not run on
+  startup, page load, polling or Settings save. The subsequent manual failed-
+  item retry may create work only for unsuccessful candidates while retaining
+  current successful associations.
+- A stopped batch may contain both failed and stopped items. Explicit failed-
+  item retry processes only the failed membership and returns the parent batch
+  to `stopped` while suspended items remain. A later explicit Resume is still
+  required to continue that stopped membership; failed-only retry must not
+  accidentally finalize the parent batch or broaden the authorization.
 - The Job batch builder does not require a separate eligibility Preview. Its
   single Start control opens the final confirmation dialog; only Confirm and
   start freezes the deterministic Job IDs and creates the durable batch. Item
@@ -200,6 +223,10 @@ rewritten.
 | Malformed JSON/schema or answer mismatch | Item fails as invalid; no local cost is invented |
 | Stop before dispatch | Pending items become cancelled; no provider call |
 | Resume non-cancelled run or retry beyond frozen limit | `409`; existing receipts remain unchanged |
+| Retry outer Skills item with terminal provider failure | Create/prepare executable underlying work; preserve the old receipt and dispatch only after the explicit retry action |
+| Duplicate bounded run completes with failures | Preserve candidate receipts; outer operation fails with a secret-safe error |
+| Reconcile legacy false-completed duplicate item | Correct durable outer status only; zero provider calls |
+| Failed-only retry while stopped items remain | Settle failed membership, then return the parent to `stopped` until explicit Resume |
 
 ### 5. Good / Base / Bad Cases
 
@@ -244,6 +271,11 @@ rewritten.
   assert repeated normalized Skill names are ranked once. A representative
   100-Job Skills preview must preserve counts/fingerprints while staying well
   below the ordinary frontend request deadline on the sandbox corpus.
+- Operation-batch regression tests assert that terminal Skill failures receive
+  a real new provider attempt on explicit retry, unchanged answered Skills are
+  reused, duplicate partial failures propagate to the outer item, legacy
+  reconciliation is provider-free and idempotent, and failed-only recovery
+  preserves a remaining stopped checkpoint.
 - Browser E2E uses an isolated backend database and loopback fake System One;
   assert save/reload, masked secret, exactly one provider request, typed receipt,
   usage, optional provider cost, explicit manual start, and old-run frozen model
