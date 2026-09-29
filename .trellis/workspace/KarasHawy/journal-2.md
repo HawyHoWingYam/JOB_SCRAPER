@@ -533,3 +533,36 @@ Restricted all Job Browser text retrieval modes to Job Description, versioned an
 ### Next Steps
 
 - None - task complete
+
+
+## Session 71: Retire Jev and unify Job AI Enrichment
+
+**Date**: 2026-09-30
+**Task**: Retire Jev and unify Job AI Enrichment
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Removed Jev and manual Classification product surfaces end to end; restored Skills and Related Jobs to one validated, atomic AI Enrichment transaction; completed and verified the destructive database cutover with a recoverable local backup.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `cacb8a7a` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
