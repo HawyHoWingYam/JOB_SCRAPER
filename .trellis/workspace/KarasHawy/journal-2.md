@@ -500,3 +500,36 @@ Completed the Manual Jev batch orchestration follow-up: unified Skills correctio
 ### Next Steps
 
 - None - task complete
+
+
+## Session 70: Constrain and optimize Job Browser search
+
+**Date**: 2026-09-29
+**Task**: Constrain and optimize Job Browser search
+**Branch**: `codex/offertoday-it-coverage-20260702`
+
+### Summary
+
+Restricted all Job Browser text retrieval modes to Job Description, versioned and rebuilt Description-only embeddings, made semantic and hybrid results honest bounded rankings, corrected committed search-mode UI behavior, added safe schema/index upgrade paths, and verified correctness plus live latency budgets.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3e15c680` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

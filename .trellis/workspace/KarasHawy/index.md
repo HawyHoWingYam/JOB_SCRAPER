@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-2.md`
-- **Total Sessions**: 69
-- **Last Active**: 2026-09-25
+- **Total Sessions**: 70
+- **Last Active**: 2026-09-29
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-2.md` | ~502 | Active |
+| `journal-2.md` | ~535 | Active |
 | `journal-1.md` | ~1968 | Archived |
 <!-- @@@/auto:active-documents -->
 
@@ -30,6 +30,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 70 | 2026-09-29 | Constrain and optimize Job Browser search | `3e15c680` | `codex/offertoday-it-coverage-20260702` |
 | 69 | 2026-09-25 | Scale manual Jev batch operations | `1b8ae7d4` | `codex/offertoday-it-coverage-20260702` |
 | 68 | 2026-09-24 | Unified manual Jev operations and experience search | `4d3e7270` | `codex/offertoday-it-coverage-20260702` |
 | 67 | 2026-09-23 | Complete operational UX workflows and Settings delivery | `3b460795`, `5c4bd0c0` | `codex/offertoday-it-coverage-20260702` |
