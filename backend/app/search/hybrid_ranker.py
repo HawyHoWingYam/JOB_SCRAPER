@@ -2,14 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import re
-from typing import Iterable
 
 
 def _tokenize(value: str) -> set[str]:
     return {
-        token
-        for token in re.split(r"[^a-z0-9]+", str(value or "").lower())
-        if token
+        token for token in re.split(r"[^a-z0-9]+", str(value or "").lower()) if token
     }
 
 
@@ -22,10 +19,8 @@ def _cosine_similarity(lhs: list[float], rhs: list[float]) -> float:
     return numerator / (lhs_magnitude * rhs_magnitude)
 
 
-def _overlap_score(query_tokens: set[str], values: Iterable[str]) -> float:
-    haystack_tokens: set[str] = set()
-    for value in values:
-        haystack_tokens.update(_tokenize(value))
+def _description_score(query_tokens: set[str], description: str | None) -> float:
+    haystack_tokens = _tokenize(description or "")
     if not query_tokens or not haystack_tokens:
         return 0.0
     return len(query_tokens & haystack_tokens) / len(query_tokens)
@@ -46,49 +41,21 @@ def _freshness_score(posted_date) -> float:
     return 0.0
 
 
-def _lexical_score(query_tokens: set[str], job, company) -> float:
-    return _overlap_score(
-        query_tokens,
-        [
-            getattr(job, "title", None),
-            getattr(job, "description", None),
-            getattr(job, "ai_summary", None),
-            getattr(job, "source_classification_name", None),
-            getattr(job, "source_subclassification_name", None),
-            getattr(company, "name", None),
-            getattr(company, "ai_description", None),
-        ],
-    )
-
-
-def _source_classification_score(query_tokens: set[str], job) -> float:
-    return _overlap_score(
-        query_tokens,
-        [
-            getattr(job, "source_classification_name", None),
-            getattr(job, "source_subclassification_name", None),
-        ],
-    )
-
-
-def _skills_score(query_tokens: set[str], job) -> float:
-    return _overlap_score(query_tokens, getattr(job, "skills", []) or [])
-
-
 def rank_hybrid_rows(rows, *, query_text: str, query_vector):
     query_tokens = _tokenize(query_text)
     ranked = []
     for job, company, embedding_row in rows:
-        semantic_score = _cosine_similarity(list(embedding_row.embedding), list(query_vector))
-        lexical_score = _lexical_score(query_tokens, job, company)
-        source_classification_score = _source_classification_score(query_tokens, job)
-        skills_score = _skills_score(query_tokens, job)
+        semantic_score = _cosine_similarity(
+            list(embedding_row.embedding), list(query_vector)
+        )
+        description_score = _description_score(
+            query_tokens,
+            getattr(job, "description", None),
+        )
         freshness_score = _freshness_score(getattr(job, "posted_date", None))
         combined_score = (
-            (semantic_score * 0.65)
-            + (lexical_score * 0.15)
-            + (source_classification_score * 0.10)
-            + (skills_score * 0.05)
+            (semantic_score * 0.80)
+            + (description_score * 0.15)
             + (freshness_score * 0.05)
         )
         ranked.append(

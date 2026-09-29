@@ -180,6 +180,7 @@ function JobBrowser({
     const [selectedJobId, setSelectedJobId] = useState(null);
     const [retrievalMode, setRetrievalMode] = useState('lexical');
     const [appliedRetrievalMode, setAppliedRetrievalMode] = useState('lexical');
+    const [resultKind, setResultKind] = useState('exhaustive');
     const [capabilities, setCapabilities] = useState(null);
     const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
 
@@ -333,6 +334,7 @@ function JobBrowser({
                 return false;
             }
             setJobs(data.jobs);
+            setResultKind(data.result_kind || 'exhaustive');
             setPagination((prev) => ({
                 ...prev,
                 page,
@@ -534,10 +536,6 @@ function JobBrowser({
             handleSaveLayer();
             return;
         }
-        if (activeScope.layers.length > 0) {
-            handleSearchWithinResults();
-            return;
-        }
         handleSearchAllJobs();
     };
 
@@ -687,7 +685,7 @@ function JobBrowser({
                             onChange={handleSearchChange}
                             onSubmit={handleSubmit}
                             isLoading={isLoading}
-                            placeholder="Query titles, companies, or deep scan descriptions..."
+                            placeholder="Search Job Description..."
                         />
 
                         <div className="query-mode-row">
@@ -709,6 +707,7 @@ function JobBrowser({
                             </select>
                             <p className="query-mode-note">
                                 Lexical matches words; semantic matches meaning; hybrid combines both.
+                                {' All modes search Job Description only.'}
                                 {retrievalMode !== appliedRetrievalMode && ' Apply the search to use this mode.'}
                             </p>
                         </div>
@@ -755,6 +754,12 @@ function JobBrowser({
                             )}
                         </div>
 
+                        <p className="query-mode-note">
+                            Press Enter to search all jobs and replace the current layers.
+                            {activeScope.layers.length > 0
+                                && ' Use Refine current results to add another AND layer.'}
+                        </p>
+
                         {searchError && (
                             <p className="filter-validation-message query-validation-message">{searchError}</p>
                         )}
@@ -774,7 +779,7 @@ function JobBrowser({
                     onRetryFacets={() => {
                         void fetchFacets({
                             scope: activeScope,
-                            retrievalMode,
+                            retrievalMode: appliedRetrievalMode,
                         });
                     }}
                     datePreset={draftDatePreset}
@@ -785,7 +790,9 @@ function JobBrowser({
                 <div className="browser-result-toolbar">
                         <div className="query-console-results">
                             <div>
-                                <span className="query-console-results-label">Matched jobs</span>
+                                <span className="query-console-results-label">
+                                    {resultKind === 'ranked' ? 'Ranked results' : 'Matched jobs'}
+                                </span>
                                 <strong>{pagination.total.toLocaleString()}</strong>
                             </div>
                             <div>

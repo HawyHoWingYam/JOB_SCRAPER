@@ -142,7 +142,9 @@ class JobSearchFiltersSchema(BaseModel):
 class JobSearchLayerSchema(BaseModel):
     client_id: str
     text_expression: str = ""
-    structured_filters: JobSearchFiltersSchema = Field(default_factory=JobSearchFiltersSchema)
+    structured_filters: JobSearchFiltersSchema = Field(
+        default_factory=JobSearchFiltersSchema
+    )
 
 
 class JobSearchScopeSchema(BaseModel):
@@ -155,7 +157,9 @@ class JobSearchRequestSchema(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
     include_facets: bool = True
-    jev_rerank_evaluation_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
+    jev_rerank_evaluation_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=36
+    )
 
 
 class JobSearchFacetsRequestSchema(BaseModel):
@@ -227,6 +231,9 @@ class JobSearchResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+    result_kind: Literal["exhaustive", "ranked"] = "exhaustive"
+    result_limit: Optional[int] = None
+    ranked_candidate_count: Optional[int] = None
     applied_scope: Optional[JobSearchScopeSchema] = None
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None
     facets: Optional[JobSearchFacetsSchema] = None

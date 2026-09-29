@@ -23,6 +23,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     parser.add_argument("--jobs-budget-ms", type=float)
     parser.add_argument("--facets-budget-ms", type=float)
+    parser.add_argument("--semantic-budget-ms", type=float)
+    parser.add_argument("--hybrid-budget-ms", type=float)
+    parser.add_argument(
+        "--retrieval-modes",
+        nargs="+",
+        choices=("lexical", "semantic", "hybrid"),
+        default=("lexical", "semantic", "hybrid"),
+    )
     args = parser.parse_args()
     if args.runs < 3:
         parser.error("--runs must be at least 3")
@@ -55,15 +63,15 @@ def _sample_endpoint(
     *,
     warmups: int,
     runs: int,
-) -> tuple[dict[str, Any], list[float]]:
-    data: dict[str, Any] = {}
-    for _ in range(warmups):
+) -> tuple[dict[str, Any], float, list[float]]:
+    data, cold_ms = _post_timed(client, url, payload)
+    for _ in range(max(0, warmups - 1)):
         data, _ = _post_timed(client, url, payload)
     samples = []
     for _ in range(runs):
         data, elapsed_ms = _post_timed(client, url, payload)
         samples.append(round(elapsed_ms, 3))
-    return data, samples
+    return data, round(cold_ms, 3), samples
 
 
 def _budget_misses(
@@ -97,17 +105,6 @@ def main() -> int:
             }
         ]
     }
-    jobs_payload = {
-        "scope": scope,
-        "retrieval_mode": "lexical",
-        "page": 1,
-        "page_size": args.page_size,
-        "include_facets": False,
-    }
-    facets_payload = {
-        "scope": scope,
-        "retrieval_mode": "lexical",
-    }
     corpus_payload = {
         "scope": {"layers": []},
         "retrieval_mode": "lexical",
@@ -123,51 +120,85 @@ def main() -> int:
                 f"{base_url}/jobs/search",
                 corpus_payload,
             )
-            jobs_data, jobs_samples = _sample_endpoint(
-                client,
-                f"{base_url}/jobs/search",
-                jobs_payload,
-                warmups=args.warmups,
-                runs=args.runs,
-            )
-            facets_data, facets_samples = _sample_endpoint(
-                client,
-                f"{base_url}/jobs/search/facets",
-                facets_payload,
-                warmups=args.warmups,
-                runs=args.runs,
-            )
+            scenarios = {}
+            for retrieval_mode in args.retrieval_modes:
+                jobs_data, jobs_cold_ms, jobs_samples = _sample_endpoint(
+                    client,
+                    f"{base_url}/jobs/search",
+                    {
+                        "scope": scope,
+                        "retrieval_mode": retrieval_mode,
+                        "page": 1,
+                        "page_size": args.page_size,
+                        "include_facets": False,
+                    },
+                    warmups=args.warmups,
+                    runs=args.runs,
+                )
+                facets_data, facets_cold_ms, facets_samples = _sample_endpoint(
+                    client,
+                    f"{base_url}/jobs/search/facets",
+                    {"scope": scope, "retrieval_mode": retrieval_mode},
+                    warmups=args.warmups,
+                    runs=args.runs,
+                )
+                scenarios[retrieval_mode] = {
+                    "jobs": jobs_data,
+                    "jobs_samples": jobs_samples,
+                    "jobs_cold_ms": jobs_cold_ms,
+                    "facets": facets_data,
+                    "facets_samples": facets_samples,
+                    "facets_cold_ms": facets_cold_ms,
+                }
     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
         print(f"benchmark failed: {exc}", file=sys.stderr)
         return 2
 
-    jobs_median_ms = statistics.median(jobs_samples)
-    facets_median_ms = statistics.median(facets_samples)
-    misses = _budget_misses(
-        jobs_median_ms=jobs_median_ms,
-        facets_median_ms=facets_median_ms,
-        jobs_budget_ms=args.jobs_budget_ms,
-        facets_budget_ms=args.facets_budget_ms,
-    )
+    misses = []
+    scenario_report = {}
+    mode_budgets = {
+        "lexical": args.jobs_budget_ms,
+        "semantic": args.semantic_budget_ms,
+        "hybrid": args.hybrid_budget_ms,
+    }
+    for retrieval_mode, scenario in scenarios.items():
+        jobs_median_ms = statistics.median(scenario["jobs_samples"])
+        facets_median_ms = statistics.median(scenario["facets_samples"])
+        mode_misses = _budget_misses(
+            jobs_median_ms=jobs_median_ms,
+            facets_median_ms=facets_median_ms,
+            jobs_budget_ms=mode_budgets[retrieval_mode],
+            facets_budget_ms=args.facets_budget_ms,
+        )
+        misses.extend(f"{retrieval_mode}: {miss}" for miss in mode_misses)
+        jobs_data = scenario["jobs"]
+        scenario_report[retrieval_mode] = {
+            "result_total": jobs_data.get("total"),
+            "page_jobs": len(jobs_data.get("jobs", [])),
+            "result_kind": jobs_data.get("result_kind", "exhaustive"),
+            "result_limit": jobs_data.get("result_limit"),
+            "ranked_candidate_count": jobs_data.get("ranked_candidate_count"),
+            "facet_families": sorted(scenario["facets"]),
+            "jobs_ms": {
+                "samples": scenario["jobs_samples"],
+                "cold": scenario["jobs_cold_ms"],
+                "median": round(jobs_median_ms, 3),
+                "budget": mode_budgets[retrieval_mode],
+            },
+            "facets_ms": {
+                "samples": scenario["facets_samples"],
+                "cold": scenario["facets_cold_ms"],
+                "median": round(facets_median_ms, 3),
+                "budget": args.facets_budget_ms,
+            },
+        }
     report = {
         "base_url": base_url,
         "query": args.query,
         "corpus_jobs": corpus_data.get("total"),
-        "matching_jobs": jobs_data.get("total"),
-        "page_jobs": len(jobs_data.get("jobs", [])),
-        "facet_families": sorted(facets_data),
         "warmups": args.warmups,
         "runs": args.runs,
-        "jobs_ms": {
-            "samples": jobs_samples,
-            "median": round(jobs_median_ms, 3),
-            "budget": args.jobs_budget_ms,
-        },
-        "facets_ms": {
-            "samples": facets_samples,
-            "median": round(facets_median_ms, 3),
-            "budget": args.facets_budget_ms,
-        },
+        "scenarios": scenario_report,
         "budget_misses": misses,
     }
     print(json.dumps(report, indent=2, sort_keys=True))

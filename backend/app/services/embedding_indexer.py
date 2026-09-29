@@ -7,7 +7,8 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.messaging.topics import STREAM_JOB_EMBEDDING
-from app.models.job_embedding import EMBEDDING_DIMENSIONS, JobEmbedding
+from app.models.job_embedding import JobEmbedding
+from app.search.embedding_contract import EMBEDDING_DIMENSIONS
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
 from app.services.embedding_document_builder import EmbeddingDocument
@@ -46,6 +47,7 @@ class EmbeddingIndexer:
         return bool(
             existing is not None
             and existing.document_hash == document.document_hash
+            and existing.document_contract == document.document_contract
             and existing.embedding_dimensions == EMBEDDING_DIMENSIONS
         )
 
@@ -79,6 +81,7 @@ class EmbeddingIndexer:
             embedding_dimensions=len(embedding),
             document_text=document.document_text,
             document_hash=document.document_hash,
+            document_contract=document.document_contract,
             embedding=embedding,
             auto_commit=False,
         )

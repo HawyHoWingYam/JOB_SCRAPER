@@ -24,9 +24,7 @@ class DatabaseBootstrapError(RuntimeError):
 
 def _lock_bootstrap(connection: Connection) -> None:
     if connection.dialect.name == "postgresql":
-        connection.execute(
-            text("SELECT pg_advisory_xact_lock(72639451028411732)")
-        )
+        connection.execute(text("SELECT pg_advisory_xact_lock(72639451028411732)"))
 
 
 def _table_names(connection: Connection) -> set[str]:
@@ -52,6 +50,7 @@ def bootstrap_database(
 
         if connection.dialect.name == "postgresql":
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
 
         metadata.create_all(bind=connection)
         created_tables = _table_names(connection)

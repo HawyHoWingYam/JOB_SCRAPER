@@ -368,7 +368,7 @@ describe('JobBrowser governed filters', () => {
     await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
 
     const searchInput = screen.getByPlaceholderText(
-      'Query titles, companies, or deep scan descriptions...',
+      'Search Job Description...',
     );
     await user.type(searchInput, 'platform');
     await user.click(screen.getByRole('button', { name: 'Search all jobs' }));
@@ -415,13 +415,45 @@ describe('JobBrowser governed filters', () => {
     expect(window.sessionStorage.getItem(JOB_BROWSER_SESSION_KEY)).toBeNull();
   });
 
+  it('makes Enter follow the visible replace action while edit Enter saves in place', async () => {
+    const user = userEvent.setup();
+    render(<JobBrowser />);
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
+
+    const searchInput = screen.getByPlaceholderText('Search Job Description...');
+    await user.type(searchInput, 'first description{Enter}');
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(2));
+    let request = JSON.parse(jobSearchCalls()[1][1].body);
+    expect(request.scope.layers).toEqual([
+      expect.objectContaining({ client_id: 'root', text_expression: 'first description' }),
+    ]);
+
+    await user.type(searchInput, 'replacement description{Enter}');
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(3));
+    request = JSON.parse(jobSearchCalls()[2][1].body);
+    expect(request.scope.layers).toEqual([
+      expect.objectContaining({ client_id: 'root', text_expression: 'replacement description' }),
+    ]);
+    expect(screen.getByText(/Use Refine current results to add another AND layer/))
+      .toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Edit layer' }));
+    await user.clear(searchInput);
+    await user.type(searchInput, 'edited description{Enter}');
+    await waitFor(() => expect(jobSearchCalls()).toHaveLength(4));
+    request = JSON.parse(jobSearchCalls()[3][1].body);
+    expect(request.scope.layers).toEqual([
+      expect.objectContaining({ client_id: 'root', text_expression: 'edited description' }),
+    ]);
+  });
+
   it('discards a pending refinement without requesting jobs', async () => {
     const user = userEvent.setup();
     render(<JobBrowser />);
     await waitFor(() => expect(jobSearchCalls()).toHaveLength(1));
 
     const searchInput = screen.getByPlaceholderText(
-      'Query titles, companies, or deep scan descriptions...',
+      'Search Job Description...',
     );
     await user.type(searchInput, 'unapplied');
     await user.click(screen.getByRole('button', { name: 'Discard changes' }));
@@ -505,6 +537,30 @@ describe('JobBrowser governed filters', () => {
       expect(within(mode).getByRole('option', { name: 'Hybrid' })).toBeDisabled();
     });
     expect(mode).toHaveValue('lexical');
+  });
+
+  it('labels bounded semantic and hybrid totals as ranked results', async () => {
+    globalThis.fetch = vi.fn((input, options) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/jobs/search/facets') {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(searchFacets()) });
+      }
+      const request = JSON.parse(options.body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(jobSearchPayload({
+          applied_scope: request.scope,
+          result_kind: 'ranked',
+          result_limit: 1000,
+          facets: null,
+        })),
+      });
+    });
+
+    render(<JobBrowser />);
+
+    expect(await screen.findByText('Ranked results')).toBeInTheDocument();
+    expect(screen.queryByText('Matched jobs')).not.toBeInTheDocument();
   });
 
   it('routes manual search evaluation to Jev Operations without calling a provider path', async () => {
@@ -642,9 +698,16 @@ describe('JobBrowser governed filters', () => {
       name: 'Employment Type, 0 selected',
     })).toBeDisabled();
 
+    await user.selectOptions(screen.getByLabelText('Retrieval mode'), 'semantic');
+    const jobsCallsBeforeRetry = jobSearchCalls().length;
+
     await user.click(screen.getByRole('button', { name: 'Retry filter counts' }));
 
     await waitFor(() => expect(facetSearchCalls()).toHaveLength(2));
+    expect(jobSearchCalls()).toHaveLength(jobsCallsBeforeRetry);
+    expect(JSON.parse(facetSearchCalls()[1][1].body)).toEqual(expect.objectContaining({
+      retrieval_mode: 'lexical',
+    }));
     expect(screen.getByRole('article', {
       name: 'Durable Platform Result at Fixture Company',
     })).toBeInTheDocument();
@@ -689,7 +752,7 @@ describe('JobBrowser governed filters', () => {
     });
 
     const searchInput = screen.getByPlaceholderText(
-      'Query titles, companies, or deep scan descriptions...',
+      'Search Job Description...',
     );
     await user.type(searchInput, 'new scope');
     await user.click(screen.getByRole('button', { name: 'Search all jobs' }));

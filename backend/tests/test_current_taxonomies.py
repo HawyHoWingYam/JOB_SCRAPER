@@ -48,7 +48,9 @@ def test_committed_taxonomies_flatten_to_stable_current_codes():
 
     assert len(skill.nodes) == 8 + 43 + 174
     assert len(skill.aliases) == 271
-    assert sum(node.level == "skill" and node.is_assignable for node in skill.nodes) == 174
+    assert (
+        sum(node.level == "skill" and node.is_assignable for node in skill.nodes) == 174
+    )
 
     payload = skill.to_payload()
     assert "version" not in payload
@@ -77,8 +79,13 @@ def test_current_store_synchronizes_hierarchy_and_aliases_without_revisions():
         store.synchronize(snapshot)
 
         assert len(store.list_nodes("skill")) == 225
-        assert db.scalar(select(func.count()).select_from(CurrentTaxonomyAliasRecord)) == 271
-        react = db.get(CurrentTaxonomyNodeRecord, ("skill", "frontend.javascript.react"))
+        assert (
+            db.scalar(select(func.count()).select_from(CurrentTaxonomyAliasRecord))
+            == 271
+        )
+        react = db.get(
+            CurrentTaxonomyNodeRecord, ("skill", "frontend.javascript.react")
+        )
         assert react.parent_code == "frontend.javascript"
         assert react.is_assignable is True
         assert not hasattr(react, "revision_id")
@@ -221,10 +228,10 @@ def test_current_reader_returns_active_job_skills():
         assert skill_states[missing_job_id].candidate_mentions == ()
 
         product = JobIntelligenceProductReadModel(db)
-        skill_payload = product.get_governed_skill_name_states(
-            (job_id, missing_job_id)
+        skill_payload = product.get_governed_skill_name_states((job_id, missing_job_id))
+        serialized = json.dumps(
+            list(skill_payload.values()), default=str, sort_keys=True
         )
-        serialized = json.dumps(list(skill_payload.values()), default=str, sort_keys=True)
         assert skill_payload[job_id]["governed_skill_names"] == ["React"]
         assert "revision" not in serialized
         assert "review_item" not in serialized
@@ -270,10 +277,13 @@ def test_current_skill_enrichment_matches_existing_and_accumulates_candidates():
         )
         assert candidate.occurrence_count == 2
         assert candidate.distinct_job_count == 2
-        assert db.get(
-            CurrentJobSkillAssignment,
-            (first_job_id, "frontend.javascript.react"),
-        ) is not None
+        assert (
+            db.get(
+                CurrentJobSkillAssignment,
+                (first_job_id, "frontend.javascript.react"),
+            )
+            is not None
+        )
         active_resolutions = set(
             db.scalars(
                 select(CurrentJobSkillMention.resolution).where(
@@ -363,9 +373,7 @@ def test_operator_skill_decision_survives_later_ai_projection():
                 )
             )
         )
-        assert [row.skill_code for row in assignments] == [
-            "frontend.javascript.react"
-        ]
+        assert [row.skill_code for row in assignments] == ["frontend.javascript.react"]
     finally:
         db.rollback()
         db.close()
@@ -442,9 +450,9 @@ def test_current_jev_correction_survives_only_same_evidence_ai_rerun():
                 )
             )
         )
-        assert [(row.raw_name, row.resolution, row.source) for row in changed_evidence] == [
-            ("Python", "match_existing", "ai-extraction")
-        ]
+        assert [
+            (row.raw_name, row.resolution, row.source) for row in changed_evidence
+        ] == [("Python", "match_existing", "ai-extraction")]
     finally:
         db.rollback()
         db.close()
@@ -464,8 +472,7 @@ def test_current_skill_enrichment_resolves_localized_generic_aliases_before_cand
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     job_id = uuid4()
     extracted = tuple(
-        {"name": raw_name, "kind": "technical"}
-        for raw_name in ("項目管理", "銷售", "客戶服務")
+        {"name": raw_name, "kind": "technical"} for raw_name in ("項目管理", "銷售", "客戶服務")
     )
     try:
         enrichment = CurrentSkillEnrichment(db)
@@ -494,7 +501,9 @@ def test_current_skill_enrichment_resolves_localized_generic_aliases_before_cand
         assert {mention.resolution for mention in mentions} == {"generic_tag"}
         assert {mention.candidate_id for mention in mentions} == {None}
         assert db.scalar(select(func.count()).select_from(CurrentSkillCandidate)) == 0
-        assert db.scalar(select(func.count()).select_from(CurrentJobSkillAssignment)) == 0
+        assert (
+            db.scalar(select(func.count()).select_from(CurrentJobSkillAssignment)) == 0
+        )
     finally:
         db.rollback()
         db.close()
@@ -533,10 +542,13 @@ def test_current_store_runtime_writes_have_no_versions():
             )
         )
 
-        assert db.get(
-            CurrentJobSkillAssignment,
-            (job_id, "frontend.javascript.react"),
-        ).mention_count == 2
+        assert (
+            db.get(
+                CurrentJobSkillAssignment,
+                (job_id, "frontend.javascript.react"),
+            ).mention_count
+            == 2
+        )
 
         assert db.in_transaction() is True
     finally:
@@ -615,16 +627,23 @@ def test_current_taxonomy_api_serializes_only_current_state():
                 description="Python and React",
             ),
         )
-        assert embedding.document_text.splitlines() == [
-            "Title: Backend Engineer",
-            "Company: Example Company",
-            "Source Taxonomy: Information Technology",
-            "AI Summary: Build reliable services",
-            "Skills: React",
-            "Description: Python and React",
-        ]
+        assert embedding.document_text == "Python and React"
         assert "Revision" not in embedding.document_text
         assert "version" not in embedding.document_text.lower()
+
+        same_description = CurrentEmbeddingDocumentBuilder().build_for_job(
+            db,
+            SimpleNamespace(
+                id=job_id,
+                title="A title that must not affect the embedding",
+                company=SimpleNamespace(name="A different company"),
+                source_classification_name="A different classification",
+                source_subclassification_name=None,
+                ai_summary="A different summary",
+                description="Python and React",
+            ),
+        )
+        assert same_description == embedding
     finally:
         db.rollback()
         db.close()

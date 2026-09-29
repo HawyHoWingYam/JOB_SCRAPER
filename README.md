@@ -45,6 +45,29 @@ docker compose --profile workers up -d retrieval-api embedding-worker recommenda
 
 The default `backend-api` image only supports the lexical search baseline. Semantic and hybrid retrieval, plus non-lexical export, run behind the internal `retrieval-api` service. Embedding generation runs in `embedding-worker`, and related-job recommendations run behind `recommendation-api`.
 
+Job Browser text expressions search Job Description only. After deploying the
+Description-only embedding contract to an existing sandbox, run the idempotent
+schema/index upgrades and manually rebuild embeddings with the ML image:
+
+```bash
+docker compose run --rm --no-deps backend-api \
+  python -m scripts.upgrade_job_embedding_contract
+docker compose run --rm --no-deps backend-api \
+  python -m scripts.upgrade_job_search_indexes
+docker compose --profile workers build embedding-worker retrieval-api
+docker compose --profile workers run --rm --no-deps embedding-worker \
+  python -m scripts.rebuild_job_description_embeddings --batch-size 500
+docker compose --profile workers up -d --no-deps --force-recreate \
+  embedding-worker retrieval-api
+```
+
+The rebuild commits each keyset page independently and can be rerun safely;
+current rows are skipped. Semantic and hybrid search ignore legacy embedding
+documents until they have been rebuilt. Rollback does not require deleting Job
+data: stop using the new retrieval code, and optionally drop only
+`ix_jobs_description_trgm` and the `job_embeddings.document_contract` column
+after restoring compatible code.
+
 ## Runtime Notes
 
 - Job Intelligence governance is a trusted-local, single-operator feature with

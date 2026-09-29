@@ -378,9 +378,7 @@ def _apply_structured_filters(query, filters: JobSearchFiltersSchema):
     technology_codes = _normalize_code_list(filters.technology_ids)
     skill_category_codes = _normalize_code_list(filters.skill_category_ids)
     current_reader = CurrentTaxonomyReader(query.session)
-    selected_skill_codes = (
-        skill_codes or technology_codes or skill_category_codes
-    )
+    selected_skill_codes = skill_codes or technology_codes or skill_category_codes
     if not selected_skill_codes and filters.skills:
         selected_skill_codes = tuple(
             query.session.scalars(
@@ -525,8 +523,10 @@ def _build_search_response(
         preserve_query_order=preserve_query_order,
     )
     facets = facets_override
-    if facets is None and include_facets and (
-        facet_scope is not None or applied_scope is not None
+    if (
+        facets is None
+        and include_facets
+        and (facet_scope is not None or applied_scope is not None)
     ):
         facets = JobSearchFacets(query.session).build(facet_scope or applied_scope)
     return _build_search_response_from_results(
@@ -553,8 +553,7 @@ def execute_search_page(
     if not preserve_query_order:
         results_query = apply_deterministic_lexical_order(results_query)
     windowed_rows = (
-        results_query
-        .add_columns(func.count().over().label("_search_total"))
+        results_query.add_columns(func.count().over().label("_search_total"))
         .offset(offset)
         .limit(page_size)
         .all()
@@ -579,6 +578,9 @@ def _build_search_response_from_results(
     layer_summaries: Optional[List[JobSearchLayerSummarySchema]] = None,
     facets: Optional[JobSearchFacetsSchema] = None,
     db: Session | None = None,
+    result_kind: Literal["exhaustive", "ranked"] = "exhaustive",
+    result_limit: int | None = None,
+    ranked_candidate_count: int | None = None,
 ):
     jobs = []
     for job, company in results:
@@ -611,6 +613,9 @@ def _build_search_response_from_results(
         page=page,
         page_size=page_size,
         total_pages=total_pages,
+        result_kind=result_kind,
+        result_limit=result_limit,
+        ranked_candidate_count=ranked_candidate_count,
         applied_scope=applied_scope,
         layer_summaries=layer_summaries,
         facets=facets,
@@ -711,9 +716,7 @@ def _build_export_rows_from_results(results, *, db: Session | None = None):
                 if job.experience_max_years is None
                 else str(job.experience_max_years),
                 "experience_summary": job.experience_summary or "",
-                "skills": " | ".join(
-                    skill_states[job.id]["governed_skill_names"]
-                ),
+                "skills": " | ".join(skill_states[job.id]["governed_skill_names"]),
                 "company_ai_description": company.ai_description if company else "",
                 "description_text": _strip_html_text(job.description),
             }
@@ -974,7 +977,9 @@ async def evaluate_search_rerank(
         return service.serialize(evaluation)
     except KeyError as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail="Search rerank preview not found") from exc
+        raise HTTPException(
+            status_code=404, detail="Search rerank preview not found"
+        ) from exc
     except JevRunConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc

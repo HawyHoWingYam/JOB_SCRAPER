@@ -148,7 +148,7 @@ test('uses a saved Job Browser scope for a manually started relevance advisory',
 
   await page.goto('/#jobs');
   await page.getByPlaceholder(
-    'Query titles, companies, or deep scan descriptions...',
+    'Search Job Description...',
   ).fill('Rerank Python');
   await page.getByRole('button', { name: 'Search all jobs' }).click();
   await expect(page.getByRole('button', { name: 'Export 5 results' })).toBeVisible();

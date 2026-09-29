@@ -9,7 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import jobs as jobs_api
-from app.api.job_search_query import exact_anchor_fragments
+from app.api.job_search_parser import parse_search_expression
+from app.api.job_search_query import build_search_clause, exact_anchor_fragments
 from app.database import Base
 from app.database import get_db
 from app.job_intelligence.source_attributes import EMPLOYMENT_TYPE_SEEDS
@@ -29,6 +30,7 @@ from app.schemas.job_search import (
     JobSearchLayerSchema,
     JobSearchRequestSchema,
     JobSearchScopeSchema,
+    JobSearchFacetsSchema,
 )
 from app.services.job_search_facets import JobSearchFacets
 from app.services import retrieval_service as retrieval_service_module
@@ -129,9 +131,7 @@ def test_employment_type_facet_keeps_complete_catalog_and_excludes_itself():
         )
 
         facets = JobSearchFacets(db).build(scope)
-        employment_types = {
-            option.id: option for option in facets.employment_types
-        }
+        employment_types = {option.id: option for option in facets.employment_types}
 
         assert list(employment_types) == [
             "full_time",
@@ -448,6 +448,72 @@ def test_exact_anchor_fragments_are_necessary_under_search_normalization():
     assert exact_anchor_fragments("++") == ()
 
 
+def test_text_search_matches_job_description_only_for_every_clause_type():
+    db, engine = _facet_session()
+    try:
+        description_company = Company(
+            company_id="description-search-company",
+            source_site="jobsdb",
+            source_company_id="description-search-company",
+            name="Ordinary Company",
+        )
+        metadata_company = Company(
+            company_id="metadata-search-company",
+            source_site="jobsdb",
+            source_company_id="metadata-search-company",
+            name="Needle Phrase Company",
+            ai_description="Needle phrase appears in Company AI text",
+        )
+        db.add_all(
+            [
+                Job(
+                    job_id="description-search-match",
+                    source_site="jobsdb",
+                    source_job_id="description-search-match",
+                    company=description_company,
+                    title="Ordinary role",
+                    description="Work with the needle phrase every day.",
+                ),
+                Job(
+                    job_id="metadata-search-non-match",
+                    source_site="jobsdb",
+                    source_job_id="metadata-search-non-match",
+                    company=metadata_company,
+                    title="Needle Phrase Specialist",
+                    description="Unrelated duties only.",
+                    ai_summary="Needle phrase appears in the AI summary",
+                    source_classification_name="Needle Phrase Classification",
+                    source_subclassification_name="Needle Phrase Subclassification",
+                ),
+            ]
+        )
+        db.commit()
+
+        scope = JobSearchScopeSchema(
+            layers=[
+                JobSearchLayerSchema(
+                    client_id="root",
+                    text_expression="needle",
+                )
+            ]
+        )
+        rows = jobs_api._build_query_from_scope(db, scope).all()
+        assert [job.job_id for job, _company in rows] == ["description-search-match"]
+
+        for expression in ("=needle", '"needle phrase"'):
+            clause = parse_search_expression(expression)[0]
+            predicate_sql = str(build_search_clause(clause)).lower()
+            assert "jobs.description" in predicate_sql
+            assert "jobs.title" not in predicate_sql
+            assert "companies" not in predicate_sql
+            assert "ai_summary" not in predicate_sql
+            assert "classification" not in predicate_sql
+            assert "skill" not in predicate_sql
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_execute_search_page_returns_window_total_and_preserves_empty_pages():
     db, engine = _facet_session()
     try:
@@ -605,8 +671,7 @@ def test_semantic_and_hybrid_facets_use_the_candidate_scope_without_ranking():
 
             assert response.status_code == 200
             counts = {
-                option["id"]: option["count"]
-                for option in response.json()["sources"]
+                option["id"]: option["count"] for option in response.json()["sources"]
             }
             assert counts == {"jobsdb": 1, "ctgoodjobs": 1, "offertoday": 0}
     finally:
@@ -836,24 +901,6 @@ def test_semantic_post_uses_candidate_scope_for_facets(monkeypatch):
             assert normalize_embeddings is True
             return [0.5]
 
-    def fake_build_search_response(_query, **kwargs):
-        captured.update(kwargs)
-        return {
-            "jobs": [],
-            "total": 0,
-            "page": kwargs["page"],
-            "page_size": kwargs["page_size"],
-            "total_pages": 0,
-            "applied_scope": kwargs["applied_scope"],
-            "layer_summaries": kwargs["layer_summaries"],
-            "facets": None,
-        }
-
-    monkeypatch.setattr(
-        retrieval_service_module,
-        "_build_default_query_embedding_model",
-        FakeEmbeddingModel,
-    )
     monkeypatch.setattr(
         retrieval_service_module,
         "build_lexical_query",
@@ -861,13 +908,21 @@ def test_semantic_post_uses_candidate_scope_for_facets(monkeypatch):
     )
     monkeypatch.setattr(
         retrieval_service_module,
-        "apply_semantic_order",
-        lambda query, _vector: query,
+        "fetch_embedding_rows",
+        lambda _query, **_kwargs: [],
     )
-    monkeypatch.setattr(jobs_api, "_build_search_response", fake_build_search_response)
+
+    def fake_build_facets(_service, scope):
+        captured["facet_scope"] = scope
+        return JobSearchFacetsSchema()
+
+    monkeypatch.setattr(JobSearchFacets, "build", fake_build_facets)
 
     async def fake_retrieval_api(request, *, layer_summaries):
-        return retrieval_service_module.RetrievalService(object()).search(
+        return retrieval_service_module.RetrievalService(
+            object(),
+            query_embedding_model=FakeEmbeddingModel(),
+        ).search(
             request,
             layer_summaries=layer_summaries,
         )
@@ -900,6 +955,27 @@ def test_semantic_post_uses_candidate_scope_for_facets(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert captured["applied_scope"].layers[-1].text_expression == "platform engineer"
+    assert response.json()["applied_scope"]["layers"][-1]["text_expression"] == (
+        "platform engineer"
+    )
     assert captured["facet_scope"].layers[0].text_expression == "jobsdb"
     assert captured["facet_scope"].layers[-1].text_expression == ""
+
+
+def test_query_embedding_model_provider_initializes_once_across_threads():
+    from concurrent.futures import ThreadPoolExecutor
+
+    calls = 0
+    model = object()
+
+    def factory():
+        nonlocal calls
+        calls += 1
+        return model
+
+    provider = retrieval_service_module.QueryEmbeddingModelProvider(factory=factory)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _index: provider.get(), range(32)))
+
+    assert calls == 1
+    assert all(result is model for result in results)

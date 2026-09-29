@@ -4,7 +4,11 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
-from app.models.job_embedding import EMBEDDING_DIMENSIONS, JobEmbedding
+from app.models.job_embedding import JobEmbedding
+from app.search.embedding_contract import (
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_DOCUMENT_CONTRACT,
+)
 
 
 class JobEmbeddingRepository:
@@ -18,6 +22,7 @@ class JobEmbeddingRepository:
         embedding_dimensions: int,
         document_text: str,
         document_hash: str,
+        document_contract: str = EMBEDDING_DOCUMENT_CONTRACT,
         embedding: Sequence[float],
         auto_commit: bool = True,
     ) -> JobEmbedding:
@@ -40,6 +45,7 @@ class JobEmbeddingRepository:
                 embedding_dimensions=EMBEDDING_DIMENSIONS,
                 document_text=document_text,
                 document_hash=document_hash,
+                document_contract=document_contract,
                 embedding=embedding_values,
             )
             db.add(row)
@@ -47,6 +53,7 @@ class JobEmbeddingRepository:
             row.embedding_dimensions = EMBEDDING_DIMENSIONS
             row.document_text = document_text
             row.document_hash = document_hash
+            row.document_contract = document_contract
             row.embedding = embedding_values
 
         if auto_commit:

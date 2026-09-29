@@ -20,6 +20,7 @@ from app.messaging.topics import (
 from app.models import Job
 from app.repositories.event_outbox_repository import EventOutboxRepository
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
+from app.search.embedding_contract import EMBEDDING_MODEL_NAME
 from app.services.embedding_document_builder import EmbeddingDocumentBuilder
 from app.services.embedding_indexer import EmbeddingIndexer
 from app.services.current_embedding_document_builder import (
@@ -35,8 +36,6 @@ except Exception:  # pragma: no cover - optional import gate
 
 configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
-
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 def _build_default_embedding_model():

@@ -22,7 +22,7 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 1440, height: 900
       if (req.url().endsWith('/api/jobs/search')) requests.push(req.postDataJSON());
     });
     const titlesBefore = await page.locator('.job-title').allTextContents();
-    const query = page.getByPlaceholder('Query titles, companies, or deep scan descriptions...');
+    const query = page.getByPlaceholder('Search Job Description...');
     await query.fill(`rerank-batch-${seedIndex}`);
     await expect(page.getByText(/Unapplied changes\. Export uses/)).toBeVisible();
     expect(requests).toHaveLength(0);
