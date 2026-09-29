@@ -11,7 +11,7 @@ function selectedEnrichmentRun(hash = window.location.hash) {
   return id && id.length <= 255 ? id : null;
 }
 
-export default function AIEnrichmentHistory({ revision, busy, hasActiveRun, onRetry, onResume, onStop }) {
+export default function AIEnrichmentHistory({ revision, busy, hasActiveRun, onRetry, onStop }) {
   const [selectedId, setSelectedId] = useState(() => selectedEnrichmentRun());
   const [history, setHistory] = useState(null);
   const [historyError, setHistoryError] = useState('');
@@ -81,7 +81,6 @@ export default function AIEnrichmentHistory({ revision, busy, hasActiveRun, onRe
     return () => window.clearInterval(interval);
   }, [selectedIsLive]);
   const retryable = selectedRun && ['failed', 'completed_with_failures'].includes(selectedRun.status) && Number(selectedRun.failed_items) > 0;
-  const resumable = selectedRun?.status === 'cancelled' && selectedRun.source_type === 'jev_skill_backfill' && Number(selectedRun.cancelled_items) > 0;
   const stoppable = selectedRun && ['waiting', 'pending', 'running'].includes(selectedRun.status);
   return <section className="glass-panel ai-history" aria-label="Run history and inspection">
     <div className="ai-console-header"><div><h3>Run history</h3><p>Latest 20 persisted runs, including waiting work. Open a run to inspect its outcomes.</p></div><button type="button" disabled={historyLoading} onClick={() => setReload(value => value + 1)}>{historyLoading ? 'Refreshing history…' : 'Refresh history'}</button></div>
@@ -104,11 +103,10 @@ export default function AIEnrichmentHistory({ revision, busy, hasActiveRun, onRe
         {selectedRun.pending_gate_reason === 'waiting_for_ai_runtime' && <a href={buildSettingsRoute({ profile: 'jobs', returnToAI: true, returnRun: selectedId })}>Configure and test AI runtime in Settings</a>}
         <div className="ai-run-actions">
           {retryable && <button type="button" disabled={busy || hasActiveRun} onClick={() => onRetry(selectedRun)}>Retry this run’s failed jobs ({selectedRun.failed_items})</button>}
-          {resumable && <button type="button" disabled={busy || hasActiveRun} onClick={() => onResume(selectedRun)}>Resume this backfill’s cancelled jobs ({selectedRun.cancelled_items})</button>}
           {stoppable && <button type="button" disabled={busy} onClick={() => onStop(selectedRun)}>Stop this run</button>}
           {selectedRun.status === 'stopping' && <p role="status">Stop requested; in-flight jobs may still finish.</p>}
         </div>
-        {(retryable || resumable) && hasActiveRun && <p>Wait for the active run to finish before starting another run.</p>}
+        {retryable && hasActiveRun && <p>Wait for the active run to finish before starting another run.</p>}
       </>}
       <label className="ai-history-filter">Item outcome <select value={status} onChange={event => { setStatus(event.target.value); setPage(1); }}>
         {['failed', 'excluded', 'cancelled', 'completed', 'pending', 'running', 'all'].map(value => <option key={value} value={value}>{value === 'all' ? 'All outcomes' : value}</option>)}

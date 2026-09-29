@@ -37,7 +37,6 @@ function formatUpdatedAt(value) {
 
 export default function Dashboard({
   onNavigateToAI,
-  onNavigateToClassification,
   onNavigateToJobs,
 }) {
   const [sections, setSections] = useState(initialSections);
@@ -389,9 +388,6 @@ export default function Dashboard({
           <SkillChart
             {...sections.skills}
             onRetry={() => loadSection("skills")}
-            onOpenClassification={() =>
-              onNavigateToClassification?.("skill")
-            }
             onSelectSkill={(skill) =>
               onNavigateToJobs?.({ skillIds: [skill.code] })
             }

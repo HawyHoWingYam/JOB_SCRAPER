@@ -6,7 +6,6 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import userEvent from "@testing-library/user-event";
@@ -352,66 +351,6 @@ describe("CrawlTasksPage list projections", () => {
 });
 
 describe("CrawlTasksPage normalized Task Details", () => {
-  it("routes repeated-incident Jev execution to the unified manual console", async () => {
-    apiFetchJson.mockImplementation(async (url) => {
-      const value = String(url);
-      if (value.endsWith("/crawl-jobs/incident-triage")) {
-        return { enabled: true, maximum_event_limit: 3, latest: null };
-      }
-      if (isDetailRequest(value)) return normalizedTaskDetail({ id: "listing-task" });
-      if (isQualityReadRequest(value)) return { enabled: false, maximum_limit: 20, latest: null };
-      return listPayload();
-    });
-
-    render(<CrawlTasksPage />);
-    const advisory = await screen.findByRole("region", {
-      name: "Jev repeated incident triage",
-    });
-    expect(within(advisory).getByText(/cannot change severity, retry, resume, cancel, dismiss/i)).toBeInTheDocument();
-    expect(within(advisory).getByRole("link", { name: /Jev Operations/ }))
-      .toHaveAttribute("href", "#jev");
-    expect(apiFetchJson.mock.calls.some(([url]) => String(url).includes("/preview"))).toBe(false);
-    expect(apiFetchJson.mock.calls.some(([url]) => String(url).includes("/evaluations/"))).toBe(false);
-    expect(within(advisory).queryByRole("button", { name: /retry|resume|cancel|dismiss/i })).not.toBeInTheDocument();
-  });
-
-  it("routes crawl-quality Jev execution to the unified manual console", async () => {
-    apiFetchJson.mockImplementation(async (url) => {
-      const value = String(url);
-      if (isDetailRequest(value)) {
-        return normalizedTaskDetail({ id: "listing-task" });
-      }
-      if (value.endsWith("/crawl-jobs/tasks/listing-task/quality")) {
-        return { enabled: true, maximum_limit: 5, latest: null };
-      }
-      return listPayload();
-    });
-
-    render(<CrawlTasksPage />);
-
-    const advisory = (
-      await screen.findByRole("heading", {
-        name: "Crawl content quality advisory",
-      })
-    ).closest("section");
-    const advisoryQueries = within(advisory);
-    expect(
-      advisoryQueries.getByText(
-        /does not retry, repair, resume, cancel, or change this Crawl Job/i,
-      ),
-    ).toBeInTheDocument();
-    expect(advisoryQueries.getByRole("link", { name: /Jev Operations/ }))
-      .toHaveAttribute("href", "#jev");
-    expect(
-      apiFetchJson.mock.calls.some(([url]) =>
-        String(url).endsWith("/quality/evaluations"),
-      ),
-    ).toBe(false);
-    expect(
-      advisoryQueries.queryByRole("button", { name: /retry|repair|resume|cancel/i }),
-    ).not.toBeInTheDocument();
-  });
-
   it("labels terminal detail backlog without offering a recovery run", async () => {
     const backlogTask = {
       ...listingTask,

@@ -33,26 +33,14 @@ class CurrentJobSkillSchema(_CurrentTaxonomySchema):
     mention_count: int
 
 
-class CurrentSkillCandidateMentionSchema(_CurrentTaxonomySchema):
-    id: UUID
-    raw_name: str
-    normalized_key: str
-    candidate_id: UUID
-    source: str
-    confidence: float | None
-    provenance: dict[str, Any]
-
-
 class CurrentJobSkillStateSchema(_CurrentTaxonomySchema):
     job_id: UUID
     skills: list[CurrentJobSkillSchema]
-    candidate_mentions: list[CurrentSkillCandidateMentionSchema]
 
 
 __all__ = [
     "CurrentJobSkillSchema",
     "CurrentJobSkillStateSchema",
-    "CurrentSkillCandidateMentionSchema",
     "CurrentTaxonomyNodeSchema",
     "CurrentTaxonomyTreeSchema",
 ]

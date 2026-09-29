@@ -157,9 +157,6 @@ class JobSearchRequestSchema(BaseModel):
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=20, ge=1, le=100)
     include_facets: bool = True
-    jev_rerank_evaluation_id: Optional[str] = Field(
-        default=None, min_length=1, max_length=36
-    )
 
 
 class JobSearchFacetsRequestSchema(BaseModel):

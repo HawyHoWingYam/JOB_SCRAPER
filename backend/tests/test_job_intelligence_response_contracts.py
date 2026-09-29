@@ -35,7 +35,6 @@ from app.models.current_taxonomy import (
     CurrentTaxonomyNodeRecord,
 )
 from app.models.event_outbox import EventOutbox
-from app.models.jev import JevOnlineSkillClassification, JevRun
 from app.models.job import Job
 from app.models.job_embedding import EMBEDDING_DIMENSIONS, JobEmbedding
 from app.models.source_job_attributes import (
@@ -65,9 +64,7 @@ FRONTEND_DOMAIN_FIXTURE_PAIRS = tuple(
         Path(__file__).parent / "fixtures" / filename,
         Path(__file__).parents[2] / "frontend" / "src" / "fixtures" / filename,
     )
-    for filename in (
-        "current_taxonomy_responses.json",
-    )
+    for filename in ("current_taxonomy_responses.json",)
 )
 
 
@@ -86,8 +83,6 @@ def product_contract_db():
         Company.__table__,
         Job.__table__,
         JobEmbedding.__table__,
-        JevRun.__table__,
-        JevOnlineSkillClassification.__table__,
         EventOutbox.__table__,
         *SOURCE_JOB_ATTRIBUTE_TABLES,
         *CURRENT_TAXONOMY_TABLES,
@@ -419,12 +414,6 @@ def test_product_surface_fixture_uses_current_backend_response_models() -> None:
     ]
     assert fixture.job_detail.skill_state is not None
     assert [skill.code for skill in fixture.job_detail.skill_state.skills] == ["python"]
-    assert [
-        mention.raw_name for mention in fixture.job_detail.skill_state.candidate_mentions
-    ] == ["Rust"]
-    assert [
-        mention["raw_name"] for mention in fixture.job_detail.skill_candidate_mentions
-    ] == ["Rust"]
     serialized = json.dumps(fixture.model_dump(mode="json"), sort_keys=True)
     assert "taxonomy_revision" not in serialized
     assert "review_item" not in serialized
@@ -634,9 +623,7 @@ def test_job_detail_composes_independent_governed_states_without_fabrication(
     assert payload["skill_state"] == {
         "job_id": str(state["job_one_id"]),
         "skills": [],
-        "candidate_mentions": [],
     }
-    assert payload["skill_candidate_mentions"] == []
     assert payload["source_classification_paths"] == []
     assert payload["employment_types"] == []
     assert payload["source_employment_labels"] == []
@@ -728,14 +715,8 @@ def test_job_detail_uses_structured_governed_knowledge_over_legacy_evidence(
     assert [skill["code"] for skill in payload["skill_state"]["skills"]] == [
         state["current_skill_code"]
     ]
-    assert [
-        mention["raw_name"]
-        for mention in payload["skill_state"]["candidate_mentions"]
-    ] == ["Rust"]
-    assert (
-        payload["skill_candidate_mentions"]
-        == payload["skill_state"]["candidate_mentions"]
-    )
+    assert "candidate_mentions" not in payload["skill_state"]
+    assert "skill_candidate_mentions" not in payload
     assert "provisional_skills" not in payload
     assert "unreviewed_skill_mentions" not in payload
 
@@ -762,9 +743,7 @@ def test_manual_job_snapshot_uses_the_same_composed_read_model(
         )
     }
     assert payload["skills"] == ["Python"]
-    assert [mention["raw_name"] for mention in payload["skill_candidate_mentions"]] == [
-        "Rust"
-    ]
+    assert "skill_candidate_mentions" not in payload
 
 
 def test_job_browser_export_reads_current_skills_without_legacy_relationships(

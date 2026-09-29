@@ -6,20 +6,14 @@ from sqlalchemy.engine import make_url
 
 
 POSTGRESQL_JOB_INTELLIGENCE_SUITES = (
-    ("test_jev_duplicate_association.py", "JEV_DUPLICATE_TEST_DATABASE_URL"),
-    ("test_jev_crawl_quality_product.py", "JEV_CRAWL_QUALITY_TEST_DATABASE_URL"),
-    ("test_jev_search_rerank_product.py", "JEV_SEARCH_RERANK_TEST_DATABASE_URL"),
-    ("test_jev_incident_triage_product.py", "JEV_INCIDENT_TRIAGE_TEST_DATABASE_URL"),
-    ("test_jev_operation_batch.py", "JEV_OPERATIONS_TEST_DATABASE_URL"),
     (
         "integration/test_sandbox_cutover_rehearsal.py",
         "SANDBOX_CUTOVER_TEST_DATABASE_URL",
     ),
     (
-        "integration/test_jev_sandbox_cutover_rehearsal.py",
-        "SANDBOX_CUTOVER_TEST_DATABASE_URL",
+        "test_job_intelligence_response_contracts.py",
+        "JOB_INTELLIGENCE_TEST_DATABASE_URL",
     ),
-    ("test_job_intelligence_response_contracts.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
     ("test_manual_job_intake.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
     ("test_source_job_attribute_ingest.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
     ("test_source_job_attributes.py", "JOB_INTELLIGENCE_TEST_DATABASE_URL"),
@@ -213,10 +207,7 @@ def _test_database_guards(
             for child in ast.walk(statement)
             if isinstance(child, ast.Raise)
         ]
-        failure_lines = [
-            child.lineno
-            for child in (*failure_calls, *raises)
-        ]
+        failure_lines = [child.lineno for child in (*failure_calls, *raises)]
         if suffix_checks and failure_lines:
             guards.append(
                 (

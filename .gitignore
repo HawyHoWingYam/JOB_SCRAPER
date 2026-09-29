@@ -96,7 +96,6 @@ backend/.manual-action-venv*/
 **/offertoday_auth_state*.json
 backend/tests/*
 !backend/tests/conftest.py
-!backend/tests/test_jev_*.py
 !backend/tests/e2e/
 !backend/tests/e2e/*.py
 !backend/tests/test_cross_source_ip_recovery.py
@@ -124,3 +123,4 @@ backend/tests/*
 !backend/tests/integration/
 !backend/tests/integration/test_job_intelligence_rebuild.py
 docs/*
+.backups/

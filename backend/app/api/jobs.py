@@ -7,7 +7,7 @@ from io import StringIO
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ValidationError
 from sqlalchemy.orm import Session, joinedload, object_session, selectinload
 from sqlalchemy import and_, false, func, not_, or_, select
 from typing import Annotated, Literal, Optional, List
@@ -25,15 +25,6 @@ from app.api.job_search_query import apply_parsed_clauses
 from app.config import settings
 from app.models import Job, Company
 from app.models.current_taxonomy import CurrentTaxonomyNodeRecord
-from app.services.jev_duplicate_association import (
-    DuplicateAssociationConflictError,
-    DuplicateAssociationError,
-    JevDuplicateAssociationService,
-)
-from app.services.jev_evaluator_factory import build_jev_evaluator
-from app.services.jev_run_service import JevRunConfigurationError, JevRunService
-from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
-from app.services.jev_search_rerank import JevSearchRerankService
 from app.search.deterministic_order import apply_deterministic_lexical_order
 from app.models.source_job_attributes import (
     EmploymentType,
@@ -116,13 +107,6 @@ JOB_SEARCH_EXPORT_FIELDNAMES = [
     "company_ai_description",
     "description_text",
 ]
-
-
-class SearchRerankPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scope: JobSearchScopeSchema
-    retrieval_mode: Literal["lexical", "semantic", "hybrid"] = "lexical"
 
 
 def _source_attribute_load_options(*, include_labels: bool = False):
@@ -913,11 +897,6 @@ async def search_jobs_post(
     layer_summaries = [_summarize_layer(layer) for layer in request.scope.layers]
 
     if request.retrieval_mode != "lexical":
-        if request.jev_rerank_evaluation_id:
-            raise HTTPException(
-                status_code=422,
-                detail="Jev search reranking currently supports lexical search only",
-            )
         return await _search_via_retrieval_api(
             request,
             layer_summaries=layer_summaries,
@@ -930,63 +909,6 @@ async def search_jobs_post(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.post("/search/rerank/preview")
-def preview_search_rerank(
-    request: SearchRerankPreviewRequest,
-    db: Session = Depends(get_db),
-):
-    search_request = JobSearchRequestSchema(
-        scope=request.scope,
-        retrieval_mode=request.retrieval_mode,
-    )
-    _validate_scope_expressions(search_request)
-    try:
-        evaluation = JevSearchRerankService(db).preview(
-            scope=request.scope,
-            retrieval_mode=request.retrieval_mode,
-        )
-        db.commit()
-        return JevSearchRerankService(db).serialize(evaluation)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.post("/search/rerank/evaluations/{evaluation_id}")
-async def evaluate_search_rerank(
-    evaluation_id: str,
-    db: Session = Depends(get_db),
-):
-    settings_row = JevRuntimeSettingsService(db).get_or_create()
-    if not settings_row.search_rerank_enabled:
-        raise HTTPException(status_code=409, detail="Jev search reranking is disabled")
-    service = JevSearchRerankService(db)
-    evaluator = None
-    try:
-        evaluation = service.start(evaluation_id)
-        if evaluation.jev_run_id is not None and evaluation.status not in {
-            "completed",
-            "completed_with_failures",
-        }:
-            run = JevRunService(db).get(evaluation.jev_run_id)
-            evaluator = build_jev_evaluator(db, run)
-            evaluation = await service.execute(evaluation.id, evaluator=evaluator)
-        db.commit()
-        return service.serialize(evaluation)
-    except KeyError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=404, detail="Search rerank preview not found"
-        ) from exc
-    except JevRunConfigurationError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    finally:
-        close = getattr(evaluator, "aclose", None)
-        if close is not None:
-            await close()
 
 
 @router.post("/search/facets", response_model=JobSearchFacetsSchema)
@@ -1005,30 +927,12 @@ async def export_jobs_search_scope(
 ):
     _validate_scope_expressions(request)
     if request.retrieval_mode != "lexical":
-        if request.jev_rerank_evaluation_id:
-            raise HTTPException(
-                status_code=422,
-                detail="Jev search reranking currently supports lexical search only",
-            )
         return await _export_via_retrieval_api(request)
 
     query = _build_query_from_scope(db, request.scope)
 
-    if request.jev_rerank_evaluation_id:
-        try:
-            query = JevSearchRerankService(db).apply_order(
-                query,
-                evaluation_id=request.jev_rerank_evaluation_id,
-                scope=request.scope,
-                retrieval_mode=request.retrieval_mode,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        _validate_export_row_limit(query.order_by(None).count())
-        rows = _build_export_rows_from_results(query.all())
-    else:
-        _validate_export_row_limit(query.order_by(None).count())
-        rows = _build_export_rows(query)
+    _validate_export_row_limit(query.order_by(None).count())
+    rows = _build_export_rows(query)
     return _build_csv_export_response(rows)
 
 
@@ -1175,97 +1079,6 @@ async def update_manual_job(
         command_kind="update",
         job_id=job_id,
     )
-
-
-class DuplicateAssociationReviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["confirm", "reject"]
-
-
-@router.get("/{job_id}/duplicate-associations")
-def list_duplicate_associations(
-    job_id: UUID,
-    db: Session = Depends(get_db),
-):
-    try:
-        return {
-            "job_id": str(job_id),
-            "associations": JevDuplicateAssociationService(db).list_for_job(job_id),
-        }
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Job not found") from exc
-
-
-@router.post("/{job_id}/duplicate-associations/evaluate")
-async def evaluate_duplicate_associations(
-    job_id: UUID,
-    db: Session = Depends(get_db),
-):
-    service = JevDuplicateAssociationService(db)
-    evaluator = None
-    try:
-        settings_row = JevRuntimeSettingsService(db).get_or_create()
-        if not settings_row.duplicate_enabled:
-            raise JevRunConfigurationError("Jev duplicate associations are disabled")
-        plan = service.start_for_job(
-            job_id,
-            candidate_limit=settings_row.duplicate_candidate_limit,
-            corpus_limit=settings_row.duplicate_corpus_limit,
-        )
-        if plan.run_id is not None:
-            run = JevRunService(db).get(plan.run_id)
-            evaluator = build_jev_evaluator(db, run)
-            await service.execute(run.id, evaluator=evaluator)
-        db.commit()
-        return {
-            "run_id": plan.run_id,
-            "candidate_count": plan.candidate_count,
-            "skipped_current_count": plan.skipped_current_count,
-            "associations": service.list_for_job(job_id),
-        }
-    except KeyError as exc:
-        db.rollback()
-        raise HTTPException(status_code=404, detail="Job not found") from exc
-    except JevRunConfigurationError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except (DuplicateAssociationError, ValueError, IntegrityError) as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    finally:
-        close = getattr(evaluator, "aclose", None)
-        if close is not None:
-            await close()
-
-
-@router.post("/{job_id}/duplicate-associations/{association_id}/review")
-def review_duplicate_association(
-    job_id: UUID,
-    association_id: str,
-    request: DuplicateAssociationReviewRequest,
-    idempotency_key: Annotated[
-        str,
-        Header(alias="Idempotency-Key", min_length=1, max_length=255),
-    ],
-    db: Session = Depends(get_db),
-):
-    service = JevDuplicateAssociationService(db)
-    try:
-        result = service.review(
-            association_id,
-            subject_job_id=job_id,
-            action=request.action,
-            idempotency_key=idempotency_key,
-        )
-        db.commit()
-        return result
-    except KeyError as exc:
-        db.rollback()
-        raise HTTPException(status_code=404, detail="Association not found") from exc
-    except DuplicateAssociationConflictError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _execute_manual_job_mutation(

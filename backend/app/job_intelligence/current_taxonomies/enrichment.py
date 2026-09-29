@@ -84,11 +84,19 @@ class CurrentSkillEnrichment:
         }
         for node in nodes:
             if node.level in values_by_level:
-                values_by_level[node.level].append(_display_label(node.labels))
+                label = _display_label(node.labels)
+                values_by_level[node.level].append(
+                    f"{node.code}: {label}" if node.level == "skill" else label
+                )
         return {
             "existing_categories": values_by_level["category"],
             "existing_technologies": values_by_level["technology"],
             "existing_skills": values_by_level["skill"],
+            "assignable_skill_codes": [
+                node.code
+                for node in nodes
+                if node.level == "skill" and node.is_assignable
+            ],
             "review_only_terms": [],
             "suppressed_review_terms": [],
             "role_mode": role_mode,
@@ -107,24 +115,6 @@ class CurrentSkillEnrichment:
         if not source:
             raise ValueError("Job Skill projection source is required")
         exact_skills = self._exact_skill_codes()
-        for value in extracted_skills:
-            if not isinstance(value, dict):
-                continue
-            jev_route = str(value.get("jev_route") or "").strip().lower()
-            if jev_route and jev_route not in {
-                "match_existing",
-                "candidate",
-                "generic",
-                "rejected",
-            }:
-                raise ValueError(f"Unsupported Jev Skill route: {jev_route}")
-            if jev_route == "match_existing":
-                existing_key = normalize_exact_skill_key(value.get("existing_skill"))
-                if exact_skills.get(existing_key) is None:
-                    raise ValueError(
-                        "Jev matched inactive or unknown Skill: "
-                        f"{value.get('existing_skill')}"
-                    )
         now = utc_now()
         existing_mentions = tuple(
             self.db.scalars(
@@ -134,18 +124,10 @@ class CurrentSkillEnrichment:
                 )
             )
         )
-        incoming_evidence_hash = str(provenance.get("job_evidence_hash") or "")
         protected_mentions = tuple(
             mention
             for mention in existing_mentions
             if mention.source == "operator-decision"
-            or (
-                source == "ai-extraction"
-                and mention.source == "jev-classification"
-                and bool(incoming_evidence_hash)
-                and str((mention.provenance or {}).get("job_evidence_hash") or "")
-                == incoming_evidence_hash
-            )
         )
         protected_ids = {mention.id for mention in protected_mentions}
         touched_candidate_ids = {
@@ -161,9 +143,7 @@ class CurrentSkillEnrichment:
             mention.updated_at = now
         self.db.flush()
 
-        seen_keys: set[str] = {
-            mention.normalized_key for mention in protected_mentions
-        }
+        seen_keys: set[str] = {mention.normalized_key for mention in protected_mentions}
         matched_codes: list[str] = [
             mention.skill_code
             for mention in protected_mentions
@@ -193,24 +173,25 @@ class CurrentSkillEnrichment:
                 normalized_key
             )
             local_disposition = resolve_skill_curation(raw_name)
+            disposition = str(payload.get("disposition") or "").strip().lower()
             kind = str(payload.get("kind") or "technical").strip().lower()
             resolution = str(payload.get("resolution") or "").strip().lower()
-            jev_route = str(payload.get("jev_route") or "").strip().lower()
-            if jev_route and jev_route not in {
-                "match_existing",
-                "candidate",
-                "generic",
-                "rejected",
-            }:
-                raise ValueError(f"Unsupported Jev Skill route: {jev_route}")
             candidate_id = None
             generic_tag = None
             rejection_reason = None
-            if jev_route == "match_existing" and skill_code is None:
+            if disposition and disposition not in {
+                "match_existing",
+                "unresolved",
+                "generic",
+                "rejected",
+            }:
+                raise ValueError(f"Unsupported Skill disposition: {disposition}")
+            if disposition == "match_existing" and skill_code is None:
                 raise ValueError(
-                    f"Jev matched inactive or unknown Skill: {payload.get('existing_skill')}"
+                    "Matched inactive or unknown Skill: "
+                    f"{payload.get('existing_skill')}"
                 )
-            if jev_route == "candidate":
+            if disposition == "unresolved":
                 mention_resolution = "candidate"
                 skill_code = None
                 candidate = self._upsert_candidate(
@@ -220,13 +201,15 @@ class CurrentSkillEnrichment:
                 )
                 candidate_id = candidate.id
                 touched_candidate_ids.add(candidate.id)
-            elif jev_route == "generic":
+            elif disposition == "generic":
                 mention_resolution = "generic_tag"
                 generic_tag = raw_name
                 skill_code = None
-            elif jev_route == "rejected":
+            elif disposition == "rejected":
                 mention_resolution = "rejected"
-                rejection_reason = str(payload.get("decision_reason") or "jev_rejected")
+                rejection_reason = str(
+                    payload.get("decision_reason") or "model_rejected"
+                )
                 skill_code = None
             elif skill_code is not None and kind not in {"generic", "reject"}:
                 mention_resolution = "match_existing"
@@ -304,7 +287,9 @@ class CurrentSkillEnrichment:
                     CurrentJobSkillInput(
                         skill_code=code,
                         source=(
-                            protected_sources[code] if code in protected_codes else source
+                            protected_sources[code]
+                            if code in protected_codes
+                            else source
                         ),
                         confidence=confidence,
                         provenance=(

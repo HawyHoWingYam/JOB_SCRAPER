@@ -563,19 +563,6 @@ describe('JobBrowser governed filters', () => {
     expect(screen.queryByText('Matched jobs')).not.toBeInTheDocument();
   });
 
-  it('routes manual search evaluation to Jev Operations without calling a provider path', async () => {
-    render(<JobBrowser />);
-    const advisory = await screen.findByRole('region', {
-      name: 'Jev search relevance advisory',
-    });
-    expect(within(advisory).getByRole('link', { name: 'Open Jev Operations' }))
-      .toHaveAttribute('href', '#jev');
-    expect(fetchCallsFor('/api/jobs/search/rerank/preview')).toHaveLength(0);
-    expect(globalThis.fetch.mock.calls.some(([input]) => (
-      new URL(String(input), 'http://localhost').pathname.includes('/rerank/evaluations')
-    ))).toBe(false);
-  });
-
   it('keeps an in-flight facet refresh active while changing pages', async () => {
     const user = userEvent.setup();
     const deferredFacets = createDeferredSearchResponse();

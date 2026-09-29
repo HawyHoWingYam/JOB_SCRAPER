@@ -10,19 +10,27 @@ from sqlalchemy.orm import Session
 from app.models.crawl_job import CrawlJob
 from app.models.crawl_job_execution import CrawlJobExecution
 from app.models.crawl_job_listing import CrawlJobListing
-from app.models.company_enrichment_run import CompanyEnrichmentRun, CompanyEnrichmentRunItem
+from app.models.company_enrichment_run import (
+    CompanyEnrichmentRun,
+    CompanyEnrichmentRunItem,
+)
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.job import Job
-from app.services.jev_operation_batch import JevOperationBatchService
 from app.repositories.crawl_job_repository import CrawlJobRepository
 from app.sources.offertoday.completeness import is_complete_offertoday_job
 from app.utils.time import utc_now
 
 AI_RESTART_MESSAGE = "Service restarted before AI enrichment run could finish."
-AI_STOP_RESTART_MESSAGE = "Stopped by operator; service restarted while in-flight items were finishing."
-COMPANY_RESTART_MESSAGE = "Service restarted before company enrichment run could finish."
+AI_STOP_RESTART_MESSAGE = (
+    "Stopped by operator; service restarted while in-flight items were finishing."
+)
+COMPANY_RESTART_MESSAGE = (
+    "Service restarted before company enrichment run could finish."
+)
 CRAWL_JOB_RESTART_MESSAGE = "Service restarted before crawl job could finish."
-SCHEDULE_RESTART_MESSAGE = "Service restarted before scheduled scrape execution could finish."
+SCHEDULE_RESTART_MESSAGE = (
+    "Service restarted before scheduled scrape execution could finish."
+)
 ACTIVE_SCHEDULE_EXECUTION_STATUSES = ("pending", "running", "ai_running")
 ACTIVE_AI_RUN_STATUSES = ("pending", "running", "stopping")
 ACTIVE_COMPANY_RUN_STATUSES = ("pending", "running")
@@ -47,7 +55,6 @@ class StartupRecoveryService:
         recover_company_runs: bool = True,
         recover_crawl_jobs: bool = True,
         recover_schedule_executions: bool = True,
-        recover_jev_operation_batches: bool = True,
     ) -> dict[str, int]:
         ai_run_count = 0
         if recover_ai_runs:
@@ -77,23 +84,11 @@ class StartupRecoveryService:
                 self.db.rollback()
                 logger.exception("Startup schedule execution recovery failed")
 
-        jev_batch_recovery_count = 0
-        if recover_jev_operation_batches:
-            try:
-                jev_batch_recovery_count = JevOperationBatchService(
-                    self.db
-                ).recover_interrupted()
-                self.db.commit()
-            except Exception:
-                self.db.rollback()
-                logger.exception("Startup Jev batch recovery failed")
-
         return {
             "ai_runs_recovered": ai_run_count,
             "company_runs_recovered": company_run_count,
             "crawl_jobs_recovered": crawl_job_recovery_count,
             "schedule_executions_recovered": schedule_recovery_count,
-            "jev_operation_batches_stopped": jev_batch_recovery_count,
         }
 
     def recover_ai_runs_only(self) -> int:
@@ -185,7 +180,9 @@ class StartupRecoveryService:
 
         return recovered_runs
 
-    def _enrichment_run_was_started(self, run: EnrichmentRun, *, items: list[EnrichmentRunItem]) -> bool:
+    def _enrichment_run_was_started(
+        self, run: EnrichmentRun, *, items: list[EnrichmentRunItem]
+    ) -> bool:
         if str(run.status or "").lower() == "running":
             return True
         if run.started_at is not None:
@@ -262,11 +259,9 @@ class StartupRecoveryService:
         )
         if managed_job_ids:
             active_query = active_query.filter(CrawlJob.id.notin_(managed_job_ids))
-        active_jobs = (
-            active_query
-            .order_by(CrawlJob.created_at.asc(), CrawlJob.id.asc())
-            .all()
-        )
+        active_jobs = active_query.order_by(
+            CrawlJob.created_at.asc(), CrawlJob.id.asc()
+        ).all()
         if not active_jobs:
             return 0
 
@@ -277,8 +272,8 @@ class StartupRecoveryService:
             crawl_job.completed_at = crawl_job.completed_at or timestamp
             crawl_job.error_message = CRAWL_JOB_RESTART_MESSAGE
 
-        recovery_records_by_job_id: dict[object, list[dict[str, object]]] = (
-            defaultdict(list)
+        recovery_records_by_job_id: dict[object, list[dict[str, object]]] = defaultdict(
+            list
         )
         if "crawl_job_listings" in table_names:
             running_listings = (
@@ -331,9 +326,7 @@ class StartupRecoveryService:
                 ):
                     listing.detail_status = "completed"
                     listing.published_job_id = existing_job.id
-                    listing.detail_payload = deepcopy(
-                        dict(existing_job.raw_data or {})
-                    )
+                    listing.detail_payload = deepcopy(dict(existing_job.raw_data or {}))
                     listing.detail_error_message = None
                     outcome = "reconciled_existing_job"
                 else:
@@ -348,9 +341,7 @@ class StartupRecoveryService:
                 listing.detail_completed_at = timestamp
 
                 published_job_id = listing.published_job_id
-                recovery_records_by_job_id[
-                    listing.last_detail_crawl_job_id
-                ].append(
+                recovery_records_by_job_id[listing.last_detail_crawl_job_id].append(
                     {
                         "listing_id": str(listing.id),
                         "source_site": listing.source_site,
@@ -385,8 +376,7 @@ class StartupRecoveryService:
     def _recover_schedule_executions(self) -> int:
         inspector = inspect(self.db.get_bind())
         available_columns = {
-            column["name"]
-            for column in inspector.get_columns("schedule_executions")
+            column["name"] for column in inspector.get_columns("schedule_executions")
         }
         if "id" not in available_columns or "status" not in available_columns:
             return 0
@@ -396,15 +386,19 @@ class StartupRecoveryService:
             if optional_column in available_columns:
                 select_columns.append(optional_column)
 
-        rows = self.db.execute(
-            text(
-                f"""
+        rows = (
+            self.db.execute(
+                text(
+                    f"""
                 SELECT {", ".join(select_columns)}
                 FROM schedule_executions
                 WHERE status IN ('pending', 'running', 'ai_running')
                 """
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
 
         recovery_timestamp = utc_now()
         for row in rows:
@@ -415,7 +409,10 @@ class StartupRecoveryService:
                 updates["completed_at"] = row.get("completed_at") or recovery_timestamp
             if "error_message" in available_columns:
                 updates["error_message"] = SCHEDULE_RESTART_MESSAGE
-            if "duration_seconds" in available_columns and row.get("duration_seconds") is None:
+            if (
+                "duration_seconds" in available_columns
+                and row.get("duration_seconds") is None
+            ):
                 started_at = row.get("started_at")
                 completed_at = updates.get("completed_at")
                 if started_at is not None and completed_at is not None:
@@ -429,7 +426,9 @@ class StartupRecoveryService:
 
             assignments = ", ".join(f"{column} = :{column}" for column in updates)
             self.db.execute(
-                text(f"UPDATE schedule_executions SET {assignments} WHERE id = :execution_id"),
+                text(
+                    f"UPDATE schedule_executions SET {assignments} WHERE id = :execution_id"
+                ),
                 {"execution_id": row["id"], **updates},
             )
 

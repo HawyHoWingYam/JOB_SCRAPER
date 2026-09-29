@@ -49,14 +49,12 @@ Retain exactly:
 
 Delete exactly:
 
-- crawl, automation, dispatch, schedule, manual-action, enrichment,
-  classification-batch, and embedding run history;
-- Jev runtime settings and credentials, bounded runs, work items, provider
-  receipts, online Skill
-  classifications, maintenance batches, duplicate associations, crawl-quality
-  observations/evaluations, search-rerank evaluations, and incident-triage
-  clusters/evaluations; these records are intentionally excluded from the
-  transient retained artifact;
+- crawl, automation, dispatch, schedule, manual-action, enrichment, retired
+  review, and embedding run history;
+- retired provider settings and credentials, bounded runs, work items,
+  receipts, classifications, maintenance batches, duplicate associations,
+  quality observations/evaluations, rerank evaluations, and triage records;
+  these records are intentionally excluded from the transient retained artifact;
 - Event Outbox rows;
 - all application release/revision/active-pointer/review tables;
 - Redis Streams, consumer groups, pending entries, and dead letters;
@@ -91,8 +89,8 @@ does not treat them as restorable data.
 - Pre-start verification re-exports every retained table, compares exact
   count/hash, and requires runtime tables (including Job embeddings) to be
   empty. This includes every table named in `RUNTIME_TABLE_NAMES`, including
-  all current `jev_*` tables, so neither credentials nor Jev runtime/audit state
-  cross the destructive sandbox cutover. It also requires
+  all declared runtime tables, so neither credentials nor retired runtime/audit
+  state cross the destructive sandbox cutover. It also requires
   the exact canonical Employment Type registry. After
   service startup and embedding regeneration, `finalize` repeats
   exact checks for immutable retained tables. It permits startup-authoritative
@@ -113,7 +111,7 @@ does not treat them as restorable data.
   post-cutover verification succeeds.
 - **Bad:** compare every retained table after startup and block forever on
   expected catalog refreshes, or ignore all retained hashes and accidentally
-  hide loss in Jobs, Companies, Source evidence, or Skill Candidate evidence.
+  hide loss in Jobs, Companies, Source evidence, or internal unresolved Skill evidence.
 - **Bad:** let APScheduler recreate `apscheduler_jobs`; this bypasses current ORM
   metadata and makes the supposedly exact bootstrapped schema drift immediately.
 

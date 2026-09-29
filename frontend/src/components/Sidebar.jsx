@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Briefcase, PlusCircle, CalendarClock, Settings, DatabaseZap, BrainCircuit, Building2, ListTree, Sparkles } from 'lucide-react';
+import { LayoutDashboard, Briefcase, PlusCircle, CalendarClock, Settings, DatabaseZap, BrainCircuit, Building2, ListTree } from 'lucide-react';
 import './Sidebar.css';
 
 const Sidebar = ({ activeView, setActiveView }) => {
@@ -12,8 +12,6 @@ const Sidebar = ({ activeView, setActiveView }) => {
         { id: 'crawl-tasks', label: 'Crawl Tasks', icon: ListTree },
         { id: 'offertoday-keywords', label: 'OfferToday Keywords', icon: ListTree },
         { group: 'Processing', id: 'ai', label: 'AI Enrichment', icon: BrainCircuit },
-        { id: 'jev', label: 'Jev Operations', icon: Sparkles },
-        { id: 'classification', label: 'Classification', icon: ListTree },
     ];
 
     return (

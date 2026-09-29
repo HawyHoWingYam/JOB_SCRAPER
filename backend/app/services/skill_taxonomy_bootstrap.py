@@ -12,10 +12,11 @@ from app.job_intelligence.current_taxonomies.transforms import transform_skill_t
 from app.job_intelligence.current_taxonomies.store import CurrentTaxonomyStore
 from app.models.current_taxonomy import CurrentTaxonomyNodeRecord
 from app.models.current_taxonomy import CurrentTaxonomyAliasRecord
-from app.services.classification_domain_adapters import SkillClassificationAdapter
 
 
-SKILL_TAXONOMY_PATH = Path(__file__).resolve().parents[1] / "data" / "skill_taxonomy.json"
+SKILL_TAXONOMY_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "skill_taxonomy.json"
+)
 
 
 def synchronize_initial_skill_taxonomy(db: Session) -> dict[str, int | bool]:
@@ -103,14 +104,7 @@ def synchronize_initial_skill_taxonomy(db: Session) -> dict[str, int | bool]:
     }
 
 
-def reconcile_deterministic_skill_candidates(db: Session) -> int:
-    """Resolve known names and local dispositions after taxonomy initialization."""
-
-    return SkillClassificationAdapter().reconcile_deterministic_candidates(db)
-
-
 __all__ = [
     "SKILL_TAXONOMY_PATH",
-    "reconcile_deterministic_skill_candidates",
     "synchronize_initial_skill_taxonomy",
 ]

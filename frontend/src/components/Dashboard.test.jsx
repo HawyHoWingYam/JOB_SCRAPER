@@ -23,12 +23,6 @@ const skills = {
   processed_total: 7,
   matched_job_total: 5,
   match_coverage: 71,
-  candidate_backlog: {
-    unresolved_candidate_total: 2,
-    affected_job_total: 3,
-    ready_candidate_total: 1,
-    ready_threshold: 5,
-  },
   skills: [
     {
       code: "python",
@@ -69,7 +63,7 @@ describe("Dashboard", () => {
     globalThis.fetch.mockImplementation((input) => {
       if (String(input).includes("/stats/overview")) return jsonResponse(Object.fromEntries(Object.keys(stats).map((key) => [key, 0])));
       if (String(input).includes("/ai/overview")) return jsonResponse(aiOverview);
-      return jsonResponse({ ...skills, processed_total: 0, matched_job_total: 0, skills: [], candidate_backlog: {} });
+      return jsonResponse({ ...skills, processed_total: 0, matched_job_total: 0, skills: [] });
     });
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByText("No AI-eligible Jobs are in the current corpus.")).toBeVisible();
@@ -79,7 +73,6 @@ describe("Dashboard", () => {
   it("renders real chart contracts and all three independently fetched sections", async () => {
     const user = userEvent.setup();
     const onNavigateToJobs = vi.fn();
-    const onNavigateToClassification = vi.fn();
     globalThis.fetch = vi.fn((input) => {
       const url = String(input);
       if (url.includes("/stats/overview")) return jsonResponse(stats);
@@ -91,7 +84,6 @@ describe("Dashboard", () => {
     render(
       <Dashboard
         onNavigateToAI={vi.fn()}
-        onNavigateToClassification={onNavigateToClassification}
         onNavigateToJobs={onNavigateToJobs}
       />,
     );
@@ -110,12 +102,6 @@ describe("Dashboard", () => {
       screen.getByRole("button", { name: "View 4 Jobs matched to Python" }),
     );
     expect(onNavigateToJobs).toHaveBeenLastCalledWith({ skillIds: ["python"] });
-    await user.click(
-      screen.getByRole("button", {
-        name: "Open Skill Classification for 1 ready Candidates",
-      }),
-    );
-    expect(onNavigateToClassification).toHaveBeenLastCalledWith("skill");
   });
 
   it("refreshes all sections while retaining and marking a failed section stale", async () => {

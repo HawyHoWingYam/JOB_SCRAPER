@@ -54,34 +54,6 @@ const defaultProviderCatalog = {
     { value: "openai_responses", label: "OpenAI Responses" },
   ],
 };
-const defaultJevRequest = {
-  enabled: false,
-  endpoint: "https://openrouter.ai/api/alpha/decisions",
-  model: "~typesafe/jev-latest",
-  api_key: "",
-  sample_limit: 100,
-  question_batch_limit: 10,
-  concurrency: 2,
-  retry_limit: 0,
-  timeout_seconds: 30,
-  evidence_threshold: "0.800",
-  recommendation_threshold: "0.800",
-  duplicate_enabled: false,
-  duplicate_candidate_limit: 3,
-  duplicate_corpus_limit: 200,
-  crawl_quality_enabled: false,
-  crawl_quality_batch_limit: 20,
-  search_rerank_enabled: false,
-  search_rerank_candidate_limit: 20,
-  incident_triage_enabled: false,
-  incident_triage_event_limit: 200,
-  maintenance_enabled: false,
-  maintenance_model: "~typesafe/jev-latest",
-  maintenance_interval_days: 30,
-  maintenance_min_candidates: 50,
-  maintenance_batch_size: 100,
-  maintenance_threshold: "0.900",
-};
 export const aiSettingsPayload = {
   provider_catalog: defaultProviderCatalog,
   persisted_config: {
@@ -89,7 +61,6 @@ export const aiSettingsPayload = {
     company_llm_provider: "anthropic",
     ai_enrichment_run_concurrency: 8,
     company_ai_enrichment_run_concurrency: 3,
-    skill_auto_create_distinct_job_threshold: 5,
     anthropic: {
       model: null,
       base_url: null,
@@ -140,7 +111,6 @@ export const aiSettingsPayload = {
     company_llm_provider: "anthropic",
     ai_enrichment_run_concurrency: 8,
     company_ai_enrichment_run_concurrency: 3,
-    skill_auto_create_distinct_job_threshold: 5,
     anthropic: {
       model: "claude-sonnet-4-5",
       base_url: "https://api.anthropic.com",
@@ -200,11 +170,6 @@ export const aiSettingsPayload = {
     is_ready: false,
     last_test_status: "untested",
   },
-  jev: {
-    ...defaultJevRequest,
-    has_api_key: true,
-    api_key_preview: "jev-...alue",
-  },
 };
 
 export async function interceptSettings(page) {
@@ -213,15 +178,14 @@ export async function interceptSettings(page) {
   let saveFailure = true;
   const requests = [];
   const pacing = ['jobsdb', 'ctgoodjobs', 'offertoday'].map(source_site => ({ source_site, interval_min_seconds: 1, interval_max_seconds: 3, burst_size: 20, burst_pause_seconds: 30 }));
-  await page.route(url => url.pathname.startsWith('/api/settings/') || url.pathname.startsWith('/api/jev/'), async route => {
+  await page.route(url => url.pathname.startsWith('/api/settings/'), async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const method = request.method();
     const body = request.postDataJSON();
     requests.push({ path, method, body });
     let result;
-    if (path === '/api/jev/runs') result = { runs: [] };
-    else if (path === '/api/settings/ai/test') result = { ok: true, scope: body.scope || 'jobs', configured_provider: 'gemini', active_provider: 'gemini', model: payload.persisted_config.gemini.model, latency_ms: 42, config_fingerprint: 'tested' };
+    if (path === '/api/settings/ai/test') result = { ok: true, scope: body.scope || 'jobs', configured_provider: 'gemini', active_provider: 'gemini', model: payload.persisted_config.gemini.model, latency_ms: 42, config_fingerprint: 'tested' };
     else if (path === '/api/settings/ai') {
       if (method === 'GET' && loadFailure) return route.fulfill({ status: 503, json: { detail: 'Settings temporarily unavailable' } });
       if (method === 'PUT') {

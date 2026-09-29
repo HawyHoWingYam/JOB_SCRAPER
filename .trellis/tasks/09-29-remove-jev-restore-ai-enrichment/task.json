@@ -1,0 +1,36 @@
+{
+  "id": "remove-jev-restore-ai-enrichment",
+  "name": "remove-jev-restore-ai-enrichment",
+  "title": "Remove Jev and restore AI Enrichment ownership",
+  "description": "Remove the entire Jev and Skill-review products, move Skills and Related Jobs into one atomic ordinary AI Enrichment request, and perform the one-time destructive database cutover without requeueing historical Jobs.",
+  "status": "in_progress",
+  "dev_type": "feature",
+  "scope": "fullstack",
+  "package": null,
+  "priority": "P1",
+  "creator": "karashawy",
+  "assignee": "karashawy",
+  "createdAt": "2026-09-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "codex/offertoday-it-coverage-20260702",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend/app/services/ai_enrichment_service.py",
+    "backend/app/ai/job_insight_extractor.py",
+    "backend/app/services/job_recommendation_service.py",
+    "backend/app/models/jev.py",
+    "frontend/src/components/ai/AIEnrichmentPage.jsx",
+    "frontend/src/components/JobDetailModal.jsx"
+  ],
+  "notes": "Issue #83 and the superseded Jev repair task were closed/archived during planning. No stopped Jev batch may be resumed.",
+  "meta": {
+    "github_issue": 85,
+    "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/85"
+  }
+}

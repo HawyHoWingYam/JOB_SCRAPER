@@ -828,33 +828,6 @@ export default function AIEnrichmentPage() {
     }
   }
 
-  async function resumeCancelledBackfill(run) {
-    if (!run) return;
-    try {
-      setSubmitting(true);
-      setActionError(null);
-      setActionErrorNeedsSettings(false);
-      setActionMessage(null);
-      setActionRunId(null);
-      const response = await fetch(apiPath(`/ai/runs/${run.id}/resume-cancelled-backfill`), {
-        method: 'POST',
-      });
-      if (!response.ok) {
-        throw new Error(`Resume request failed with ${response.status}`);
-      }
-      const continuation = await response.json();
-      setActionRunId(continuation.id || null);
-      if (continuation.id) setRuns(current => [continuation, ...current.filter(run => run.id !== continuation.id)]);
-      setActionMessage(`Resumed cancelled backfill ${run.id} as ${continuation.id}.`);
-      setHistoryRevision(value => value + 1);
-      fetchAIConsole({ queueAfterInFlight: true });
-    } catch (err) {
-      setActionError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   async function stopRun(run) {
     if (!window.confirm('Stop this run? Jobs already in flight may still finish and be saved.')) {
       return;
@@ -1328,13 +1301,6 @@ export default function AIEnrichmentPage() {
                             <RefreshCcw size={14} /> Retry failed jobs ({Number(run.failed_items || 0)})
                           </button>
                         )}
-                        {normalizeRunStatus(run.status) === 'cancelled'
-                          && run.source_type === 'jev_skill_backfill'
-                          && Number(run.cancelled_items || 0) > 0 && (
-                          <button type="button" className="ai-secondary-button" disabled={submitting || Boolean(activeRun)} onClick={() => resumeCancelledBackfill(run)}>
-                            <RefreshCcw size={14} /> Resume cancelled jobs ({Number(run.cancelled_items || 0)})
-                          </button>
-                        )}
                       </div>
                     </article>
                   );
@@ -1342,7 +1308,7 @@ export default function AIEnrichmentPage() {
               </div>
             </section>
           </div>
-          <AIEnrichmentHistory revision={historyRevision} busy={submitting} hasActiveRun={Boolean(activeRun) || overviewActiveRunsCount > 0} onRetry={retryFailedItems} onResume={resumeCancelledBackfill} onStop={stopRun} />
+          <AIEnrichmentHistory revision={historyRevision} busy={submitting} hasActiveRun={Boolean(activeRun) || overviewActiveRunsCount > 0} onRetry={retryFailedItems} onStop={stopRun} />
         </>
       )}
     </section>

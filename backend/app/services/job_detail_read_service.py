@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.job_intelligence.product_read_model import JobIntelligenceProductReadModel
 from app.models.job import Job
-from app.models.jev import JevOperationBatch, JevOperationBatchItem
 from app.schemas.job import JobDetailSchema, JobSchema
-from app.services.jev_online_skill_store import JevOnlineSkillStore
 
 
 _JOB_DETAIL_SCALAR_FIELDS = (
@@ -21,75 +18,6 @@ _JOB_DETAIL_SCALAR_FIELDS = (
     "expiry_date",
     "is_expired",
 )
-
-
-def _latest_jev_skill_payload(db: Session, job_id) -> dict[str, object] | None:
-    record = JevOnlineSkillStore(db).latest_for_job(job_id)
-    if record is None:
-        return None
-    receipt = record.receipt if isinstance(record.receipt, dict) else {}
-    usage = receipt.get("usage") if isinstance(receipt.get("usage"), dict) else {}
-    raw_cost = usage.get("cost")
-    cost = (
-        float(raw_cost)
-        if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool)
-        else None
-    )
-    return {
-        "classification_id": record.id,
-        "run_id": record.jev_run_id,
-        "status": record.status,
-        "error_code": record.error_code,
-        "model": receipt.get("model")
-        if isinstance(receipt.get("model"), str)
-        else None,
-        "request_id": (
-            receipt.get("request_id")
-            if isinstance(receipt.get("request_id"), str)
-            else None
-        ),
-        "cost_usd": cost,
-        "completed_at": record.completed_at,
-    }
-
-
-def _latest_jev_operation_payloads(
-    db: Session, job_id
-) -> list[dict[str, object]]:
-    rows = db.execute(
-        select(JevOperationBatchItem, JevOperationBatch)
-        .join(
-            JevOperationBatch,
-            JevOperationBatch.id == JevOperationBatchItem.batch_id,
-        )
-        .where(JevOperationBatchItem.job_id == job_id)
-        .order_by(
-            JevOperationBatch.created_at.desc(),
-            JevOperationBatchItem.created_at.desc(),
-            JevOperationBatchItem.position.desc(),
-        )
-    )
-    latest: dict[str, dict[str, object]] = {}
-    for item, batch in rows:
-        if item.operation in latest:
-            continue
-        latest[item.operation] = {
-            "operation": item.operation,
-            "status": item.status,
-            "eligibility_reason": item.eligibility_reason,
-            "batch_id": batch.id,
-            "batch_status": batch.status,
-            "error_code": item.error_code,
-            "error_message": item.error_message,
-            "updated_at": (
-                item.completed_at
-                or item.started_at
-                or item.created_at
-                or batch.created_at
-            ),
-        }
-    operation_order = ("skills", "duplicate", "related_jobs")
-    return [latest[operation] for operation in operation_order if operation in latest]
 
 
 def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
@@ -135,8 +63,6 @@ def compose_current_job_detail(db: Session, job: Job) -> JobDetailSchema:
             "manual_editable": is_manual,
             "enrichment_eligibility": eligibility,
             "job_intelligence_freshness": freshness,
-            "jev_skill_classification": _latest_jev_skill_payload(db, job.id),
-            "jev_operations": _latest_jev_operation_payloads(db, job.id),
         }
     )
     payload.update(

@@ -69,6 +69,20 @@ def _normalized_governed_skill_names(state: object) -> set[str]:
     return {normalized for name in names if (normalized := str(name).strip().lower())}
 
 
+def _recommendation_sort_key(
+    entry: tuple[float, float, float, Job, Company | None],
+) -> tuple[object, ...]:
+    job = entry[3]
+    return (
+        entry[0],
+        entry[1],
+        entry[2],
+        getattr(job, "posted_date", None) or datetime.min.replace(tzinfo=UTC),
+        getattr(job, "title", "") or "",
+        str(getattr(job, "id", "")),
+    )
+
+
 class JobRecommendationService:
     def __init__(self, db):
         self.db = db
@@ -117,17 +131,7 @@ class JobRecommendationService:
                 )
             )
 
-        ranked.sort(
-            key=lambda entry: (
-                entry[0],
-                entry[1],
-                entry[2],
-                getattr(entry[3], "posted_date", None)
-                or datetime.min.replace(tzinfo=UTC),
-                getattr(entry[3], "title", "") or "",
-            ),
-            reverse=True,
-        )
+        ranked.sort(key=_recommendation_sort_key, reverse=True)
 
         # Deduplicate by title (case-insensitive), keeping the highest-scored entry
         seen_titles: set[str] = set()
@@ -200,7 +204,10 @@ class JobRecommendationService:
             .join(Company, Company.id == Job.company_id)
             .join(JobEmbedding, JobEmbedding.job_id == Job.id)
             .filter(Job.id != excluded_job_id, Job.is_deleted.is_(False))
-            .order_by(JobEmbedding.embedding.cosine_distance(source_vector))
+            .order_by(
+                JobEmbedding.embedding.cosine_distance(source_vector),
+                Job.id.asc(),
+            )
             .limit(top_n)
         )
         return self.db.execute(stmt).unique().all()

@@ -6,7 +6,20 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 import pytest
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, MetaData, String, Table, Uuid, create_engine, event, select
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Uuid,
+    create_engine,
+    event,
+    select,
+)
 
 from app.database import Base
 import app.models  # noqa: F401
@@ -264,7 +277,9 @@ def test_post_start_retention_verification_ignores_only_declared_mutable_tables(
     ).matched
 
 
-def test_import_orders_retained_hierarchy_parents_before_children(tmp_path: Path) -> None:
+def test_import_orders_retained_hierarchy_parents_before_children(
+    tmp_path: Path,
+) -> None:
     metadata = MetaData()
     classifications = Table(
         "source_classifications",
@@ -283,7 +298,9 @@ def test_import_orders_retained_hierarchy_parents_before_children(tmp_path: Path
         )
         metadata.create_all(candidate)
     with source.begin() as connection:
-        connection.execute(classifications.insert(), {"id": "z-parent", "label": "Root"})
+        connection.execute(
+            classifications.insert(), {"id": "z-parent", "label": "Root"}
+        )
         connection.execute(
             classifications.insert(),
             {"id": "a-child", "parent_id": "z-parent", "label": "Child"},
@@ -412,7 +429,9 @@ def test_export_reports_removed_column_counts_and_omits_their_values(
     assert company_rows[0]["website"] is None
 
 
-def test_redis_cleanup_deletes_every_stream_with_groups_pending_and_dead_letters() -> None:
+def test_redis_cleanup_deletes_every_stream_with_groups_pending_and_dead_letters() -> (
+    None
+):
     class FakeRedis:
         def __init__(self) -> None:
             self.keys = set(ALL_STREAM_TOPICS) | {"unrelated-cache"}
@@ -436,7 +455,9 @@ def test_redis_cleanup_deletes_every_stream_with_groups_pending_and_dead_letters
     assert redis_client.keys == {"unrelated-cache"}
 
 
-def test_current_metadata_has_no_release_revision_review_or_legacy_taxonomy_tables() -> None:
+def test_current_metadata_has_no_release_revision_review_or_legacy_taxonomy_tables() -> (
+    None
+):
     table_names = set(Base.metadata.tables)
     forbidden_fragments = (
         "revision",
@@ -462,7 +483,7 @@ def test_target_verification_requires_all_runtime_history_tables_empty() -> None
     metadata = MetaData()
     runtime_tables = {
         name: Table(name, metadata, Column("id", Integer, primary_key=True))
-        for name in ("crawl_jobs", "jev_runtime_settings", "jev_runs")
+        for name in ("crawl_jobs", "enrichment_runs", "company_enrichment_runs")
     }
     engine = create_engine("sqlite:///:memory:")
     metadata.create_all(engine)
@@ -475,9 +496,9 @@ def test_target_verification_requires_all_runtime_history_tables_empty() -> None
     report = verify_target_state(db_engine=engine, metadata=metadata)
     assert not report.clean
     assert report.issues == (
+        "runtime table is not empty: company_enrichment_runs (1)",
         "runtime table is not empty: crawl_jobs (1)",
-        "runtime table is not empty: jev_runs (1)",
-        "runtime table is not empty: jev_runtime_settings (1)",
+        "runtime table is not empty: enrichment_runs (1)",
     )
 
 
@@ -506,7 +527,9 @@ def test_target_verification_requires_canonical_employment_type_registry() -> No
     assert verify_target_state(db_engine=engine, metadata=metadata).clean
 
 
-def test_post_cutover_verification_allows_runtime_but_requires_every_embedding() -> None:
+def test_post_cutover_verification_allows_runtime_but_requires_every_embedding() -> (
+    None
+):
     metadata = MetaData()
     jobs = Table(
         "jobs",

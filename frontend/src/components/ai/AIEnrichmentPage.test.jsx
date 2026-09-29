@@ -469,35 +469,6 @@ describe('AIEnrichmentPage', () => {
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/ai/runs/run-failed-3/retry-failed', { method: 'POST' });
   });
 
-  it('resumes only cancelled Jev backfill work as a new durable run', async () => {
-    const cancelledBackfill = {
-      ...completedRun,
-      id: 'run-backfill-cancelled',
-      source_type: 'jev_skill_backfill',
-      status: 'cancelled',
-      completed_items: 2,
-      cancelled_items: 3,
-    };
-    installFetch({ overviewPayload: { ...overview, active_runs: 0 }, runs: [cancelledBackfill] });
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn((input, init) => {
-      if (String(input).endsWith('/resume-cancelled-backfill')) {
-        return jsonResponse({ id: 'run-backfill-resumed' });
-      }
-      return originalFetch(input, init);
-    });
-    const user = userEvent.setup();
-    render(<AIEnrichmentPage />);
-
-    await user.click(await screen.findByRole('button', { name: /Resume cancelled jobs \(3\)/i }));
-
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      '/api/ai/runs/run-backfill-cancelled/resume-cancelled-backfill',
-      { method: 'POST' },
-    );
-    expect(await screen.findByRole('link', { name: 'Inspect submitted run run-backfill-resumed' })).toBeInTheDocument();
-  });
-
   it('copies the visible run UUID for debugging', async () => {
     const user = userEvent.setup();
     render(<AIEnrichmentPage />);

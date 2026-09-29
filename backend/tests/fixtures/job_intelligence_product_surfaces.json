@@ -229,19 +229,6 @@
     "skills": [
       "Python"
     ],
-    "skill_candidate_mentions": [
-      {
-        "id": "70000000-0000-0000-0000-000000000010",
-        "raw_name": "Rust",
-        "normalized_key": "rust",
-        "candidate_id": "80000000-0000-0000-0000-000000000010",
-        "source": "ai-extraction",
-        "confidence": 0.8,
-        "provenance": {
-          "method": "ai-extraction"
-        }
-      }
-    ],
     "source_employment_labels": [
       {
         "id": "60000000-0000-0000-0000-000000000010",
@@ -284,19 +271,6 @@
             "method": "ai-extraction"
           },
           "mention_count": 1
-        }
-      ],
-      "candidate_mentions": [
-        {
-          "id": "70000000-0000-0000-0000-000000000010",
-          "raw_name": "Rust",
-          "normalized_key": "rust",
-          "candidate_id": "80000000-0000-0000-0000-000000000010",
-          "source": "ai-extraction",
-          "confidence": 0.8,
-          "provenance": {
-            "method": "ai-extraction"
-          }
         }
       ]
     },

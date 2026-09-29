@@ -261,7 +261,7 @@ describe('api client', () => {
         });
       }));
 
-      const request = apiFetchJson('/api/jev/runs/run-1/execute-next', {
+      const request = apiFetchJson('/api/ai/runs/run-1/retry-failed', {
         method: 'POST',
         timeoutMs: 25,
       });
@@ -291,7 +291,7 @@ describe('api client', () => {
         return new Promise(() => {});
       });
 
-      apiFetchJson('/api/jev/runs/run-1/execute-next', {
+      apiFetchJson('/api/ai/runs/run-1/retry-failed', {
         method: 'POST',
         timeoutMs: null,
       });

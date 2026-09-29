@@ -237,7 +237,6 @@ function createProfileState(payload, profileKey) {
 }
 
 function createFormState(payload) {
-  const jev = payload?.jev || {};
   return {
     jobs: createProfileState(payload, "jobs"),
     companies: createProfileState(payload, "companies"),
@@ -253,51 +252,6 @@ function createFormState(payload) {
         payload?.effective_config?.ai_enrichment_run_concurrency ??
         "",
     ),
-    skill_auto_create_distinct_job_threshold: String(
-      payload?.persisted_config?.skill_auto_create_distinct_job_threshold ??
-        payload?.effective_config?.skill_auto_create_distinct_job_threshold ??
-        10,
-    ),
-    skill_candidate_recommendation_limit: String(
-      payload?.persisted_config?.skill_candidate_recommendation_limit ??
-        payload?.effective_config?.skill_candidate_recommendation_limit ?? 5,
-    ),
-    skill_candidate_evidence_limit: String(
-      payload?.persisted_config?.skill_candidate_evidence_limit ??
-        payload?.effective_config?.skill_candidate_evidence_limit ?? 5,
-    ),
-    jev: {
-      enabled: Boolean(jev.enabled),
-      endpoint: jev.endpoint || "https://openrouter.ai/api/alpha/decisions",
-      model: jev.model || "~typesafe/jev-latest",
-      api_key: "",
-      sample_limit: String(jev.sample_limit ?? 100),
-      question_batch_limit: String(jev.question_batch_limit ?? 10),
-      concurrency: String(jev.concurrency ?? 2),
-      retry_limit: String(jev.retry_limit ?? 0),
-      timeout_seconds: String(jev.timeout_seconds ?? 30),
-      evidence_threshold: String(jev.evidence_threshold ?? "0.800"),
-      recommendation_threshold: String(
-        jev.recommendation_threshold ?? "0.800",
-      ),
-      duplicate_enabled: Boolean(jev.duplicate_enabled),
-      duplicate_candidate_limit: String(jev.duplicate_candidate_limit ?? 3),
-      duplicate_corpus_limit: String(jev.duplicate_corpus_limit ?? 200),
-      crawl_quality_enabled: Boolean(jev.crawl_quality_enabled),
-      crawl_quality_batch_limit: String(jev.crawl_quality_batch_limit ?? 20),
-      search_rerank_enabled: Boolean(jev.search_rerank_enabled),
-      search_rerank_candidate_limit: String(jev.search_rerank_candidate_limit ?? 20),
-      incident_triage_enabled: Boolean(jev.incident_triage_enabled),
-      incident_triage_event_limit: String(jev.incident_triage_event_limit ?? 200),
-      maintenance_enabled: Boolean(jev.maintenance_enabled),
-      maintenance_model: jev.maintenance_model || "~typesafe/jev-latest",
-      maintenance_interval_days: String(jev.maintenance_interval_days ?? 30),
-      maintenance_min_candidates: String(
-        jev.maintenance_min_candidates ?? 50,
-      ),
-      maintenance_batch_size: String(jev.maintenance_batch_size ?? 100),
-      maintenance_threshold: String(jev.maintenance_threshold ?? "0.900"),
-    },
   };
 }
 
@@ -305,7 +259,6 @@ function createSecretVisibilityState() {
   return {
     jobs: false,
     companies: false,
-    jev: false,
   };
 }
 
@@ -340,47 +293,6 @@ function buildRequestBody(formState, settingsPayload) {
     company_ai_enrichment_run_concurrency: Number(
       formState.company_ai_enrichment_run_concurrency,
     ),
-    skill_auto_create_distinct_job_threshold: Number(
-      formState.skill_auto_create_distinct_job_threshold,
-    ),
-    skill_candidate_recommendation_limit: Number(
-      formState.skill_candidate_recommendation_limit,
-    ),
-    skill_candidate_evidence_limit: Number(
-      formState.skill_candidate_evidence_limit,
-    ),
-    jev: {
-      enabled: formState.jev.enabled,
-      endpoint: formState.jev.endpoint,
-      model: formState.jev.model,
-      api_key: formState.jev.api_key,
-      sample_limit: Number(formState.jev.sample_limit),
-      question_batch_limit: Number(formState.jev.question_batch_limit),
-      concurrency: Number(formState.jev.concurrency),
-      retry_limit: Number(formState.jev.retry_limit),
-      timeout_seconds: Number(formState.jev.timeout_seconds),
-      evidence_threshold: formState.jev.evidence_threshold,
-      recommendation_threshold: formState.jev.recommendation_threshold,
-      duplicate_enabled: formState.jev.duplicate_enabled,
-      duplicate_candidate_limit: Number(formState.jev.duplicate_candidate_limit),
-      duplicate_corpus_limit: Number(formState.jev.duplicate_corpus_limit),
-      crawl_quality_enabled: formState.jev.crawl_quality_enabled,
-      crawl_quality_batch_limit: Number(formState.jev.crawl_quality_batch_limit),
-      search_rerank_enabled: formState.jev.search_rerank_enabled,
-      search_rerank_candidate_limit: Number(formState.jev.search_rerank_candidate_limit),
-      incident_triage_enabled: formState.jev.incident_triage_enabled,
-      incident_triage_event_limit: Number(formState.jev.incident_triage_event_limit),
-      maintenance_enabled: formState.jev.maintenance_enabled,
-      maintenance_model: formState.jev.maintenance_model,
-      maintenance_interval_days: Number(
-        formState.jev.maintenance_interval_days,
-      ),
-      maintenance_min_candidates: Number(
-        formState.jev.maintenance_min_candidates,
-      ),
-      maintenance_batch_size: Number(formState.jev.maintenance_batch_size),
-      maintenance_threshold: formState.jev.maintenance_threshold,
-    },
   };
 
   for (const [profileKey, prefix] of [
@@ -827,7 +739,6 @@ function AIRuntimeSettings({ profileFocus }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingProfile, setTestingProfile] = useState(null);
-  const [testingJev, setTestingJev] = useState(false);
   const [error, setError] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [secretVisibility, setSecretVisibility] = useState(
@@ -914,16 +825,6 @@ function AIRuntimeSettings({ profileFocus }) {
     setFormState((currentState) => ({
       ...currentState,
       [key]: value,
-    }));
-  }
-
-  function updateJevField(key, value) {
-    setFormState((currentState) => ({
-      ...currentState,
-      jev: {
-        ...currentState.jev,
-        [key]: value,
-      },
     }));
   }
 
@@ -1051,60 +952,6 @@ function AIRuntimeSettings({ profileFocus }) {
     }
   }
 
-  async function handleTestJev() {
-    setTestingJev(true);
-    setFeedback(null);
-
-    try {
-      const response = await fetch(apiPath("/settings/ai/jev/test"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          endpoint: formState.jev.endpoint,
-          model: formState.jev.model,
-          api_key: formState.jev.api_key,
-          timeout_seconds: Number(formState.jev.timeout_seconds),
-        }),
-      });
-      const payload = await response.json();
-
-      if (!response.ok) {
-        const detail = payload?.detail;
-        const lines = Array.isArray(detail)
-          ? formatValidationErrors(detail)
-          : [detail?.error_message || "Jev connection test failed"];
-        setFeedback({
-          tone: "error",
-          title: "Jev connection test failed",
-          lines,
-        });
-        return;
-      }
-
-      const usage = payload?.usage || {};
-      const usageLine = Number.isFinite(usage.cost)
-        ? `Provider-reported cost: $${usage.cost.toFixed(6)}.`
-        : "The provider did not report a cost.";
-      setFeedback({
-        tone: "success",
-        title: "Jev connection test passed",
-        lines: [
-          `${payload.model || formState.jev.model} answered in ${payload.latency_ms ?? 0} ms.`,
-          usageLine,
-          "The draft was not saved and no Jev run or batch history was created.",
-        ],
-      });
-    } catch (err) {
-      setFeedback({
-        tone: "error",
-        title: "Jev connection test failed",
-        lines: [err.message],
-      });
-    } finally {
-      setTestingJev(false);
-    }
-  }
-
   if (loading) {
     return (
       <section className="ai-settings-page">
@@ -1177,7 +1024,7 @@ function AIRuntimeSettings({ profileFocus }) {
       <FeedbackBanner feedback={feedback} />
 
       <nav className="ai-settings-jump-nav" aria-label="Runtime configuration sections">
-        {[["jobs", "AI Enrichment profile"], ["companies", "Companies profile"], ["jev", "Jev System One"], ["throughput", "Throughput"]].map(([id, label]) => <button type="button" key={id} onClick={() => document.getElementById(`settings-${id}`)?.focus()}>{label}</button>)}
+        {[["jobs", "AI Enrichment profile"], ["companies", "Companies profile"], ["throughput", "Throughput"]].map(([id, label]) => <button type="button" key={id} onClick={() => document.getElementById(`settings-${id}`)?.focus()}>{label}</button>)}
       </nav>
       <section className="ai-settings-summary-grid">
         <SummaryCard
@@ -1251,7 +1098,7 @@ function AIRuntimeSettings({ profileFocus }) {
             </div>
             <div className="ai-settings-edit-actions">
             <span role="status">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
-            <button type="button" disabled={!dirty || saving || Boolean(testingProfile) || testingJev} onClick={() => {
+            <button type="button" disabled={!dirty || saving || Boolean(testingProfile)} onClick={() => {
               setFormState(createFormState(settingsPayload));
               setSecretVisibility(createSecretVisibilityState());
               setFeedback({ tone: 'success', title: 'Changes discarded', lines: ['The saved configuration is restored.'] });
@@ -1259,7 +1106,7 @@ function AIRuntimeSettings({ profileFocus }) {
             <button
               className="ai-settings-save-button"
               type="submit"
-              disabled={saving || Boolean(testingProfile) || testingJev}
+              disabled={saving || Boolean(testingProfile)}
             >
               <Save size={16} />
               <span>{saving ? "Saving..." : "Save settings"}</span>
@@ -1294,436 +1141,10 @@ function AIRuntimeSettings({ profileFocus }) {
           updateProfileProvider={updateProfileProvider}
           updateProfileField={updateProfileField}
           onTestProfile={handleTestProfile}
-        />
+       />
 
-        <section id="settings-jev" tabIndex={-1} className="ai-settings-panel ai-settings-jev-panel glass-panel">
-          <div className="ai-settings-section-heading ai-settings-jev-heading">
-            <div>
-              <div className="ai-settings-jev-title-row">
-                <span className="ai-settings-jev-kicker">Native decision provider</span>
-                <span className={`ai-settings-jev-status ${formState.jev.enabled ? "enabled" : "disabled"}`}>
-                  {formState.jev.enabled ? "Enabled" : "Disabled"}
-                </span>
-              </div>
-              <h2>Jev System One</h2>
-              <p>
-                Configure the connection, future-run defaults, and available
-                advisory capabilities. Saving never calls the provider.
-              </p>
-            </div>
-            <div className="ai-settings-jev-heading-actions">
-              <button
-                type="button"
-                className="ai-settings-save-button"
-                onClick={handleTestJev}
-                disabled={saving || Boolean(testingProfile) || testingJev}
-              >
-                <FlaskConical size={16} />
-                <span>{testingJev ? "Testing Jev..." : "Test Jev connection"}</span>
-              </button>
-              <a className="ai-settings-save-button" href="#jev">Open Jev Operations</a>
-            </div>
-          </div>
-
-          <p className="ai-settings-test-note ai-settings-jev-test-note">
-            Testing sends one potentially billable request using this draft. It
-            does not save changes or create Jev run or batch history.
-          </p>
-
-          <div className="ai-settings-jev-boundaries" aria-label="Jev operating boundaries">
-            <div><ShieldCheck size={18} /><span><strong>Manual execution</strong><small>Runs start only in Jev Operations.</small></span></div>
-            <div><Gauge size={18} /><span><strong>Provider-managed spend</strong><small>Monetary limits are managed in the Jev API Console.</small></span></div>
-            <div><Save size={18} /><span><strong>Safe configuration</strong><small>Save changes without sending a Jev request.</small></span></div>
-          </div>
-
-          <fieldset className="ai-settings-jev-connection">
-            <legend>Connection</legend>
-            <label className="ai-settings-jev-enable-row">
-              <span><strong>Enable Jev</strong><small>Make Jev available for future manually started operations.</small></span>
-              <input
-                aria-label="Enable Jev"
-                type="checkbox"
-                checked={formState.jev.enabled}
-                onChange={(event) =>
-                  updateJevField("enabled", event.target.checked)
-                }
-                disabled={saving}
-              />
-            </label>
-            <div className="ai-settings-form-grid ai-settings-jev-connection-grid">
-              <label className="ai-settings-field">
-                <span>Jev endpoint</span>
-                <input
-                  aria-label="Jev endpoint"
-                  type="url"
-                  value={formState.jev.endpoint}
-                  onChange={(event) =>
-                    updateJevField("endpoint", event.target.value)
-                  }
-                  disabled={saving}
-                />
-                <small className="ai-settings-field-hint">Use the complete native System One endpoint.</small>
-              </label>
-              <label className="ai-settings-field">
-                <span>Jev model</span>
-                <input
-                  aria-label="Jev model"
-                  value={formState.jev.model}
-                  onChange={(event) => updateJevField("model", event.target.value)}
-                  disabled={saving}
-                />
-                <small className="ai-settings-field-hint">Applied to newly created runs only.</small>
-              </label>
-              <label className="ai-settings-field ai-settings-secret-field">
-                <div className="ai-settings-field-label-row">
-                  <span>Jev API key</span>
-                  {settingsPayload?.jev?.has_api_key ? <span className="ai-settings-saved-badge"><KeyRound size={12} /><span>API key saved</span></span> : null}
-                </div>
-                <div className="ai-settings-password-row">
-                  <input
-                    aria-label="Jev API key"
-                    type={secretVisibility.jev ? "text" : "password"}
-                    value={formState.jev.api_key}
-                    onChange={(event) =>
-                      updateJevField("api_key", event.target.value)
-                    }
-                    placeholder={settingsPayload?.jev?.has_api_key ? "Leave blank to keep existing key" : "Enter Jev API key"}
-                    autoComplete="new-password"
-                    disabled={saving}
-                  />
-                  <button
-                    className="ai-settings-password-toggle"
-                    type="button"
-                    aria-label={`${secretVisibility.jev ? "Hide" : "Show"} Jev API key`}
-                    onClick={() => toggleSecretVisibility("jev")}
-                    disabled={saving}
-                  >
-                    {secretVisibility.jev ? <EyeOff size={16} /> : <Eye size={16} />}
-                  </button>
-                </div>
-                <div className="ai-settings-secret-value">
-                  <KeyRound size={16} />
-                  <strong>{settingsPayload?.jev?.has_api_key ? "API key saved" : "No API key saved"}</strong>
-                  {settingsPayload?.jev?.api_key_preview ? <code>{settingsPayload.jev.api_key_preview}</code> : null}
-                </div>
-              </label>
-            </div>
-          </fieldset>
-
-          <details className="ai-settings-jev-advanced">
-            <summary><span><strong>Advanced Jev controls</strong><small>Concurrency, retry, timeout, sampling, and decision thresholds</small></span><span aria-hidden="true">+</span></summary>
-            <div className="ai-settings-form-grid">
-              {[
-                ["sample_limit", "Jev sample limit", 1, 10000],
-                ["question_batch_limit", "Jev question batch limit", 1, 100],
-                ["concurrency", "Jev concurrency", 1, 50],
-                ["retry_limit", "Jev retry limit", 0, 10],
-                ["timeout_seconds", "Jev timeout seconds", 1, 600],
-              ].map(([key, label, min, max]) => (
-                <label className="ai-settings-field" key={key}>
-                  <span>{label}</span>
-                  <input
-                    aria-label={label}
-                    type="number"
-                    min={min}
-                    max={max}
-                    value={formState.jev[key]}
-                    onChange={(event) => updateJevField(key, event.target.value)}
-                    disabled={saving}
-                  />
-                </label>
-              ))}
-              {[
-                ["evidence_threshold", "Jev evidence threshold"],
-                ["recommendation_threshold", "Jev recommendation threshold"],
-              ].map(([key, label]) => (
-                <label className="ai-settings-field" key={key}>
-                  <span>{label}</span>
-                  <input
-                    aria-label={label}
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.001"
-                    value={formState.jev[key]}
-                    onChange={(event) => updateJevField(key, event.target.value)}
-                    disabled={saving}
-                  />
-                </label>
-              ))}
-            </div>
-          </details>
-
-          <div className="ai-settings-jev-capability-heading">
-            <div><span className="ai-settings-jev-kicker">Future-run availability</span><h3>Advisory capabilities</h3></div>
-            <p>Enable only the capabilities operators should be able to start manually.</p>
-          </div>
-          <div className="ai-settings-jev-capability-grid">
-          <article className={`ai-settings-jev-capability ${formState.jev.duplicate_enabled ? "enabled" : ""}`}>
-            <div className="ai-settings-section-heading">
-              <div>
-                <h3>Suspected duplicate associations</h3>
-                <p>
-                  Jev may propose that two source listings describe the same vacancy.
-                  It never merges, hides, deletes, or rewrites either source Job.
-                </p>
-              </div>
-            </div>
-            <div className="ai-settings-form-grid">
-              <label className="ai-settings-field">
-                <span>Enable duplicate evaluation</span>
-                <input
-                  aria-label="Enable Jev duplicate evaluation"
-                  type="checkbox"
-                  checked={formState.jev.duplicate_enabled}
-                  onChange={(event) =>
-                    updateJevField("duplicate_enabled", event.target.checked)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              <label className="ai-settings-field">
-                <span>Candidate pairs per Job</span>
-                <input
-                  aria-label="Jev duplicate candidate limit"
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={formState.jev.duplicate_candidate_limit}
-                  onChange={(event) =>
-                    updateJevField("duplicate_candidate_limit", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              <label className="ai-settings-field">
-                <span>Recent Jobs scanned per evaluation</span>
-                <input
-                  aria-label="Jev duplicate corpus limit"
-                  type="number"
-                  min="2"
-                  max="1000"
-                  value={formState.jev.duplicate_corpus_limit}
-                  onChange={(event) =>
-                    updateJevField("duplicate_corpus_limit", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-            </div>
-          </article>
-
-          <article className={`ai-settings-jev-capability ${formState.jev.search_rerank_enabled ? "enabled" : ""}`}>
-            <div className="ai-settings-section-heading">
-              <div>
-                <h3>Search relevance reranking</h3>
-                <p>
-                  Jev may reorder only an explicitly previewed lexical candidate
-                  prefix. Filters, membership, totals, facets, paging, and CSV
-                  export remain bound to the frozen search scope.
-                </p>
-              </div>
-            </div>
-            <div className="ai-settings-form-grid">
-              <label className="ai-settings-field">
-                <span>Enable search reranking</span>
-                <input
-                  aria-label="Enable Jev search reranking"
-                  type="checkbox"
-                  checked={formState.jev.search_rerank_enabled}
-                  onChange={(event) =>
-                    updateJevField("search_rerank_enabled", event.target.checked)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              <label className="ai-settings-field">
-                <span>Maximum candidates per rerank</span>
-                <input
-                  aria-label="Jev search rerank candidate limit"
-                  type="number"
-                  min="1"
-                  max="50"
-                  value={formState.jev.search_rerank_candidate_limit}
-                  onChange={(event) =>
-                    updateJevField("search_rerank_candidate_limit", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-            </div>
-          </article>
-
-          <article className={`ai-settings-jev-capability ${formState.jev.incident_triage_enabled ? "enabled" : ""}`}>
-            <div className="ai-settings-section-heading">
-              <div>
-                <h3>Repeated incident triage</h3>
-                <p>
-                  Jev may prioritize secret-safe clusters of crawl events. Advice
-                  never changes severity, retries work, dismisses an incident, or
-                  writes Crawl Job lifecycle state.
-                </p>
-              </div>
-            </div>
-            <div className="ai-settings-form-grid">
-              <label className="ai-settings-field">
-                <span>Enable incident triage</span>
-                <input
-                  aria-label="Enable Jev incident triage"
-                  type="checkbox"
-                  checked={formState.jev.incident_triage_enabled}
-                  onChange={(event) =>
-                    updateJevField("incident_triage_enabled", event.target.checked)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              <label className="ai-settings-field">
-                <span>Maximum recent incident events</span>
-                <input
-                  aria-label="Jev incident triage event limit"
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={formState.jev.incident_triage_event_limit}
-                  onChange={(event) =>
-                    updateJevField("incident_triage_event_limit", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-            </div>
-          </article>
-
-          <article className={`ai-settings-jev-capability ${formState.jev.crawl_quality_enabled ? "enabled" : ""}`}>
-            <div className="ai-settings-section-heading">
-              <div>
-                <h3>Crawl content quality advisory</h3>
-                <p>
-                  Jev reviews structurally successful detail content only. It never
-                  retries, repairs, resumes, cancels, or changes a Crawl Job.
-                </p>
-              </div>
-            </div>
-            <div className="ai-settings-form-grid">
-              <label className="ai-settings-field">
-                <span>Enable crawl quality advisory</span>
-                <input
-                  aria-label="Enable Jev crawl quality advisory"
-                  type="checkbox"
-                  checked={formState.jev.crawl_quality_enabled}
-                  onChange={(event) =>
-                    updateJevField("crawl_quality_enabled", event.target.checked)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              <label className="ai-settings-field">
-                <span>Maximum listings per quality evaluation</span>
-                <input
-                  aria-label="Jev crawl quality batch limit"
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={formState.jev.crawl_quality_batch_limit}
-                  onChange={(event) =>
-                    updateJevField("crawl_quality_batch_limit", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-            </div>
-          </article>
-
-          <article className={`ai-settings-jev-capability ai-settings-jev-capability-wide ${formState.jev.maintenance_enabled ? "enabled" : ""}`}>
-            <div className="ai-settings-section-heading">
-              <div>
-                <h3>Skill taxonomy maintenance</h3>
-                <p>
-                  A stronger model periodically reviews accumulated exceptions.
-                  Existing mappings, aliases, generic terms and rejections may be
-                  applied automatically above the saved threshold. New Skills and
-                  hierarchy changes always wait for one aggregate approval.
-                </p>
-              </div>
-            </div>
-            <div className="ai-settings-form-grid">
-              <label className="ai-settings-field">
-                <span>Enable Skill maintenance</span>
-                <input
-                  aria-label="Enable Skill maintenance"
-                  type="checkbox"
-                  checked={formState.jev.maintenance_enabled}
-                  onChange={(event) =>
-                    updateJevField("maintenance_enabled", event.target.checked)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              <label className="ai-settings-field">
-                <span>Maintenance model</span>
-                <input
-                  aria-label="Jev maintenance model"
-                  value={formState.jev.maintenance_model}
-                  onChange={(event) =>
-                    updateJevField("maintenance_model", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-              {[
-                ["maintenance_interval_days", "Jev maintenance interval days", 1, 3650],
-                ["maintenance_min_candidates", "Jev maintenance minimum candidates", 1, 100000],
-                ["maintenance_batch_size", "Jev maintenance batch size", 1, 10000],
-              ].map(([key, label, min, max]) => (
-                <label className="ai-settings-field" key={key}>
-                  <span>{label}</span>
-                  <input
-                    aria-label={label}
-                    type="number"
-                    min={min}
-                    max={max}
-                    value={formState.jev[key]}
-                    onChange={(event) => updateJevField(key, event.target.value)}
-                    disabled={saving}
-                  />
-                </label>
-              ))}
-              <label className="ai-settings-field">
-                <span>Jev maintenance automatic threshold</span>
-                <input
-                  aria-label="Jev maintenance threshold"
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.001"
-                  value={formState.jev.maintenance_threshold}
-                  onChange={(event) =>
-                    updateJevField("maintenance_threshold", event.target.value)
-                  }
-                  disabled={saving}
-                />
-              </label>
-            </div>
-          </article>
-          </div>
-
-          <div className="ai-settings-jev-handoff">
-            <div className="ai-settings-section-heading">
-              <div>
-                <h3>Jev execution moved to one console</h3>
-                <p>
-                  Credentials, model, limits, and feature availability stay here.
-                  Preview, Start, Stop, Resume, retry, history, and smoke execution
-                  are manual actions in Jev Operations.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section id="settings-throughput" tabIndex={-1} className="ai-settings-panel glass-panel">
-          <div className="ai-settings-section-heading">
+       <section id="settings-throughput" tabIndex={-1} className="ai-settings-panel glass-panel">
+         <div className="ai-settings-section-heading">
             <div>
               <h2>AI Enrichment Throughput</h2>
               <p>
@@ -1747,47 +1168,6 @@ function AIRuntimeSettings({ profileFocus }) {
                     event.target.value,
                   )
                 }
-                disabled={saving}
-              />
-            </label>
-            <label className="ai-settings-field">
-              <span>Skill Candidate 进入待确认列表的门槛（不同 Job 数）</span>
-              <input
-                aria-label="Skill automatic creation threshold"
-                type="number"
-                min="1"
-                max="1000"
-                value={formState.skill_auto_create_distinct_job_threshold}
-                onChange={(event) =>
-                  updateTopLevelField(
-                    "skill_auto_create_distinct_job_threshold",
-                    event.target.value,
-                  )
-                }
-                disabled={saving}
-              />
-            </label>
-            <label className="ai-settings-field">
-              <span>Skill 推荐数量</span>
-              <input
-                aria-label="Skill recommendation count"
-                type="number"
-                min="1"
-                max="20"
-                value={formState.skill_candidate_recommendation_limit}
-                onChange={(event) => updateTopLevelField("skill_candidate_recommendation_limit", event.target.value)}
-                disabled={saving}
-              />
-            </label>
-            <label className="ai-settings-field">
-              <span>Job evidence 展示数量</span>
-              <input
-                aria-label="Skill evidence count"
-                type="number"
-                min="1"
-                max="20"
-                value={formState.skill_candidate_evidence_limit}
-                onChange={(event) => updateTopLevelField("skill_candidate_evidence_limit", event.target.value)}
                 disabled={saving}
               />
             </label>
@@ -1833,13 +1213,6 @@ function AIRuntimeSettings({ profileFocus }) {
             <p>
               AI Enrichment state: {getRuntimeStateLabel(jobRuntimeStatus)}.
               Companies state: {getRuntimeStateLabel(companyRuntimeStatus)}.
-            </p>
-            <p>
-              Candidate 会在至少{' '}
-              {String(
-                effectiveConfig.skill_auto_create_distinct_job_threshold ?? 10,
-              )}{' '}
-              个不同 Job 出现后进入待确认列表；推荐数量和 evidence 数量可在上方调整。
             </p>
             {isAnyDegraded ? (
               <p className="ai-settings-warning-copy">

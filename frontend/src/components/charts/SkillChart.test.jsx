@@ -8,12 +8,6 @@ const skillData = {
   processed_total: 100,
   matched_job_total: 72,
   match_coverage: 72,
-  candidate_backlog: {
-    unresolved_candidate_total: 12,
-    affected_job_total: 34,
-    ready_candidate_total: 3,
-    ready_threshold: 5,
-  },
   skills: [
     {
       code: "python",
@@ -87,8 +81,6 @@ describe("SkillChart", () => {
       screen.getByText("Canonical Skill Match Coverage"),
     ).toBeInTheDocument();
     expect(screen.getByText("72%")).toBeInTheDocument();
-    expect(screen.getByText("Unresolved Skill Candidates")).toBeInTheDocument();
-    expect(screen.getByText(/12/)).toBeInTheDocument();
     expect(screen.getByText("5 of 6 visible")).toBeInTheDocument();
     expect(screen.queryByText("Go")).not.toBeInTheDocument();
     expect(screen.getByText("40 Jobs · 40%")).toBeVisible();
@@ -175,31 +167,4 @@ describe("SkillChart", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it("only exposes a Classification action for threshold-ready Candidates", () => {
-    const { rerender } = render(
-      <SkillChart data={skillData} onOpenClassification={vi.fn()} />,
-    );
-
-    expect(
-      screen.getByRole("button", {
-        name: "Open Skill Classification for 3 ready Candidates",
-      }),
-    ).toBeInTheDocument();
-
-    rerender(
-      <SkillChart
-        data={{
-          ...skillData,
-          candidate_backlog: {
-            ...skillData.candidate_backlog,
-            ready_candidate_total: 0,
-          },
-        }}
-        onOpenClassification={vi.fn()}
-      />,
-    );
-    expect(
-      screen.queryByRole("button", { name: /Open Skill Classification/ }),
-    ).not.toBeInTheDocument();
-  });
 });

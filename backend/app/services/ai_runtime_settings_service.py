@@ -20,15 +20,6 @@ from app.services.ai_provider_catalog import CUSTOM_API_FORMAT_OPTIONS
 from app.utils.time import utc_now
 
 RUNTIME_SCOPES = ("jobs", "companies")
-SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT = 10
-SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN = 1
-SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX = 1000
-SKILL_CANDIDATE_RECOMMENDATION_LIMIT_DEFAULT = 5
-SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MIN = 1
-SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MAX = 20
-SKILL_CANDIDATE_EVIDENCE_LIMIT_DEFAULT = 5
-SKILL_CANDIDATE_EVIDENCE_LIMIT_MIN = 1
-SKILL_CANDIDATE_EVIDENCE_LIMIT_MAX = 20
 PROFILE_TEST_STATUSES = ("untested", "passed", "failed")
 CUSTOM_API_FORMAT_VALUES = {
     str(option["value"]) for option in CUSTOM_API_FORMAT_OPTIONS
@@ -52,7 +43,12 @@ URL_FIELD_NAMES = {
 PROVIDER_REQUIRED_FIELDS = {
     "anthropic": ("anthropic_api_key", "anthropic_model"),
     "claude": ("anthropic_api_key", "anthropic_model"),
-    "custom": ("custom_api_key", "custom_model", "custom_base_url", "custom_api_format"),
+    "custom": (
+        "custom_api_key",
+        "custom_model",
+        "custom_base_url",
+        "custom_api_format",
+    ),
     "gemini": ("gemini_api_key", "gemini_model"),
     "zhipu": ("zhipu_api_key",),
     "mock": tuple(),
@@ -62,9 +58,6 @@ PERSISTED_FIELD_NAMES = (
     "company_llm_provider",
     "ai_enrichment_run_concurrency",
     "company_ai_enrichment_run_concurrency",
-    "skill_auto_create_distinct_job_threshold",
-    "skill_candidate_recommendation_limit",
-    "skill_candidate_evidence_limit",
     "anthropic_api_key",
     "anthropic_model",
     "anthropic_base_url",
@@ -239,7 +232,11 @@ class AIRuntimeSettingsService:
         self.db = db
 
     def get_or_create(self) -> AppRuntimeSettings:
-        row = self.db.query(AppRuntimeSettings).filter(AppRuntimeSettings.id == 1).one_or_none()
+        row = (
+            self.db.query(AppRuntimeSettings)
+            .filter(AppRuntimeSettings.id == 1)
+            .one_or_none()
+        )
         if row is None:
             row = AppRuntimeSettings(id=1)
             self.db.add(row)
@@ -281,12 +278,16 @@ class AIRuntimeSettingsService:
         values = self._row_values(row)
         effective = self._build_effective_settings(values, scope)
         test_fields = PROFILE_TEST_FIELD_MAP[scope]
-        configured_provider = (effective.llm_provider or None)
+        configured_provider = effective.llm_provider or None
         config_fingerprint = self.build_config_fingerprint(scope, values)
         last_status = values.get(test_fields["status"]) or "untested"
         last_successful = values.get(test_fields["success_fingerprint"])
-        requires_test = bool(configured_provider) and config_fingerprint != last_successful
-        is_ready = bool(configured_provider) and not requires_test and last_status == "passed"
+        requires_test = (
+            bool(configured_provider) and config_fingerprint != last_successful
+        )
+        is_ready = (
+            bool(configured_provider) and not requires_test and last_status == "passed"
+        )
         tested_at = values.get(test_fields["tested_at"])
         web_search_status = "not_applicable"
         web_search_tested_at = None
@@ -294,16 +295,14 @@ class AIRuntimeSettingsService:
         web_search_latency_ms = None
         web_search_fingerprint = None
         web_search_available = False
-        web_search_reason: Optional[str] = (
-            "Web Search is available only for Company Enrichment."
-        )
+        web_search_reason: Optional[
+            str
+        ] = "Web Search is available only for Company Enrichment."
         if scope == "companies":
             web_search_status = (
                 values.get("companies_web_search_last_test_status") or "untested"
             )
-            raw_web_search_tested_at = values.get(
-                "companies_web_search_last_tested_at"
-            )
+            raw_web_search_tested_at = values.get("companies_web_search_last_tested_at")
             web_search_tested_at = (
                 raw_web_search_tested_at.isoformat()
                 if raw_web_search_tested_at
@@ -317,13 +316,10 @@ class AIRuntimeSettingsService:
                 "companies_web_search_last_test_fingerprint"
             )
             fingerprint_matches = bool(
-                config_fingerprint
-                and web_search_fingerprint == config_fingerprint
+                config_fingerprint and web_search_fingerprint == config_fingerprint
             )
             web_search_available = bool(
-                is_ready
-                and web_search_status == "passed"
-                and fingerprint_matches
+                is_ready and web_search_status == "passed" and fingerprint_matches
             )
             if web_search_available:
                 web_search_reason = None
@@ -342,7 +338,9 @@ class AIRuntimeSettingsService:
             scope=scope,
             configured_provider=configured_provider,
             config_fingerprint=config_fingerprint,
-            last_test_status=last_status if last_status in PROFILE_TEST_STATUSES else "untested",
+            last_test_status=last_status
+            if last_status in PROFILE_TEST_STATUSES
+            else "untested",
             last_tested_at=tested_at.isoformat() if tested_at else None,
             last_test_error=values.get(test_fields["error"]),
             last_test_provider=values.get(test_fields["provider"]),
@@ -365,7 +363,11 @@ class AIRuntimeSettingsService:
         effective = self.get_effective_settings(scope)
         metadata = self.get_profile_runtime_metadata(scope)
         if not metadata.configured_provider:
-            raise ProfileRuntimeNotReadyError(scope, f"{scope} profile is not configured", code="profile_not_configured")
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                f"{scope} profile is not configured",
+                code="profile_not_configured",
+            )
         if metadata.requires_test:
             raise ProfileRuntimeNotReadyError(
                 scope,
@@ -389,7 +391,11 @@ class AIRuntimeSettingsService:
         provider = (effective.llm_provider or "").strip().lower()
         spec = PROVIDER_REGISTRY.get(provider)
         if spec is None:
-            raise LLMProfileNotReadyError(scope, f"Unsupported LLM provider: {provider}", code="unsupported_provider")
+            raise LLMProfileNotReadyError(
+                scope,
+                f"Unsupported LLM provider: {provider}",
+                code="unsupported_provider",
+            )
         missing = [
             field_name
             for field_name in PROVIDER_REQUIRED_FIELDS.get(provider, tuple())
@@ -467,15 +473,8 @@ class AIRuntimeSettingsService:
             "llm_provider": values["llm_provider"],
             "company_llm_provider": values["company_llm_provider"],
             "ai_enrichment_run_concurrency": values["ai_enrichment_run_concurrency"],
-            "company_ai_enrichment_run_concurrency": values["company_ai_enrichment_run_concurrency"],
-            "skill_auto_create_distinct_job_threshold": values[
-                "skill_auto_create_distinct_job_threshold"
-            ],
-            "skill_candidate_recommendation_limit": values[
-                "skill_candidate_recommendation_limit"
-            ],
-            "skill_candidate_evidence_limit": values[
-                "skill_candidate_evidence_limit"
+            "company_ai_enrichment_run_concurrency": values[
+                "company_ai_enrichment_run_concurrency"
             ],
             "anthropic": {
                 "model": values["anthropic_model"],
@@ -501,7 +500,9 @@ class AIRuntimeSettingsService:
             },
             "company_anthropic": {
                 "has_api_key": bool(values["company_anthropic_api_key"]),
-                "api_key_preview": self._mask_secret(values["company_anthropic_api_key"]),
+                "api_key_preview": self._mask_secret(
+                    values["company_anthropic_api_key"]
+                ),
                 "model": values["company_anthropic_model"],
                 "base_url": values["company_anthropic_base_url"],
             },
@@ -530,12 +531,9 @@ class AIRuntimeSettingsService:
             "llm_provider": job_effective.llm_provider,
             "company_llm_provider": company_effective.llm_provider,
             "ai_enrichment_run_concurrency": self.get_effective_concurrency("jobs"),
-            "company_ai_enrichment_run_concurrency": self.get_effective_concurrency("companies"),
-            "skill_auto_create_distinct_job_threshold": (
-                self.get_skill_auto_create_distinct_job_threshold()
+            "company_ai_enrichment_run_concurrency": self.get_effective_concurrency(
+                "companies"
             ),
-            "skill_candidate_recommendation_limit": self.get_skill_candidate_recommendation_limit(),
-            "skill_candidate_evidence_limit": self.get_skill_candidate_evidence_limit(),
             "anthropic": {
                 "model": job_effective.anthropic_model,
                 "base_url": job_effective.anthropic_base_url,
@@ -556,7 +554,9 @@ class AIRuntimeSettingsService:
             },
             "company_anthropic": {
                 "has_api_key": bool(company_effective.anthropic_api_key),
-                "api_key_preview": self._mask_secret(company_effective.anthropic_api_key),
+                "api_key_preview": self._mask_secret(
+                    company_effective.anthropic_api_key
+                ),
                 "model": company_effective.anthropic_model,
                 "base_url": company_effective.anthropic_base_url,
             },
@@ -584,7 +584,9 @@ class AIRuntimeSettingsService:
         if scope == "companies":
             candidate = getattr(row, "company_ai_enrichment_run_concurrency", None)
             if candidate is None:
-                candidate = getattr(settings, "company_ai_enrichment_run_concurrency", None)
+                candidate = getattr(
+                    settings, "company_ai_enrichment_run_concurrency", None
+                )
             if candidate is None:
                 candidate = getattr(row, "ai_enrichment_run_concurrency", None)
             if candidate is None:
@@ -597,50 +599,14 @@ class AIRuntimeSettingsService:
             value = int(candidate if candidate is not None else 0)
         except (TypeError, ValueError):
             value = AI_ENRICHMENT_RUN_CONCURRENCY_MIN
-        return max(AI_ENRICHMENT_RUN_CONCURRENCY_MIN, min(value, AI_ENRICHMENT_RUN_CONCURRENCY_MAX))
-
-    def get_skill_auto_create_distinct_job_threshold(self) -> int:
-        row = self.db.get(AppRuntimeSettings, 1)
-        if row is None:
-            return SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT
-        candidate = getattr(row, "skill_auto_create_distinct_job_threshold", None)
-        if candidate is None:
-            return SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT
-        try:
-            value = int(candidate)
-        except (TypeError, ValueError):
-            return SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_DEFAULT
         return max(
-            SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN,
-            min(value, SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX),
+            AI_ENRICHMENT_RUN_CONCURRENCY_MIN,
+            min(value, AI_ENRICHMENT_RUN_CONCURRENCY_MAX),
         )
 
-    def _get_bounded_skill_setting(self, field_name: str, default: int, minimum: int, maximum: int) -> int:
-        row = self.db.get(AppRuntimeSettings, 1)
-        candidate = getattr(row, field_name, None) if row is not None else None
-        try:
-            value = int(candidate if candidate is not None else default)
-        except (TypeError, ValueError):
-            value = default
-        return max(minimum, min(value, maximum))
-
-    def get_skill_candidate_recommendation_limit(self) -> int:
-        return self._get_bounded_skill_setting(
-            "skill_candidate_recommendation_limit",
-            SKILL_CANDIDATE_RECOMMENDATION_LIMIT_DEFAULT,
-            SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MIN,
-            SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MAX,
-        )
-
-    def get_skill_candidate_evidence_limit(self) -> int:
-        return self._get_bounded_skill_setting(
-            "skill_candidate_evidence_limit",
-            SKILL_CANDIDATE_EVIDENCE_LIMIT_DEFAULT,
-            SKILL_CANDIDATE_EVIDENCE_LIMIT_MIN,
-            SKILL_CANDIDATE_EVIDENCE_LIMIT_MAX,
-        )
-
-    def build_config_fingerprint(self, scope: str, values: dict[str, Any]) -> Optional[str]:
+    def build_config_fingerprint(
+        self, scope: str, values: dict[str, Any]
+    ) -> Optional[str]:
         self._ensure_valid_scope(scope)
         effective = self._build_effective_settings(values, scope)
         provider = (effective.llm_provider or "").strip().lower()
@@ -650,21 +616,35 @@ class AIRuntimeSettingsService:
         payload = {
             "scope": scope,
             "llm_provider": provider,
-            "anthropic_api_key": self._normalize_secret_value(effective.anthropic_api_key),
-            "anthropic_model": self._normalize_optional_string(effective.anthropic_model),
-            "anthropic_base_url": self._normalize_optional_string(effective.anthropic_base_url),
+            "anthropic_api_key": self._normalize_secret_value(
+                effective.anthropic_api_key
+            ),
+            "anthropic_model": self._normalize_optional_string(
+                effective.anthropic_model
+            ),
+            "anthropic_base_url": self._normalize_optional_string(
+                effective.anthropic_base_url
+            ),
             "gemini_api_key": self._normalize_secret_value(effective.gemini_api_key),
             "gemini_model": self._normalize_optional_string(effective.gemini_model),
             "custom_api_key": self._normalize_secret_value(effective.custom_api_key),
             "custom_model": self._normalize_optional_string(effective.custom_model),
-            "custom_base_url": self._normalize_optional_string(effective.custom_base_url),
-            "custom_api_format": self._normalize_optional_string(effective.custom_api_format),
+            "custom_base_url": self._normalize_optional_string(
+                effective.custom_base_url
+            ),
+            "custom_api_format": self._normalize_optional_string(
+                effective.custom_api_format
+            ),
             "zhipu_api_key": self._normalize_secret_value(effective.zhipu_api_key),
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
         return f"{scope}:{hashlib.sha256(encoded).hexdigest()}"
 
-    def draft_profile_values_from_payload(self, scope: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def draft_profile_values_from_payload(
+        self, scope: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         self._ensure_valid_scope(scope)
         row = self.get_or_create()
         candidate = self._row_values(row)
@@ -679,11 +659,15 @@ class AIRuntimeSettingsService:
             if effective_field_name not in payload:
                 continue
             if persisted_field_name in SECRET_FIELD_NAMES:
-                normalized_secret = self._normalize_secret_update(payload.get(effective_field_name))
+                normalized_secret = self._normalize_secret_update(
+                    payload.get(effective_field_name)
+                )
                 if normalized_secret is not None:
                     candidate[persisted_field_name] = normalized_secret
                 continue
-            candidate[persisted_field_name] = self._normalize_optional_string(payload.get(effective_field_name))
+            candidate[persisted_field_name] = self._normalize_optional_string(
+                payload.get(effective_field_name)
+            )
 
         return candidate
 
@@ -708,14 +692,15 @@ class AIRuntimeSettingsService:
             if field_name in {
                 "ai_enrichment_run_concurrency",
                 "company_ai_enrichment_run_concurrency",
-                "skill_auto_create_distinct_job_threshold",
-                "skill_candidate_recommendation_limit",
-                "skill_candidate_evidence_limit",
             }:
                 candidate[field_name] = value
                 continue
 
-            candidate[field_name] = value if field_name.endswith("_tested_at") else self._normalize_optional_string(value)
+            candidate[field_name] = (
+                value
+                if field_name.endswith("_tested_at")
+                else self._normalize_optional_string(value)
+            )
 
         return candidate
 
@@ -723,14 +708,20 @@ class AIRuntimeSettingsService:
         errors: list[dict[str, Any]] = []
 
         concurrency_specs = (
-            ("ai_enrichment_run_concurrency", getattr(settings, "ai_enrichment_run_concurrency", None)),
+            (
+                "ai_enrichment_run_concurrency",
+                getattr(settings, "ai_enrichment_run_concurrency", None),
+            ),
             (
                 "company_ai_enrichment_run_concurrency",
                 (
                     candidate.get("ai_enrichment_run_concurrency")
                     if candidate.get("ai_enrichment_run_concurrency") is not None
-                    else getattr(settings, "company_ai_enrichment_run_concurrency", None)
-                    if getattr(settings, "company_ai_enrichment_run_concurrency", None) is not None
+                    else getattr(
+                        settings, "company_ai_enrichment_run_concurrency", None
+                    )
+                    if getattr(settings, "company_ai_enrichment_run_concurrency", None)
+                    is not None
                     else getattr(settings, "ai_enrichment_run_concurrency", None)
                 ),
             ),
@@ -762,49 +753,10 @@ class AIRuntimeSettingsService:
                     }
                 )
 
-        raw_threshold = candidate.get("skill_auto_create_distinct_job_threshold")
-        if raw_threshold is not None:
-            try:
-                threshold = int(raw_threshold)
-            except (TypeError, ValueError):
-                threshold = None
-            if (
-                threshold is None
-                or threshold < SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN
-                or threshold > SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX
-            ):
-                errors.append(
-                    {
-                        "loc": ["skill_auto_create_distinct_job_threshold"],
-                        "msg": (
-                            "Skill threshold must be between "
-                            f"{SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MIN} and "
-                            f"{SKILL_AUTO_CREATE_DISTINCT_JOB_THRESHOLD_MAX}"
-                        ),
-                        "type": "value_error.skill_threshold",
-                    }
-                )
-
-        for field_name, label, minimum, maximum in (
-            ("skill_candidate_recommendation_limit", "Recommendation count", SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MIN, SKILL_CANDIDATE_RECOMMENDATION_LIMIT_MAX),
-            ("skill_candidate_evidence_limit", "Evidence count", SKILL_CANDIDATE_EVIDENCE_LIMIT_MIN, SKILL_CANDIDATE_EVIDENCE_LIMIT_MAX),
-        ):
-            raw_value = candidate.get(field_name)
-            if raw_value is None:
-                continue
-            try:
-                value = int(raw_value)
-            except (TypeError, ValueError):
-                value = None
-            if value is None or value < minimum or value > maximum:
-                errors.append({
-                    "loc": [field_name],
-                    "msg": f"{label} must be between {minimum} and {maximum}",
-                    "type": "value_error.skill_candidate_setting",
-                })
-
         for field_name in URL_FIELD_NAMES:
-            if candidate.get(field_name) and not self._is_valid_url(candidate[field_name]):
+            if candidate.get(field_name) and not self._is_valid_url(
+                candidate[field_name]
+            ):
                 errors.append(
                     {
                         "loc": [field_name],
@@ -819,7 +771,9 @@ class AIRuntimeSettingsService:
         if errors:
             raise RuntimeSettingsValidationError(errors)
 
-    def _validate_profile(self, candidate: dict[str, Any], scope: str) -> list[dict[str, Any]]:
+    def _validate_profile(
+        self, candidate: dict[str, Any], scope: str
+    ) -> list[dict[str, Any]]:
         effective = self._build_effective_settings(candidate, scope)
         provider = (effective.llm_provider or "").strip().lower()
         provider_field = "llm_provider" if scope == "jobs" else "company_llm_provider"
@@ -855,9 +809,7 @@ class AIRuntimeSettingsService:
         ):
             errors.append(
                 {
-                    "loc": [
-                        self._validation_loc_for_field(scope, "custom_api_format")
-                    ],
+                    "loc": [self._validation_loc_for_field(scope, "custom_api_format")],
                     "msg": (
                         "Unsupported custom API format "
                         f"'{effective.custom_api_format}'"
@@ -875,27 +827,55 @@ class AIRuntimeSettingsService:
     ) -> EffectiveAIRuntimeSettings:
         self._ensure_valid_scope(scope)
         field_map = PROFILE_FIELD_NAME_MAP[scope]
-        provider = self._normalize_optional_string(persisted_values.get(field_map["llm_provider"]))
+        provider = self._normalize_optional_string(
+            persisted_values.get(field_map["llm_provider"])
+        )
 
         return EffectiveAIRuntimeSettings(
             llm_provider=(provider.lower() if provider else None),
             ai_enrichment_run_concurrency=self.get_effective_concurrency(scope),
-            anthropic_api_key=self._normalize_optional_string(persisted_values.get(field_map["anthropic_api_key"])),
-            anthropic_model=self._normalize_optional_string(persisted_values.get(field_map["anthropic_model"])),
-            anthropic_base_url=self._normalize_optional_string(persisted_values.get(field_map["anthropic_base_url"])),
-            gemini_api_key=self._normalize_optional_string(persisted_values.get(field_map["gemini_api_key"])),
-            gemini_model=self._normalize_optional_string(persisted_values.get(field_map["gemini_model"])),
-            custom_api_key=self._normalize_optional_string(persisted_values.get(field_map["custom_api_key"])),
-            custom_model=self._normalize_optional_string(persisted_values.get(field_map["custom_model"])),
-            custom_base_url=self._normalize_optional_string(persisted_values.get(field_map["custom_base_url"])),
-            custom_api_format=self._normalize_optional_string(persisted_values.get(field_map["custom_api_format"])),
-            zhipu_api_key=self._normalize_optional_string(persisted_values.get(field_map["zhipu_api_key"])),
+            anthropic_api_key=self._normalize_optional_string(
+                persisted_values.get(field_map["anthropic_api_key"])
+            ),
+            anthropic_model=self._normalize_optional_string(
+                persisted_values.get(field_map["anthropic_model"])
+            ),
+            anthropic_base_url=self._normalize_optional_string(
+                persisted_values.get(field_map["anthropic_base_url"])
+            ),
+            gemini_api_key=self._normalize_optional_string(
+                persisted_values.get(field_map["gemini_api_key"])
+            ),
+            gemini_model=self._normalize_optional_string(
+                persisted_values.get(field_map["gemini_model"])
+            ),
+            custom_api_key=self._normalize_optional_string(
+                persisted_values.get(field_map["custom_api_key"])
+            ),
+            custom_model=self._normalize_optional_string(
+                persisted_values.get(field_map["custom_model"])
+            ),
+            custom_base_url=self._normalize_optional_string(
+                persisted_values.get(field_map["custom_base_url"])
+            ),
+            custom_api_format=self._normalize_optional_string(
+                persisted_values.get(field_map["custom_api_format"])
+            ),
+            zhipu_api_key=self._normalize_optional_string(
+                persisted_values.get(field_map["zhipu_api_key"])
+            ),
         )
 
-    def _validate_effective_settings(self, scope: str, effective: EffectiveAIRuntimeSettings) -> None:
+    def _validate_effective_settings(
+        self, scope: str, effective: EffectiveAIRuntimeSettings
+    ) -> None:
         provider = (effective.llm_provider or "").strip().lower()
         if not provider:
-            raise ProfileRuntimeNotReadyError(scope, f"{scope} profile is not configured", code="profile_not_configured")
+            raise ProfileRuntimeNotReadyError(
+                scope,
+                f"{scope} profile is not configured",
+                code="profile_not_configured",
+            )
         if provider not in SUPPORTED_LLM_PROVIDERS:
             raise ProfileRuntimeNotReadyError(
                 scope,
@@ -937,7 +917,9 @@ class AIRuntimeSettingsService:
 
     @staticmethod
     def _row_values(row: AppRuntimeSettings) -> dict[str, Any]:
-        return {field_name: getattr(row, field_name) for field_name in PERSISTED_FIELD_NAMES}
+        return {
+            field_name: getattr(row, field_name) for field_name in PERSISTED_FIELD_NAMES
+        }
 
     @staticmethod
     def _normalize_secret_update(value: Any) -> Optional[str]:

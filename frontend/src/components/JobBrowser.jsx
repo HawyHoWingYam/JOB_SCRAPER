@@ -976,21 +976,6 @@ function JobBrowser({
                         />
                     </>
                 ) : null}
-                <section
-                    className="scope-trail glass-panel"
-                    aria-label="Jev search relevance advisory"
-                >
-                    <div className="scope-trail-header">
-                        <div>
-                            <h3>Jev search relevance</h3>
-                            <p>
-                                Preview and manually evaluate the latest applied lexical
-                                scope from the unified Jev console.
-                            </p>
-                        </div>
-                        <a href="#jev" className="scope-remove-btn">Open Jev Operations</a>
-                    </div>
-                </section>
             </div>
 
             </div>

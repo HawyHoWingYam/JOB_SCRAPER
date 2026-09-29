@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,7 +25,6 @@ function createJobPayload(overrides = {}) {
     salary_range: 'HK$40k - HK$60k',
     employment_type: 'Full-time',
     skills: ['Python', 'FastAPI'],
-    skill_candidate_mentions: [],
     ai_summary: 'Builds internal platform services and backend APIs.',
     ai_enriched_at: '2026-04-15T12:34:56Z',
     source_classification_name: 'Information & Communication Technology',
@@ -82,7 +81,6 @@ function createSkillState(overrides = {}) {
   return {
     ...productFixture.job_detail.skill_state,
     skills: [],
-    candidate_mentions: [],
     ...overrides,
   };
 }
@@ -147,7 +145,9 @@ describe('JobDetailModal', () => {
 
   it('traps keyboard focus, closes with Escape, and restores the opener focus', async () => {
     const user = userEvent.setup();
-    globalThis.fetch = vi.fn(() => mockJsonResponse(createJobPayload()));
+    globalThis.fetch = vi.fn(() => mockJsonResponse(createJobPayload({
+      original_job_url: 'https://example.com/jobs/platform-engineer-123',
+    })));
 
     function JobDetailHarness() {
       const [open, setOpen] = useState(false);
@@ -170,7 +170,7 @@ describe('JobDetailModal', () => {
     await user.click(opener);
 
     const closeButton = screen.getByRole('button', { name: 'Close job details' });
-    const lastAction = await screen.findByRole('link', { name: /process in jev operations/i });
+    const lastAction = await screen.findByRole('link', { name: /original job post/i });
     lastAction.focus();
     await user.tab();
     expect(closeButton).toHaveFocus();
@@ -283,7 +283,7 @@ describe('JobDetailModal', () => {
 
     expect(screen.queryByText('Legacy evidence only')).not.toBeInTheDocument();
     expect(screen.queryByText('Legacy / AI / Category')).not.toBeInTheDocument();
-    expect(screen.getByText('Rust')).toBeInTheDocument();
+    expect(screen.queryByText('Rust')).not.toBeInTheDocument();
   });
 
   it('shows explicit unenriched ai states when enrichment has not run yet', async () => {
@@ -291,7 +291,6 @@ describe('JobDetailModal', () => {
       createJobPayload({
         ai_enriched_at: null,
         skills: [],
-        skill_candidate_mentions: [],
         skill_state: createSkillState(),
         ai_summary: null,
         experience_level: null,
@@ -309,7 +308,6 @@ describe('JobDetailModal', () => {
     renderModalWithPayload(
       createJobPayload({
         skills: [],
-        skill_candidate_mentions: [],
         skill_state: createSkillState(),
         ai_summary: null,
         experience_level: 'not_specified',
@@ -322,135 +320,6 @@ describe('JobDetailModal', () => {
     expect(screen.getByText('No AI summary extracted from this posting')).toBeInTheDocument();
     expect(screen.getByText('Not specified')).toBeInTheDocument();
     expect(screen.getByText('The posting does not specify experience')).toBeInTheDocument();
-  });
-
-  it('renders Skill Candidate evidence without exposing a manual review queue', async () => {
-    renderModalWithPayload(
-      createJobPayload({
-        skills: [],
-        skill_candidate_mentions: [],
-        skill_state: createSkillState({
-          candidate_mentions: [
-            {
-              id: '60000000-0000-0000-0000-000000000001',
-              raw_name: 'Rust',
-              normalized_key: 'rust',
-              candidate_id: '70000000-0000-0000-0000-000000000001',
-              source: 'ai-extraction',
-              confidence: 0.82,
-              provenance: { run_id: 'fixture-run' },
-            },
-          ],
-        }),
-      }),
-    );
-
-    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /skill candidate evidence/i })).toBeInTheDocument();
-    expect(screen.getByText('Rust')).toBeInTheDocument();
-    expect(screen.getByText(/automatic Skill processing/i)).toBeInTheDocument();
-    expect(screen.getByText('No governed skills matched yet')).toBeInTheDocument();
-  });
-
-  it('shows the latest secret-safe Jev Skill receipt in Job Detail', async () => {
-    renderModalWithPayload(
-      createJobPayload({
-        jev_skill_classification: {
-          classification_id: 'classification-1',
-          run_id: 'run-1',
-          status: 'answered',
-          error_code: null,
-          model: 'typesafe/jev-1.13',
-          request_id: 'request-1',
-          cost_usd: 0.00005,
-          completed_at: '2026-09-23T12:00:00Z',
-        },
-      }),
-    );
-
-    const receipt = await screen.findByLabelText('Latest Jev Skill classification');
-    expect(within(receipt).getByText('answered')).toBeInTheDocument();
-    expect(within(receipt).getByText('typesafe/jev-1.13')).toBeInTheDocument();
-    expect(within(receipt).getByText('request-1')).toBeInTheDocument();
-    expect(within(receipt).getByText('USD 0.00005')).toBeInTheDocument();
-  });
-
-  it('shows the latest durable state for every Jev operation in Job Detail', async () => {
-    renderModalWithPayload(
-      createJobPayload({
-        jev_operations: [
-          {
-            operation: 'skills',
-            status: 'completed',
-            eligibility_reason: 'eligible',
-            batch_id: 'batch-skills-complete',
-            batch_status: 'completed',
-            error_code: null,
-            error_message: null,
-            updated_at: '2026-09-24T12:34:00Z',
-          },
-          {
-            operation: 'duplicate',
-            status: 'skipped',
-            eligibility_reason: 'successful_unchanged',
-            batch_id: 'batch-duplicate-skipped',
-            batch_status: 'completed',
-            error_code: null,
-            error_message: null,
-            updated_at: '2026-09-24T12:35:00Z',
-          },
-          {
-            operation: 'related_jobs',
-            status: 'failed',
-            eligibility_reason: 'eligible',
-            batch_id: 'batch-related-failed',
-            batch_status: 'completed_with_errors',
-            error_code: 'provider_timeout',
-            error_message: 'Jev provider timed out.',
-            updated_at: '2026-09-24T12:36:00Z',
-          },
-        ],
-      }),
-    );
-
-    const heading = await screen.findByRole('heading', {
-      name: 'Jev processing',
-    });
-    const summary = heading.closest('section');
-    expect(summary).not.toBeNull();
-    expect(within(summary).getByText('Skills correction')).toBeInTheDocument();
-    expect(
-      within(summary).getByText('Possible same vacancy'),
-    ).toBeInTheDocument();
-    expect(within(summary).getByText('Related Jobs')).toBeInTheDocument();
-    expect(within(summary).getByText('Completed')).toBeInTheDocument();
-    expect(
-      within(summary).getByText('Skipped — unchanged'),
-    ).toBeInTheDocument();
-    expect(within(summary).getByText('Failed')).toBeInTheDocument();
-    expect(
-      within(summary).getByText('batch-skills-complete'),
-    ).toBeInTheDocument();
-    expect(within(summary).getByText('Provider Timeout')).toBeInTheDocument();
-    expect(
-      within(summary).getByText('Jev provider timed out.'),
-    ).toBeInTheDocument();
-  });
-
-  it('makes it explicit when a Job has no durable Jev operation history', async () => {
-    renderModalWithPayload(createJobPayload({ jev_operations: [] }));
-
-    const heading = await screen.findByRole('heading', {
-      name: 'Jev processing',
-    });
-    const summary = heading.closest('section');
-    expect(summary).not.toBeNull();
-    expect(within(summary).getAllByText('Not processed')).toHaveLength(3);
-    expect(
-      within(summary).getAllByText(
-        'No durable Jev batch item has been recorded.',
-      ),
-    ).toHaveLength(3);
   });
 
   it('prefers a normalized numeric experience label over free-text summary text', async () => {
@@ -522,76 +391,6 @@ describe('JobDetailModal', () => {
     expect(relatedJobCard).toHaveTextContent('Permanent');
     expect(relatedJobCard).not.toHaveTextContent('Legacy Contract');
     expect(relatedJobCard).not.toHaveTextContent('Legacy / AI / Category');
-  });
-
-  it('renders a source-preserving Jev duplicate proposal and confirms it', async () => {
-    const user = userEvent.setup();
-    const proposal = {
-      id: 'association-1',
-      status: 'proposed',
-      confidence: 0.97,
-      other_job: {
-        id: 'job-2',
-        source_site: 'ctgoodjobs',
-        source_job_id: '202',
-        title: 'Backend Engineer',
-        company_name: 'Acme Health',
-        location: 'Hong Kong',
-      },
-    };
-    const reviewRequests = [];
-    globalThis.fetch = vi.fn((input, init = {}) => {
-      const url = new URL(String(input), 'http://localhost');
-      if (url.pathname === '/api/jobs/job-1') return mockJsonResponse(createJobPayload());
-      if (url.pathname === '/api/jobs/job-1/similar') {
-        return mockJsonResponse({ recommendations: [] });
-      }
-      if (url.pathname === '/api/jobs/job-1/duplicate-associations') {
-        return mockJsonResponse({ associations: [proposal] });
-      }
-      if (url.pathname.endsWith('/association-1/review')) {
-        reviewRequests.push({ init, body: JSON.parse(init.body) });
-        return mockJsonResponse({ ...proposal, status: 'confirmed' });
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
-    });
-
-    render(
-      <JobDetailModal jobId="job-1" apiUrl="http://localhost:8000" onClose={vi.fn()} />,
-    );
-
-    expect(await screen.findByText('ctgoodjobs:202')).toBeInTheDocument();
-    expect(screen.getByText('Jev proposal — pending review')).toBeInTheDocument();
-    expect(screen.getByText(/No Job is merged, hidden, or deleted/i)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Confirm association' }));
-
-    expect(await screen.findByText('Confirmed same vacancy')).toBeInTheDocument();
-    expect(screen.getByText(/both source Jobs remain available/i)).toBeInTheDocument();
-    expect(reviewRequests).toHaveLength(1);
-    expect(reviewRequests[0].body).toEqual({ action: 'confirm' });
-    expect(reviewRequests[0].init.headers['Idempotency-Key']).toBeTruthy();
-  });
-
-  it('keeps Job Detail usable when Jev duplicate associations are unavailable', async () => {
-    globalThis.fetch = vi.fn((input) => {
-      const url = new URL(String(input), 'http://localhost');
-      if (url.pathname === '/api/jobs/job-1') return mockJsonResponse(createJobPayload());
-      if (url.pathname === '/api/jobs/job-1/similar') {
-        return mockJsonResponse({ recommendations: [] });
-      }
-      if (url.pathname === '/api/jobs/job-1/duplicate-associations') {
-        return Promise.resolve({ ok: false, json: async () => ({}) });
-      }
-      return Promise.reject(new Error(`Unhandled fetch: ${url.pathname}`));
-    });
-
-    render(
-      <JobDetailModal jobId="job-1" apiUrl="http://localhost:8000" onClose={vi.fn()} />,
-    );
-
-    expect(await screen.findByRole('heading', { name: /senior platform engineer/i })).toBeInTheDocument();
-    expect(await screen.findByText(/Duplicate associations are unavailable right now/i)).toBeInTheDocument();
-    expect(screen.getByText('Build APIs')).toBeInTheDocument();
   });
 
   it('does not invent a 0 percent related-job score when the recommendation score is missing', async () => {

@@ -229,34 +229,6 @@ class JobSchema(JobCreateSchema):
     employment_types: list[EmploymentTypeSchema] = Field(default_factory=list)
 
 
-class JevSkillClassificationReceiptSchema(BaseModel):
-    """Secret-safe latest Jev Skill classification shown on Job Detail."""
-
-    classification_id: str
-    run_id: Optional[str] = None
-    status: Literal["pending", "running", "answered", "unavailable", "invalid"]
-    error_code: Optional[str] = None
-    model: Optional[str] = None
-    request_id: Optional[str] = None
-    cost_usd: Optional[float] = Field(default=None, ge=0)
-    completed_at: Optional[datetime] = None
-
-
-class JevOperationStateSchema(BaseModel):
-    """Latest durable Jev operation state for one Job Detail operation."""
-
-    operation: Literal["skills", "duplicate", "related_jobs"]
-    status: Literal[
-        "pending", "running", "completed", "failed", "skipped", "stopped"
-    ]
-    eligibility_reason: str
-    batch_id: str
-    batch_status: str
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    updated_at: datetime
-
-
 class JobDetailSchema(JobSchema):
     """Expanded schema for the job detail view."""
 
@@ -281,13 +253,10 @@ class JobDetailSchema(JobSchema):
     expiry_date: Optional[str] = None
     is_expired: Optional[bool] = None
     skills: list[str] = Field(default_factory=list)
-    skill_candidate_mentions: list[dict[str, Any]] = Field(default_factory=list)
     source_employment_labels: list[SourceEmploymentLabelSchema] = Field(
         default_factory=list
     )
     skill_state: Optional[CurrentJobSkillStateSchema] = None
-    jev_skill_classification: Optional[JevSkillClassificationReceiptSchema] = None
-    jev_operations: list[JevOperationStateSchema] = Field(default_factory=list)
     job_intelligence_availability: JobIntelligenceAvailabilitySchema = Field(
         default_factory=JobIntelligenceAvailabilitySchema
     )

@@ -3,19 +3,16 @@
 from typing import Annotated, Any, Dict
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, case, desc, func
+from sqlalchemy import and_, desc, func
 from sqlalchemy.orm import Session, aliased
 
 from app.database import get_db
 from app.models.current_taxonomy import (
     CurrentJobSkillAssignment,
-    CurrentJobSkillMention,
-    CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.job import Job
 from app.schemas.stats import DashboardSkillStatsSchema
-from app.services.ai_runtime_settings_service import AIRuntimeSettingsService
 from app.services.enrichment_run_service import EnrichmentRunService
 
 
@@ -189,48 +186,10 @@ async def get_skill_stats(
         .scalar()
         or 0
     )
-    ready_threshold = AIRuntimeSettingsService(
-        db
-    ).get_skill_auto_create_distinct_job_threshold()
-    unresolved_candidate_total, affected_job_total, ready_candidate_total = (
-        db.query(
-            func.count(func.distinct(CurrentJobSkillMention.candidate_id)),
-            func.count(func.distinct(CurrentJobSkillMention.job_id)),
-            func.count(
-                func.distinct(
-                    case(
-                        (
-                            CurrentSkillCandidate.distinct_job_count >= ready_threshold,
-                            CurrentJobSkillMention.candidate_id,
-                        ),
-                        else_=None,
-                    )
-                )
-            ),
-        )
-        .select_from(CurrentJobSkillMention)
-        .join(Job, Job.id == CurrentJobSkillMention.job_id)
-        .join(
-            CurrentSkillCandidate,
-            CurrentSkillCandidate.id == CurrentJobSkillMention.candidate_id,
-        )
-        .filter(
-            CurrentJobSkillMention.status == "active",
-            CurrentJobSkillMention.resolution == "candidate",
-            _dashboard_job_population_predicate(),
-        )
-        .one()
-    )
     return {
         "processed_total": processed_total,
         "matched_job_total": matched_job_total,
         "match_coverage": _percentage(matched_job_total, processed_total),
-        "candidate_backlog": {
-            "unresolved_candidate_total": int(unresolved_candidate_total or 0),
-            "affected_job_total": int(affected_job_total or 0),
-            "ready_candidate_total": int(ready_candidate_total or 0),
-            "ready_threshold": ready_threshold,
-        },
         "skills": [
             {
                 "code": row.code,

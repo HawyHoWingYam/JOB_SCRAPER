@@ -21,7 +21,7 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "Partially absorbed by the 09-23 Jev production-adoption task: Company Industry production surfaces/tests were removed, Skill taxonomy bootstrap and candidate/maintenance review paths were implemented, and full PostgreSQL/frontend/E2E regression passed. Keep active until the destructive retained-data cutover and every original governance acceptance criterion are explicitly reconciled; do not redo the Jev-completed portions.",
+  "notes": "Partially absorbed by later Job Intelligence work: Company Industry production surfaces/tests and the retired secondary provider/review products were removed, the Skill taxonomy bootstrap was retained, and full PostgreSQL/frontend/E2E regression passed. Keep active until every original governance acceptance criterion is explicitly reconciled; do not recreate retired product surfaces.",
   "meta": {
     "github_issue": 55,
     "github_issue_url": "https://github.com/HawyHoWingYam/JOB_SCRAPER/issues/55"

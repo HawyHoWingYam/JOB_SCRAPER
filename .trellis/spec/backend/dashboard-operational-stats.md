@@ -5,7 +5,7 @@
 ### 1. Scope / Trigger
 
 Use this contract when changing Dashboard overview, AI telemetry, Skill stats,
-Candidate backlog, chart drill-down, refresh isolation, or accessibility. The
+chart drill-down, refresh isolation, or accessibility. The
 Dashboard has no Job-category distribution or Job-classification readiness.
 
 ### 2. Signatures
@@ -18,7 +18,6 @@ GET /api/stats/skills?limit=<1..100>&category=<optional>
 
 ```js
 onSelectSkill(skill) -> #jobs?skill_ids=<stable-code>
-onOpenClassification() -> #classification?target=skill
 ```
 
 ### 3. Contracts
@@ -27,8 +26,6 @@ onOpenClassification() -> #classification?target=skill
   enriched, pending, ineligible, active-run, and failure signals.
 - Skill denominators are successfully enriched Jobs, not all acquired Jobs.
 - Skill rows use governed assignments only and preserve backend response order.
-- Candidate backlog remains separate from governed Skill match coverage and is
-  visible on the Dashboard.
 - Dashboard loads overview, AI overview, and Skills independently. Refresh
   aborts superseded requests, retains prior successful data on partial failure,
   and marks only the failed section stale.
@@ -40,7 +37,6 @@ onOpenClassification() -> #classification?target=skill
 |---|---|
 | Skill limit outside API bound | `422` |
 | No enriched Jobs | Return truthful zero/N/A denominators |
-| Candidate backlog is zero | Show zero; no enabled Skill classification action |
 | Initial section request fails | Section unavailable alert and retry |
 | Refresh fails after prior success | Retain data, mark stale, show last timestamp |
 | Request is superseded/unmounted | Abort; ignore late result |
@@ -50,7 +46,6 @@ onOpenClassification() -> #classification?target=skill
 
 - **Good:** Python counts distinct enriched Jobs and drills into
   `#jobs?skill_ids=python`.
-- **Good:** unresolved Candidate count opens the Skill classification console.
 - **Base:** Skills fail to refresh while overview remains current and old Skill
   data is visibly stale.
 - **Bad:** include Candidate Mentions in the governed Skill leaderboard.
@@ -59,13 +54,12 @@ onOpenClassification() -> #classification?target=skill
 ### 6. Tests Required
 
 - Backend stats tests cover enriched denominators, distinct Job counts,
-  Candidate threshold semantics, deterministic ordering, and bounds.
+  deterministic ordering, and bounds.
 - Skill chart tests cover loading/empty/error/stale states, accessible action
-  names, dynamic buckets, governed rows, and Candidate backlog.
+  names, dynamic buckets, and governed rows.
 - Dashboard tests assert exactly three independent endpoints, unified Refresh,
-  stale retention, request cleanup, Skill drill-down, and Skill classification.
-- Route tests cover stable Skill codes and invalid Classification fallback to
-  `skill`.
+  stale retention, request cleanup, and Skill drill-down.
+- Route tests cover stable Skill codes.
 
 ### 7. Wrong vs Correct
 

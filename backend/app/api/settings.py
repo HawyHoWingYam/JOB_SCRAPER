@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
@@ -14,7 +13,6 @@ from app.ai.llm_client import (
     reset_client,
     safe_llm_error_message,
 )
-from app.ai.system_one import NativeSystemOneClient, SystemOneRequest
 from app.crawl_cancellation import ACTIVE_MANUAL_DETAIL_STATUSES
 from app.database import get_db
 from app.repositories.crawl_job_repository import CrawlJobRepository
@@ -23,10 +21,6 @@ from app.services.ai_runtime_settings_service import (
     AIRuntimeSettingsService,
     ProfileRuntimeNotReadyError,
     RuntimeSettingsValidationError,
-)
-from app.services.jev_runtime_settings_service import (
-    JevRuntimeSettingsService,
-    JevSettingsValidationError,
 )
 from app.schemas.scraper_pacing import (
     ScraperPacingSettingsListResponse,
@@ -96,37 +90,6 @@ def reset_scraper_pacing_settings(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-class JevSettingsUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: Optional[bool] = None
-    endpoint: Optional[str] = None
-    model: Optional[str] = None
-    api_key: Optional[str] = None
-    sample_limit: Optional[int] = None
-    question_batch_limit: Optional[int] = None
-    concurrency: Optional[int] = None
-    retry_limit: Optional[int] = None
-    timeout_seconds: Optional[int] = None
-    evidence_threshold: Optional[str] = None
-    recommendation_threshold: Optional[str] = None
-    duplicate_enabled: Optional[bool] = None
-    duplicate_candidate_limit: Optional[int] = None
-    duplicate_corpus_limit: Optional[int] = None
-    crawl_quality_enabled: Optional[bool] = None
-    crawl_quality_batch_limit: Optional[int] = None
-    search_rerank_enabled: Optional[bool] = None
-    search_rerank_candidate_limit: Optional[int] = None
-    incident_triage_enabled: Optional[bool] = None
-    incident_triage_event_limit: Optional[int] = None
-    maintenance_enabled: Optional[bool] = None
-    maintenance_model: Optional[str] = None
-    maintenance_interval_days: Optional[int] = None
-    maintenance_min_candidates: Optional[int] = None
-    maintenance_batch_size: Optional[int] = None
-    maintenance_threshold: Optional[str] = None
-
-
 class AISettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -134,9 +97,6 @@ class AISettingsUpdateRequest(BaseModel):
     company_llm_provider: Optional[str] = None
     ai_enrichment_run_concurrency: Optional[int] = None
     company_ai_enrichment_run_concurrency: Optional[int] = None
-    skill_auto_create_distinct_job_threshold: Optional[int] = None
-    skill_candidate_recommendation_limit: Optional[int] = None
-    skill_candidate_evidence_limit: Optional[int] = None
     anthropic_api_key: Optional[str] = None
     anthropic_model: Optional[str] = None
     anthropic_base_url: Optional[str] = None
@@ -157,7 +117,6 @@ class AISettingsUpdateRequest(BaseModel):
     company_custom_api_format: Optional[str] = None
     zhipu_api_key: Optional[str] = None
     company_zhipu_api_key: Optional[str] = None
-    jev: Optional[JevSettingsUpdateRequest] = None
 
 
 class DraftProfilePayload(BaseModel):
@@ -183,15 +142,6 @@ class AISettingsTestRequest(BaseModel):
     profile: DraftProfilePayload
 
 
-class JevSettingsTestRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    endpoint: Optional[str] = None
-    model: Optional[str] = None
-    api_key: Optional[str] = None
-    timeout_seconds: Optional[int] = None
-
-
 def _format_validation_errors(exc: RuntimeSettingsValidationError) -> list[dict]:
     return [
         {
@@ -203,10 +153,7 @@ def _format_validation_errors(exc: RuntimeSettingsValidationError) -> list[dict]
     ]
 
 
-def _build_ai_settings_response(
-    service: AIRuntimeSettingsService,
-    jev_service: JevRuntimeSettingsService,
-) -> dict:
+def _build_ai_settings_response(service: AIRuntimeSettingsService) -> dict:
     job_status = refresh_llm_status()
     company_status = refresh_llm_status("companies")
     return {
@@ -215,7 +162,6 @@ def _build_ai_settings_response(
         "runtime_status": job_status,
         "company_runtime_status": company_status,
         "provider_catalog": build_ai_provider_catalog(),
-        "jev": jev_service.serialize(),
     }
 
 
@@ -323,11 +269,9 @@ async def probe_profile_configuration(
 @router.get("/ai")
 async def get_ai_settings(db: Session = Depends(get_db)):
     service = AIRuntimeSettingsService(db)
-    jev_service = JevRuntimeSettingsService(db)
     service.get_or_create()
-    jev_service.get_or_create()
     db.commit()
-    return _build_ai_settings_response(service, jev_service)
+    return _build_ai_settings_response(service)
 
 
 @router.put("/ai")
@@ -336,26 +280,19 @@ async def update_ai_settings(
     db: Session = Depends(get_db),
 ):
     service = AIRuntimeSettingsService(db)
-    jev_service = JevRuntimeSettingsService(db)
     try:
         values = request.model_dump(exclude_unset=True)
-        jev_values = values.pop("jev", None)
         if values:
             service.update_settings(values)
         else:
             service.get_or_create()
-        if jev_values is not None:
-            jev_service.update(jev_values)
-        else:
-            jev_service.get_or_create()
         db.commit()
-    except (RuntimeSettingsValidationError, JevSettingsValidationError) as exc:
+    except RuntimeSettingsValidationError as exc:
         db.rollback()
         raise HTTPException(
             status_code=422, detail=_format_validation_errors(exc)
         ) from exc
-
-    return _build_ai_settings_response(service, jev_service)
+    return _build_ai_settings_response(service)
 
 
 @router.post("/ai/test")
@@ -437,71 +374,3 @@ async def test_ai_settings_profile(
                 "config_fingerprint": fingerprint,
             },
         ) from exc
-
-
-@router.post("/ai/jev/test")
-async def test_jev_settings_connection(
-    request: JevSettingsTestRequest,
-    db: Session = Depends(get_db),
-):
-    service = JevRuntimeSettingsService(db)
-    client = None
-    try:
-        draft = service.draft_values(request.model_dump(exclude_unset=True))
-        api_key = str(draft.get("api_key") or "").strip()
-        if not api_key:
-            raise JevSettingsValidationError(
-                [
-                    {
-                        "loc": ["api_key"],
-                        "msg": "API key is required",
-                        "type": "value_error",
-                    }
-                ]
-            )
-        client = NativeSystemOneClient(
-            endpoint=str(draft["endpoint"]),
-            api_key=api_key,
-            http_client=httpx.AsyncClient(timeout=float(draft["timeout_seconds"])),
-        )
-        result = await client.evaluate(
-            SystemOneRequest.model_validate(
-                {
-                    "state": {"purpose": "Confirm the configured Jev connection."},
-                    "model": str(draft["model"]),
-                    "questions": {
-                        "ready": {
-                            "type": "choice",
-                            "instructions": "Is this request readable?",
-                            "criteria": {"yes": "Readable", "no": "Not readable"},
-                        }
-                    },
-                }
-            )
-        )
-        if result.status != "answered":
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "ok": False,
-                    "error_message": result.error_message
-                    or "Jev connection test failed",
-                    "error_code": result.error_code,
-                },
-            )
-        return {
-            "ok": True,
-            "status": result.status,
-            "model": result.model,
-            "provider": result.provider,
-            "request_id": result.request_id,
-            "latency_ms": result.latency_ms,
-            "usage": result.usage.model_dump() if result.usage else None,
-        }
-    except JevSettingsValidationError as exc:
-        raise HTTPException(
-            status_code=422, detail=_format_validation_errors(exc)
-        ) from exc
-    finally:
-        if client is not None:
-            await client.aclose()

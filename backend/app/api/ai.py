@@ -4,7 +4,7 @@ AI Enrichment API Endpoints
 
 import asyncio
 import logging
-from typing import List, Literal, Optional, TypedDict
+from typing import Optional, TypedDict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -74,35 +74,19 @@ class PendingSelectionRequest(BaseModel):
         return self
 
 
-class QueryRunRequest(BaseModel):
-    review_candidate_names: Optional[List[str]] = None
-    polluted_skill_names: Optional[List[str]] = None
-    source_subclassification_names: Optional[List[str]] = None
-    scope: Literal["all", "enriched_only"] = "all"
-
-
 class CreateRunRequest(BaseModel):
-    mode: Literal["pending", "query"] = "pending"
     filters: PendingFiltersRequest = Field(default_factory=PendingFiltersRequest)
     limit: int = Field(default=100, ge=1, le=MAX_PENDING_RUN_LIMIT)
     all_pending_acknowledged: bool = False
-    query: Optional[QueryRunRequest] = None
 
     @model_validator(mode="after")
-    def validate_mode_payload(self):
-        if self.mode == "pending":
-            PendingSelectionRequest(
-                filters=self.filters,
-                limit=self.limit,
-                all_pending_acknowledged=self.all_pending_acknowledged,
-            )
-        elif self.query is None:
-            raise ValueError("query is required for query mode")
+    def validate_scope(self):
+        PendingSelectionRequest(
+            filters=self.filters,
+            limit=self.limit,
+            all_pending_acknowledged=self.all_pending_acknowledged,
+        )
         return self
-
-
-class JevSkillBackfillRequest(BaseModel):
-    limit: int = Field(default=50, ge=1, le=MAX_PENDING_RUN_LIMIT)
 
 
 def _derive_last_failed_job_titles(
@@ -644,38 +628,6 @@ async def preview_pending_enrichment(
     }
 
 
-@router.post("/jev-skill-backfill/preview")
-async def preview_jev_skill_backfill(
-    request: JevSkillBackfillRequest,
-    db: Session = Depends(get_db),
-):
-    """Preview historical Jev Skill work without reserving Jobs or calling Jev."""
-    from app.services.jev_skill_backfill import JevSkillBackfillPlanner
-
-    return JevSkillBackfillPlanner(db).inspect(limit=request.limit).to_payload()
-
-
-@router.post("/jev-skill-backfill/runs")
-async def create_jev_skill_backfill_run(
-    request: JevSkillBackfillRequest,
-    db: Session = Depends(get_db),
-):
-    """Create a bounded historical Jev Skill run on the existing worker queue."""
-    service = EnrichmentRunService(db)
-    try:
-        run = service.create_jev_skill_backfill_run(limit=request.limit)
-    except ActiveEnrichmentRunError as exc:
-        raise _active_run_conflict(exc) from exc
-    if run is None:
-        return {"status": "empty", "run": None}
-    requested = _publish_run_request(db, service=service, run_id=run.id)
-    db.refresh(run)
-    payload = _serialize_single_run(run, db)
-    payload["execution_dispatched"] = requested
-    payload["execution_result"] = _run_execution_result(run, requested)
-    return payload
-
-
 @router.post("/runs")
 async def create_enrichment_run(
     request: CreateRunRequest,
@@ -690,21 +642,10 @@ async def create_enrichment_run(
     service = EnrichmentRunService(db)
 
     try:
-        if request.mode == "pending":
-            run = service.create_manual_pending_run(
-                limit=request.limit,
-                filters=request.filters.to_service_filters(),
-            )
-        else:
-            query = request.query
-            if query is None:
-                raise HTTPException(status_code=422, detail="query is required")
-            run = service.create_manual_query_run(
-                review_candidate_names=query.review_candidate_names,
-                polluted_skill_names=query.polluted_skill_names,
-                source_subclassification_names=query.source_subclassification_names,
-                scope=query.scope,
-            )
+        run = service.create_manual_pending_run(
+            limit=request.limit,
+            filters=request.filters.to_service_filters(),
+        )
     except ActiveEnrichmentRunError as exc:
         raise _active_run_conflict(exc) from exc
     except ValueError as exc:
@@ -780,26 +721,6 @@ async def retry_failed_enrichment_run(
     service = EnrichmentRunService(db)
     try:
         run = service.create_retry_run_from_failed_items(run_id)
-    except ActiveEnrichmentRunError as exc:
-        raise _active_run_conflict(exc) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    _publish_run_request(db, service=service, run_id=run.id)
-    db.refresh(run)
-    return _serialize_single_run(run, db)
-
-
-@router.post("/runs/{run_id}/resume-cancelled-backfill")
-async def resume_cancelled_jev_skill_backfill(
-    run_id: str,
-    db: Session = Depends(get_db),
-):
-    """Queue the untouched cancelled items as a new Jev Skill backfill run."""
-    service = EnrichmentRunService(db)
-    try:
-        run = service.create_resume_run_from_cancelled_backfill(run_id)
     except ActiveEnrichmentRunError as exc:
         raise _active_run_conflict(exc) from exc
     except ValueError as exc:

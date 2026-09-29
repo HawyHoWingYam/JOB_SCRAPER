@@ -15,10 +15,6 @@ class AppRuntimeSettings(Base):
     company_llm_provider = Column(String(32), nullable=True)
     ai_enrichment_run_concurrency = Column(Integer, nullable=True)
     company_ai_enrichment_run_concurrency = Column(Integer, nullable=True)
-    skill_auto_create_distinct_job_threshold = Column(Integer, nullable=True)
-    skill_candidate_recommendation_limit = Column(Integer, nullable=True)
-    skill_candidate_evidence_limit = Column(Integer, nullable=True)
-
     anthropic_api_key = Column(Text, nullable=True)
     anthropic_model = Column(String(255), nullable=True)
     anthropic_base_url = Column(String(512), nullable=True)

@@ -1,7 +1,6 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import {
-  hashForClassificationRoute,
   hashForJobsRoute,
   hashForView,
   resolveAppView,
@@ -12,15 +11,11 @@ import './App.css';
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const JobBrowser = lazy(() => import('./components/JobBrowser'));
 const AIEnrichmentPage = lazy(() => import('./components/ai/AIEnrichmentPage'));
-const ClassificationBatchesPage = lazy(
-  () => import('./components/classification/ClassificationBatchesPage'),
-);
 const OfferTodayKeywordPacksPage = lazy(
   () => import('./components/offertoday/OfferTodayKeywordPacksPage'),
 );
 const CompaniesPage = lazy(() => import('./components/companies/CompaniesPage'));
 const AISettingsPage = lazy(() => import('./components/settings/AISettingsPage'));
-const JevOperationsPage = lazy(() => import('./components/jev/JevOperationsPage'));
 const CrawlTasksPage = lazy(() => import('./components/scraper/CrawlTasksPage'));
 const AddJobPage = lazy(() => import('./components/jobs/AddJobPage'));
 const TaskControlWizard = lazy(
@@ -47,14 +42,6 @@ function App() {
     }
     window.location.hash = hashForJobsRoute(filters);
   };
-  const navigateToClassification = (target) => {
-    if (typeof window === 'undefined') {
-      setActiveView('classification');
-      return;
-    }
-    window.location.hash = hashForClassificationRoute(target);
-  };
-
   useEffect(() => {
     if (typeof window === 'undefined') {
       return undefined;
@@ -92,7 +79,6 @@ function App() {
             {activeView === 'dashboard' && (
               <Dashboard
                 onNavigateToAI={navigateToAI}
-                onNavigateToClassification={navigateToClassification}
                 onNavigateToJobs={navigateToJobs}
               />
             )}
@@ -100,13 +86,6 @@ function App() {
             {activeView === 'add-job' && <AddJobPage />}
             {activeView === 'companies' && <CompaniesPage />}
             {activeView === 'ai' && <AIEnrichmentPage />}
-            {activeView === 'jev' && <JevOperationsPage />}
-            {activeView === 'classification' && (
-              <ClassificationBatchesPage
-                routeHash={locationHash}
-                onNavigateTarget={navigateToClassification}
-              />
-            )}
             {activeView === 'offertoday-keywords' && <OfferTodayKeywordPacksPage />}
             {activeView === 'settings' && (
               <AISettingsPage

@@ -39,18 +39,6 @@ def _current_skill_state_payload(
             }
             for skill in state.skills
         ],
-        "candidate_mentions": [
-            {
-                "id": str(mention.id),
-                "raw_name": mention.raw_name,
-                "normalized_key": mention.normalized_key,
-                "candidate_id": str(mention.candidate_id),
-                "source": mention.source,
-                "confidence": mention.confidence,
-                "provenance": dict(mention.provenance),
-            }
-            for mention in state.candidate_mentions
-        ],
     }
 
 
@@ -83,9 +71,6 @@ class JobIntelligenceJobDetailView:
                 [skill.name for skill in self.skill_state.skills]
                 if self.skill_state is not None
                 else []
-            ),
-            "skill_candidate_mentions": (
-                skill_payload["candidate_mentions"] if skill_payload else []
             ),
             "job_intelligence_availability": {
                 "source_attributes": (self.source_attributes_availability.to_payload()),
@@ -262,10 +247,7 @@ class JobIntelligenceProductReadModel:
     def _source_attributes(
         self,
         job_id: UUID,
-    ) -> tuple[
-        SourceJobAttributesView | None,
-        JobIntelligenceDomainAvailabilityView,
-    ]:
+    ) -> tuple[SourceJobAttributesView | None, JobIntelligenceDomainAvailabilityView,]:
         try:
             view = SourceJobAttributes(self.db).get(job_id)
         except ValueError:
@@ -281,15 +263,13 @@ class JobIntelligenceProductReadModel:
     def _skill_job_state(
         self,
         job_id: UUID,
-    ) -> tuple[
-        CurrentJobSkillStateView | None,
-        JobIntelligenceDomainAvailabilityView,
-    ]:
+    ) -> tuple[CurrentJobSkillStateView | None, JobIntelligenceDomainAvailabilityView,]:
         view = CurrentTaxonomyReader(self.db).get_job_skills(job_id)
         return view, JobIntelligenceDomainAvailabilityView(
             available=True,
             unavailable_code=None,
         )
+
 
 __all__ = [
     "JobIntelligenceDomainAvailabilityView",

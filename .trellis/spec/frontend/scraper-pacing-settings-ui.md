@@ -108,6 +108,6 @@ immutable snapshots.
 - `#settings?section=ai-runtime|scraper-pacing` restores the selected section on reload/history navigation. Visited sections stay mounted while on Settings; switching sections preserves drafts in memory only.
 - Both editors warn before document unload when dirty. Credentials are never copied into local/session storage. Leaving the Settings page is explicitly described as requiring Save first.
 - AI Runtime displays its saved-versus-draft state, supports discard to the server baseline, retains drafts on failed saves and offers initial-load retry. Feedback receives keyboard focus; major runtime sections have focusable navigation targets with all controls still visible.
-- Profile tests explicitly describe contacting the provider with draft values; testing and saving remain separate. Jev smoke remains its own explicit paid operation.
+- Profile tests explicitly describe contacting the provider with draft values; testing and saving remain separate.
 - Scraper Pacing offers per-source discard and load retry. Reset asks for confirmation when unsaved changes would be overwritten; the returned server snapshot still owns the saved result.
-- AI troubleshooting links may carry validated `profile=jobs|companies|jev|throughput`, `return=ai` and a bounded `returnRun`. Return links are constructed locally as AI routes; never accept arbitrary return URLs.
+- AI troubleshooting links may carry validated `profile=jobs|companies|throughput`, `return=ai` and a bounded `returnRun`. Return links are constructed locally as AI routes; never accept arbitrary return URLs.

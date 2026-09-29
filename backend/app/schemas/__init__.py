@@ -19,7 +19,6 @@ from app.schemas.job_search import (
     JobSearchErrorSchema,
 )
 from app.schemas.stats import (
-    DashboardSkillCandidateBacklogSchema,
     DashboardSkillItemSchema,
     DashboardSkillStatsSchema,
 )
@@ -45,7 +44,6 @@ __all__ = [
     "JobSearchRequestSchema",
     "JobSearchLayerSummarySchema",
     "JobSearchErrorSchema",
-    "DashboardSkillCandidateBacklogSchema",
     "DashboardSkillItemSchema",
     "DashboardSkillStatsSchema",
     "GovernanceAuditEventSchema",

@@ -31,10 +31,7 @@ from app.services.source_classification_registry import (
 )
 from app.services.offertoday_keyword_catalog import OfferTodayKeywordCatalog
 from app.services.offertoday_taxonomy_resolver import OfferTodayTaxonomyResolver
-from app.services.skill_taxonomy_bootstrap import (
-    reconcile_deterministic_skill_candidates,
-    synchronize_initial_skill_taxonomy,
-)
+from app.services.skill_taxonomy_bootstrap import synchronize_initial_skill_taxonomy
 
 configure_logging(settings.log_level, settings.scraper_log_level)
 logger = logging.getLogger(__name__)
@@ -95,12 +92,6 @@ def synchronize_skill_taxonomy_on_startup() -> dict[str, int | bool]:
     startup_db = SessionLocal()
     try:
         result = synchronize_initial_skill_taxonomy(startup_db)
-        # Reconciliation is an upgrade/restart concern as well as an initial
-        # bootstrap concern. Existing taxonomies can gain new manifest skills,
-        # and historical mentions must be rechecked on every startup.
-        result["deterministically_reconciled"] = reconcile_deterministic_skill_candidates(
-            startup_db
-        )
         startup_db.commit()
         return result
     finally:

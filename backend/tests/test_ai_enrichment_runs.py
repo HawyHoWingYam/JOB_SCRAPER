@@ -23,6 +23,10 @@ from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
 from app.models.event_outbox import EventOutbox
 from app.models.job import Job
 from app.models.manual_job import ManualJobEvidence
+from app.models.related_jobs_snapshot import (
+    JobRelatedJobsSnapshot,
+    JobRelatedJobsSnapshotItem,
+)
 from app.models.source_job_attributes import (
     SOURCE_JOB_ATTRIBUTE_TABLES,
     JobSourceAttributeProjection,
@@ -43,7 +47,7 @@ def compile_uuid_for_sqlite(_type, _compiler, **_kwargs):
 
 
 @pytest.fixture
-def db():
+def db(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     Company.__table__.create(engine)
     Job.__table__.create(engine)
@@ -53,6 +57,12 @@ def db():
     EnrichmentRun.__table__.create(engine)
     EnrichmentRunItem.__table__.create(engine)
     EventOutbox.__table__.create(engine)
+    JobRelatedJobsSnapshot.__table__.create(engine)
+    JobRelatedJobsSnapshotItem.__table__.create(engine)
+    monkeypatch.setattr(
+        "app.services.ai_enrichment_service.JobRecommendationService.recommend_for_job",
+        lambda *_args, **_kwargs: [],
+    )
     session = sessionmaker(bind=engine)()
     try:
         yield session
@@ -336,10 +346,10 @@ class _StubInsightExtractor:
     async def extract(self, **_kwargs):
         return {
             "summary": "Fresh AI summary",
-            "classification": {"code": "software-engineering"},
             "skills": self.skills,
             "confidence": 0.8,
             "experience": self.experience,
+            "related_jobs": [],
         }
 
 
@@ -351,7 +361,10 @@ class _StubCurrentSkillEnrichment:
         return SimpleNamespace(prompt_payload=[])
 
     def build_skill_prompt(self, **_kwargs):
-        return []
+        return {
+            "existing_skills": ["backend.python: Python"],
+            "assignable_skill_codes": ["backend.python"],
+        }
 
     def assign_job_from_classification(self, **_kwargs):
         return {"state": "assigned"}
@@ -361,7 +374,7 @@ class _StubCurrentSkillEnrichment:
 
 
 @pytest.mark.asyncio
-async def test_ordinary_ai_enrichment_publishes_skills_without_starting_jev(
+async def test_ordinary_ai_enrichment_publishes_skills_in_one_result(
     db,
     company,
     monkeypatch,
@@ -397,20 +410,27 @@ async def test_ordinary_ai_enrichment_publishes_skills_without_starting_jev(
             "summary": "Not specified",
             "evidence": [],
         },
-        skills=[{"name": "Python", "kind": "technical"}],
+        skills=[
+            {
+                "name": "Python",
+                "disposition": "match_existing",
+                "existing_skill": "backend.python",
+                "evidence": "Python is required.",
+            }
+        ],
     )
 
     result = await service.enrich_job(job, db)
 
     assert result["status"] == "success"
-    assert result["jev_skill_classification"] == {
-        "status": "not_started",
-        "reason": "manual_start_required",
-        "apply_projection": False,
-    }
     assert len(replacements) == 1
     assert replacements[0]["extracted_skills"] == [
-        {"name": "Python", "kind": "technical"}
+        {
+            "name": "Python",
+            "disposition": "match_existing",
+            "existing_skill": "backend.python",
+            "evidence": "Python is required.",
+        }
     ]
     assert replacements[0]["source"] == "ai-extraction"
     assert replacements[0]["provenance"] == {
@@ -505,7 +525,7 @@ async def test_manual_enrichment_preserves_operator_experience_and_fills_only_om
     service = AIEnrichmentService()
     service.insight_extractor = _StubInsightExtractor(
         {
-            "experience_level": "mid",
+            "experience_level": "mid_level",
             "experience_min_years": extracted_min,
             "experience_max_years": extracted_max,
             "summary": "Experience extracted",
@@ -558,7 +578,7 @@ async def test_failed_manual_enrichment_preserves_old_intelligence_and_stale_has
     service = AIEnrichmentService()
     service.insight_extractor = _StubInsightExtractor(
         {
-            "experience_level": "mid",
+            "experience_level": "mid_level",
             "experience_min_years": 2,
             "experience_max_years": 4,
             "summary": "Experience extracted",
@@ -730,82 +750,6 @@ def test_execute_run_does_not_block_unmapped_job_before_worker_dispatch(db, comp
     assert result.status == "completed"
     assert result.excluded_items == 0
     assert result.items[0].status == "completed"
-
-
-def test_jev_skill_backfill_run_uses_dedicated_executor_and_skips_standard_preflight(
-    db, company
-):
-    job = make_job(
-        db,
-        company,
-        job_id="00000000-0000-0000-0000-000000000106",
-        projected=False,
-        enriched=True,
-    )
-    run = make_run(
-        db,
-        run_id="jev-skill-backfill-execution",
-        status="running",
-        created_at=datetime(2026, 7, 18, 12, 0),
-        job_ids=[str(job.id)],
-    )
-    run.source_type = "jev_skill_backfill"
-    calls = []
-
-    class _BackfillService:
-        async def enrich_job_id(self, job_id):
-            calls.append(job_id)
-            return {"status": "success", "job_id": str(job_id)}
-
-    class _WrongStandardService:
-        async def enrich_job_id(self, _job_id):
-            raise AssertionError("standard enrichment must not run for Jev backfill")
-
-    service = EnrichmentRunService(db)
-    service._resolve_run_concurrency = lambda: 1
-
-    result = asyncio.run(
-        service.execute_run(
-            run.id,
-            enrichment_service=_WrongStandardService(),
-            backfill_service=_BackfillService(),
-            claim=False,
-        )
-    )
-
-    assert calls == [job.id]
-    assert result.status == "completed"
-    assert result.excluded_items == 0
-    assert result.items[0].status == "completed"
-
-
-def test_cancelled_jev_backfill_resumes_only_untouched_items_in_a_new_run(db, company):
-    first = make_job(db, company, job_id="00000000-0000-0000-0000-000000000107")
-    second = make_job(db, company, job_id="00000000-0000-0000-0000-000000000108")
-    source = make_run(
-        db,
-        run_id="cancelled-jev-backfill",
-        status="cancelled",
-        created_at=datetime(2026, 7, 18, 12, 0),
-        job_ids=[str(first.id), str(second.id)],
-    )
-    source.source_type = "jev_skill_backfill"
-    source.pending_items = 0
-    source.cancelled_items = 1
-    source.items[0].status = "completed"
-    source.items[1].status = "cancelled"
-    db.flush()
-
-    continuation = EnrichmentRunService(db).create_resume_run_from_cancelled_backfill(
-        source.id
-    )
-
-    assert continuation.id != source.id
-    assert continuation.source_type == "jev_skill_backfill"
-    assert continuation.job_ids == [str(second.id)]
-    assert continuation.run_snapshot["resumed_from_run_id"] == source.id
-    assert source.items[0].status == "completed"
-    assert source.items[1].status == "cancelled"
 
 
 def test_public_routes_expose_filtered_controls_and_remove_single_job_endpoint():

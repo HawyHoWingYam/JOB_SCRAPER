@@ -17,12 +17,9 @@ from app.api.stats import (
     router,
 )
 from app.database import Base, get_db
-from app.models.app_runtime_settings import AppRuntimeSettings
 from app.models.company import Company
 from app.models.current_taxonomy import (
     CurrentJobSkillAssignment,
-    CurrentJobSkillMention,
-    CurrentSkillCandidate,
     CurrentTaxonomyNodeRecord,
 )
 from app.models.enrichment_run import EnrichmentRun, EnrichmentRunItem
@@ -58,9 +55,6 @@ def stats_db():
         JobSourceAttributeProjection.__table__,
         CurrentTaxonomyNodeRecord.__table__,
         CurrentJobSkillAssignment.__table__,
-        CurrentSkillCandidate.__table__,
-        CurrentJobSkillMention.__table__,
-        AppRuntimeSettings.__table__,
         EnrichmentRun.__table__,
         EnrichmentRunItem.__table__,
     )
@@ -154,40 +148,8 @@ def _assign_skill(db, job: Job, code: str) -> None:
     )
 
 
-def _candidate(db, name: str, distinct_jobs: int) -> CurrentSkillCandidate:
-    candidate = CurrentSkillCandidate(
-        taxonomy="skill",
-        normalized_key=name.casefold(),
-        canonical_raw_name=name,
-        raw_variants=[name],
-        occurrence_count=distinct_jobs,
-        distinct_job_count=distinct_jobs,
-        evidence_summary={"distinct_jobs": distinct_jobs},
-    )
-    db.add(candidate)
-    db.flush()
-    return candidate
-
-
-def _candidate_mention(db, job: Job, candidate: CurrentSkillCandidate) -> None:
-    db.add(
-        CurrentJobSkillMention(
-            job_id=job.id,
-            taxonomy="skill",
-            raw_name=candidate.canonical_raw_name,
-            normalized_key=candidate.normalized_key,
-            resolution="candidate",
-            status="active",
-            candidate_id=candidate.id,
-            source="ai-extraction",
-            provenance={"source": "stats-test"},
-            evidence_hash=uuid4().hex * 2,
-        )
-    )
-
-
 @pytest.mark.asyncio
-async def test_skill_stats_use_enriched_population_stable_codes_and_candidate_backlog(
+async def test_skill_stats_use_enriched_population_and_stable_codes(
     stats_db,
 ):
     company = _company(stats_db)
@@ -219,12 +181,9 @@ async def test_skill_stats_use_enriched_population_stable_codes_and_candidate_ba
             ),
         ]
     )
-    stats_db.add(AppRuntimeSettings(id=1, skill_auto_create_distinct_job_threshold=2))
-    stats_db.flush()
-
     first = _job(stats_db, company, enriched=True)
     second = _job(stats_db, company, enriched=True)
-    third = _job(stats_db, company, enriched=True)
+    _job(stats_db, company, enriched=True)
     deleted = _job(stats_db, company, enriched=True, deleted=True)
     not_processed = _job(stats_db, company)
     _assign_skill(stats_db, first, "java")
@@ -233,14 +192,6 @@ async def test_skill_stats_use_enriched_population_stable_codes_and_candidate_ba
     _assign_skill(stats_db, deleted, "python")
     _assign_skill(stats_db, not_processed, "python")
 
-    ready_candidate = _candidate(stats_db, "Rust", 2)
-    waiting_candidate = _candidate(stats_db, "Elixir", 1)
-    deleted_candidate = _candidate(stats_db, "Fortran", 3)
-    _candidate_mention(stats_db, first, ready_candidate)
-    _candidate_mention(stats_db, second, ready_candidate)
-    _candidate_mention(stats_db, second, waiting_candidate)
-    _candidate_mention(stats_db, third, waiting_candidate)
-    _candidate_mention(stats_db, deleted, deleted_candidate)
     stats_db.commit()
 
     payload = await get_skill_stats(limit=30, category=None, db=stats_db)
@@ -248,12 +199,6 @@ async def test_skill_stats_use_enriched_population_stable_codes_and_candidate_ba
     assert payload["processed_total"] == 3
     assert payload["matched_job_total"] == 2
     assert payload["match_coverage"] == 67
-    assert payload["candidate_backlog"] == {
-        "unresolved_candidate_total": 2,
-        "affected_job_total": 3,
-        "ready_candidate_total": 1,
-        "ready_threshold": 2,
-    }
     assert payload["skills"] == [
         {
             "code": "java",

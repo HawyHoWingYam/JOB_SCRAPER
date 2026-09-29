@@ -380,128 +380,6 @@
   font-weight: 700;
 }
 
-.job-detail-modal .jev-processing-summary {
-  border-color: rgba(106, 165, 255, 0.28);
-  background:
-    linear-gradient(135deg, rgba(106, 165, 255, 0.08), transparent 58%),
-    var(--color-bg-tertiary);
-}
-
-.job-detail-modal .jev-processing-heading,
-.job-detail-modal .jev-processing-card-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.job-detail-modal .jev-processing-heading {
-  margin-bottom: var(--space-4);
-}
-
-.job-detail-modal .jev-processing-heading h3,
-.job-detail-modal .jev-processing-heading p,
-.job-detail-modal .jev-processing-card > p {
-  margin: 0;
-}
-
-.job-detail-modal .jev-processing-heading p,
-.job-detail-modal .jev-processing-card > p {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-}
-
-.job-detail-modal .jev-processing-heading a {
-  color: var(--color-primary);
-  font-size: var(--text-sm);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.job-detail-modal .jev-processing-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.job-detail-modal .jev-processing-card {
-  min-width: 0;
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-secondary);
-}
-
-.job-detail-modal .jev-processing-card-heading {
-  margin-bottom: var(--space-3);
-}
-
-.job-detail-modal .jev-processing-card-title {
-  font-size: var(--text-sm);
-}
-
-.job-detail-modal .jev-operation-status {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  min-height: 24px;
-  padding: 2px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.job-detail-modal .jev-operation-status.is-success {
-  border-color: rgba(74, 222, 128, 0.35);
-  background: rgba(74, 222, 128, 0.1);
-  color: #86efac;
-}
-
-.job-detail-modal .jev-operation-status.is-danger {
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(248, 113, 113, 0.1);
-  color: #fca5a5;
-}
-
-.job-detail-modal .jev-operation-status.is-active {
-  border-color: rgba(106, 165, 255, 0.38);
-  background: rgba(106, 165, 255, 0.11);
-  color: var(--color-primary-hover);
-}
-
-.job-detail-modal .jev-operation-status.is-warning {
-  border-color: rgba(251, 191, 36, 0.36);
-  background: rgba(251, 191, 36, 0.1);
-  color: #fcd34d;
-}
-
-.job-detail-modal .jev-processing-details {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--space-2);
-  margin: 0;
-  font-size: var(--text-xs);
-}
-
-.job-detail-modal .jev-processing-details dt {
-  color: var(--color-text-muted);
-}
-
-.job-detail-modal .jev-processing-details dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.job-detail-modal .jev-processing-details code {
-  color: inherit;
-  font-size: inherit;
-}
-
 .job-detail-modal .modal-company-description {
   margin-top: var(--space-4);
 }
@@ -607,9 +485,6 @@
     width: 100%;
   }
 
-  .job-detail-modal .jev-processing-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 640px) {
@@ -619,7 +494,4 @@
     grid-template-columns: 1fr;
   }
 
-  .job-detail-modal .jev-processing-heading {
-    flex-direction: column;
-  }
 }

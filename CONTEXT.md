@@ -88,10 +88,6 @@ _Avoid_: Live backlog, entire database backlog
 The explicit population from which a detail run may freeze its Backlog Snapshot: the Source backlog, a source-classification Crawl Scope, or one named listing batch.
 _Avoid_: Detail category IDs, latest batch
 
-**Classification Processing Batch**:
-A bounded automated run that assigns current Company Industry or Skill data, exposes progress and failures, and permits retry without requiring routine per-item human review.
-_Avoid_: Governance queue, taxonomy release, manual review backlog
-
 ## Job attributes
 
 **Manual Job**:
@@ -168,29 +164,25 @@ _Avoid_: AI-assigned industry, free-text Industry
 
 ## Skill taxonomy
 
-**AI Skill Baseline**:
-The Skill findings produced by ordinary AI enrichment for a Job, before a separate Jev correction. Findings may resolve to governed Skills or remain unresolved evidence.
-_Avoid_: Jev-validated Skills, new taxonomy Skills
-
-**Jev Skill Correction**:
-A second-pass assessment that may add, correct, or remove AI-generated Skill findings for a Job. It does not override operator-authored corrections or itself authorize creation of new governed Skills.
-_Avoid_: Initial Skill extraction, automatic taxonomy approval
+**AI Skill Projection**:
+The complete Skill result produced within one ordinary AI Enrichment execution for a Job. It classifies retained evidence into governed Skill assignments, Unresolved Skill Evidence, Generic Skill Tags, or rejection without a separate correction pass. Existing operator-authored decisions remain authoritative.
+_Avoid_: Skill baseline, second-pass correction, separately corrected Skills
 
 **Skill**:
 A governed technical capability accepted into the project's Skill Taxonomy. Only Skills participate in ordinary skill search, recommendations, and analytics.
 _Avoid_: Provisional Skill, raw extracted term
 
 **Skill Mention**:
-One occurrence of a potential skill extracted from a Job. A Skill Mention is evidence that may resolve to a Skill, a Skill Candidate, a generic tag, or rejection.
-_Avoid_: Skill, candidate
+One occurrence of a potential skill extracted from a Job. A Skill Mention is evidence that may resolve to a Skill, Unresolved Skill Evidence, a Generic Skill Tag, or rejection.
+_Avoid_: Skill, review item
 
 **Generic Skill Tag**:
 A governed non-Skill disposition for a broad activity or workplace concept retained as Skill Mention evidence but excluded from the Skill Taxonomy, ordinary skill assignments, and Skill analytics.
 _Avoid_: Skill, rejected mention, provisional Skill
 
-**Skill Candidate**:
-An unresolved potential Skill aggregated from one or more Skill Mentions and awaiting a governance decision.
-_Avoid_: Provisional Skill, ungoverned Skill
+**Unresolved Skill Evidence**:
+An unknown technical term retained from one or more Skill Mentions when ordinary AI Enrichment cannot map it to an existing governed Skill. It is non-searchable internal evidence, not a review queue and not authority to create a new Skill.
+_Avoid_: Skill Candidate, provisional Skill, review item, governed Skill
 
 **Matched Canonical Skill**:
 A Skill attached to a Job after extracted evidence resolves to an active governed Skill. It excludes unresolved candidates, generic tags, and rejected mentions.
@@ -204,10 +196,6 @@ _Avoid_: Skill demand coverage, all-jobs Skill coverage
 The share of successfully enriched Jobs in a stated population that have one particular Matched Canonical Skill. Because a Job may have multiple Skills, prevalence values are independent and do not form a 100% composition.
 _Avoid_: Skill share, market demand share
 
-**Unreviewed Skill Mention**:
-A Skill Mention that currently contributes to a Skill Candidate and has not yet received a governance decision.
-_Avoid_: Provisional Skill
-
 **Taxonomy Operator**:
 A human using the trusted local product for occasional direct correction when automated classification cannot produce an acceptable result.
 _Avoid_: Routine queue reviewer, release publisher
@@ -215,7 +203,7 @@ _Avoid_: Routine queue reviewer, release publisher
 ## Operations
 
 **Operations Dashboard**:
-The internal operator surface for observing collection, enrichment, governed Skills, and unresolved Skill Candidate health. Its Skill distribution describes the Published Job Corpus and is not labor-market trend analytics.
+The internal operator surface for observing collection, enrichment, and governed Skill health. Its Skill distribution describes the Published Job Corpus and is not labor-market trend analytics.
 _Avoid_: Labor market dashboard, market intelligence dashboard
 
 **Dashboard Corpus Snapshot**:

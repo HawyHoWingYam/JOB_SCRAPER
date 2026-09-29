@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  hashForClassificationRoute,
   hashForJobsRoute,
   hashForView,
-  parseClassificationRoute,
   parseJobsRoute,
   resolveAppView,
 } from './appRoute';
@@ -47,24 +45,4 @@ describe('app hash routing', () => {
     expect(hashForJobsRoute({ skillIds: ['python label'] })).toBe('#jobs');
   });
 
-  it('parses durable Classification targets and keeps the bare default', () => {
-    expect(parseClassificationRoute('#classification')).toEqual({
-      target: 'skill',
-    });
-    expect(parseClassificationRoute('#classification?target=skill')).toEqual({
-      target: 'skill',
-    });
-  });
-
-  it('round-trips the Skill target and safely rejects unsupported Classification targets', () => {
-    expect(hashForClassificationRoute('skill')).toBe(
-      '#classification?target=skill',
-    );
-    expect(
-      parseClassificationRoute('#classification?target=company_industry'),
-    ).toEqual({ target: 'skill' });
-    expect(hashForClassificationRoute('unknown')).toBe(
-      '#classification?target=skill',
-    );
-  });
 });

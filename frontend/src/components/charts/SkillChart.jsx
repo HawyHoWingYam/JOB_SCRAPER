@@ -66,7 +66,6 @@ export default function SkillChart({
   error = null,
   lastUpdated = null,
   onRetry,
-  onOpenClassification,
   onSelectSkill,
 }) {
   const [expandedBuckets, setExpandedBuckets] = useState(() => new Set());
@@ -83,7 +82,6 @@ export default function SkillChart({
         : Math.min(entry.skills.length, VISIBLE_SKILLS_PER_BUCKET)),
     0,
   );
-  const backlog = data?.candidate_backlog || {};
 
   function toggleBucket(bucket) {
     setExpandedBuckets((current) => {
@@ -146,35 +144,6 @@ export default function SkillChart({
                 {Number(data.processed_total || 0).toLocaleString()}{" "}
                 successfully enriched Jobs have at least one match.
               </small>
-            </div>
-            <div className="category-chart-summary-card category-chart-summary-card-alert">
-              <span>Unresolved Skill Candidates</span>
-              <strong>
-                {Number(
-                  backlog.unresolved_candidate_total || 0,
-                ).toLocaleString()}
-              </strong>
-              <small>
-                Across{" "}
-                {Number(backlog.affected_job_total || 0).toLocaleString()}{" "}
-                distinct Jobs;{" "}
-                {Number(backlog.ready_candidate_total || 0).toLocaleString()}{" "}
-                meet the current{" "}
-                {Number(backlog.ready_threshold || 0).toLocaleString()}-Job
-                Classification threshold.
-              </small>
-              {Number(backlog.ready_candidate_total || 0) > 0 ? (
-                <button
-                  type="button"
-                  className="dashboard-inline-button"
-                  aria-label={`Open Skill Classification for ${Number(
-                    backlog.ready_candidate_total || 0,
-                  ).toLocaleString()} ready Candidates`}
-                  onClick={onOpenClassification}
-                >
-                  Classify ready Candidates
-                </button>
-              ) : null}
             </div>
           </div>
 

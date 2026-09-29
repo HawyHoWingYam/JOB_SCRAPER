@@ -5,7 +5,7 @@ export function parseSettingsRoute(hash = window.location.hash, fallback = 'ai-r
   const returnRun = params.get('returnRun');
   return {
     section: section === 'scraper-pacing' ? section : 'ai-runtime',
-    profile: ['jobs', 'companies', 'jev', 'throughput'].includes(params.get('profile')) ? params.get('profile') : null,
+    profile: ['jobs', 'companies', 'throughput'].includes(params.get('profile')) ? params.get('profile') : null,
     returnToAI: params.get('return') === 'ai',
     returnRun: returnRun && returnRun.length <= 255 ? returnRun : null,
   };

@@ -12,6 +12,10 @@ from app.models.event_outbox import EventOutbox
 from app.models.job import Job
 from app.models.manual_job import ManualJobEvidence, ManualJobMutationReceipt
 from app.models.job_embedding import JobEmbedding
+from app.models.related_jobs_snapshot import (
+    JobRelatedJobsSnapshot,
+    JobRelatedJobsSnapshotItem,
+)
 from app.models.schedule import (
     AutomationDeleteReview,
     ScrapeSchedule,
@@ -23,28 +27,7 @@ from app.models.company_enrichment_run import (
     CompanyEnrichmentRun,
     CompanyEnrichmentRunItem,
 )
-from app.models.classification_batch import (
-    ClassificationBatchRun,
-    ClassificationBatchRunItem,
-)
 from app.models.app_runtime_settings import AppRuntimeSettings
-from app.models.jev import (
-    JevCrawlQualityEvaluation,
-    JevCrawlQualityObservation,
-    JevDuplicateAssociation,
-    JevIncidentTriageCluster,
-    JevIncidentTriageEvaluation,
-    JevOnlineSkillClassification,
-    JevOperationBatch,
-    JevOperationBatchItem,
-    JevRelatedJobsEvaluation,
-    JevRun,
-    JevRunAttempt,
-    JevRunItem,
-    JevRuntimeSettings,
-    JevSearchRerankEvaluation,
-    JevSkillMaintenanceBatch,
-)
 from app.models.scraper_pacing_settings import ScraperPacingSettings
 from app.models.source_classification import SourceClassification
 from app.models.offertoday_coverage import (
@@ -88,6 +71,8 @@ __all__ = [
     "ManualJobEvidence",
     "ManualJobMutationReceipt",
     "JobEmbedding",
+    "JobRelatedJobsSnapshot",
+    "JobRelatedJobsSnapshotItem",
     "AutomationDeleteReview",
     "ScrapeSchedule",
     "ScheduleExecution",
@@ -96,24 +81,7 @@ __all__ = [
     "EnrichmentRunItem",
     "CompanyEnrichmentRun",
     "CompanyEnrichmentRunItem",
-    "ClassificationBatchRun",
-    "ClassificationBatchRunItem",
     "AppRuntimeSettings",
-    "JevRuntimeSettings",
-    "JevSearchRerankEvaluation",
-    "JevCrawlQualityEvaluation",
-    "JevCrawlQualityObservation",
-    "JevDuplicateAssociation",
-    "JevIncidentTriageCluster",
-    "JevIncidentTriageEvaluation",
-    "JevOnlineSkillClassification",
-    "JevOperationBatch",
-    "JevOperationBatchItem",
-    "JevRelatedJobsEvaluation",
-    "JevRun",
-    "JevRunAttempt",
-    "JevRunItem",
-    "JevSkillMaintenanceBatch",
     "ScraperPacingSettings",
     "SourceClassification",
     "OfferTodayKeywordCsvReview",

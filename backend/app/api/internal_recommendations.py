@@ -6,8 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.schemas.recommendations import JobRecommendationSchema, JobRecommendationsResponse
-from app.services.jev_related_jobs import JevRelatedJobsService
+from app.schemas.recommendations import (
+    JobRecommendationSchema,
+    JobRecommendationsResponse,
+)
+from app.services.related_jobs_service import RelatedJobsService
 
 router = APIRouter(prefix="/internal", tags=["recommendations"])
 
@@ -18,16 +21,15 @@ def _build_recommendations_response(
     limit: int,
     db: Session,
 ) -> JobRecommendationsResponse:
-    service = JevRelatedJobsService(db)
+    service = RelatedJobsService(db)
     try:
-        read_state = service.read(source_job_id, limit=limit)
+        read_state = service.recommend_for_job(source_job_id, limit=limit)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JobRecommendationsResponse(
         source_job_id=source_job_id,
-        jev_status=str(read_state["jev_status"]),
-        jev_evaluation_id=read_state["jev_evaluation_id"],
+        result_source=str(read_state["result_source"]),
         recommendations=[
             JobRecommendationSchema.model_validate(item)
             for item in read_state["recommendations"]

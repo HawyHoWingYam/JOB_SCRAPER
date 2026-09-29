@@ -6,11 +6,6 @@ import ManualJobForm from './jobs/ManualJobForm';
 import { formatExperienceDisplay } from '../utils/experienceDisplay';
 
 const RELATED_JOBS_UNAVAILABLE_MESSAGE = 'Related jobs are unavailable in the current runtime profile.';
-const JEV_OPERATIONS = [
-  ['skills', 'Skills correction'],
-  ['duplicate', 'Possible same vacancy'],
-  ['related_jobs', 'Related Jobs'],
-];
 
 function formatRelativePostedState(postedDate) {
   if (!postedDate) {
@@ -112,48 +107,6 @@ function humanizeContractValue(value) {
     .replace(/\bAi\b/g, 'AI');
 }
 
-function jevOperationStatusLabel(state) {
-  if (!state) return 'Not processed';
-  if (state.status === 'completed') return 'Completed';
-  if (state.status === 'failed') return 'Failed';
-  if (state.status === 'running') return 'Running';
-  if (state.status === 'pending') {
-    return state.eligibility_reason === 'deferred' ? 'Queued' : 'Pending';
-  }
-  if (state.status === 'stopped') return 'Stopped';
-  if (state.status === 'skipped') {
-    if (state.eligibility_reason === 'successful_unchanged') {
-      return 'Skipped — unchanged';
-    }
-    if (state.eligibility_reason === 'missing_skill_evidence') {
-      return 'Skipped — no Skill evidence';
-    }
-    return `Skipped — ${humanizeContractValue(state.eligibility_reason)}`;
-  }
-  return humanizeContractValue(state.status);
-}
-
-function jevOperationTone(state) {
-  if (!state) return 'neutral';
-  if (state.status === 'completed') return 'success';
-  if (state.status === 'failed') return 'danger';
-  if (state.status === 'running' || state.status === 'pending') return 'active';
-  return 'warning';
-}
-
-function formatJevTimestamp(value) {
-  if (!value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toLocaleString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
 function sourceClassificationPathLabel(path) {
   const labels = Array.isArray(path?.nodes)
     ? path.nodes.map((node) => node?.label).filter(Boolean)
@@ -182,12 +135,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const [relatedJobs, setRelatedJobs] = useState([]);
   const [relatedJobsLoading, setRelatedJobsLoading] = useState(true);
   const [relatedJobsError, setRelatedJobsError] = useState('');
-  const [relatedJobsJevStatus, setRelatedJobsJevStatus] = useState('not_evaluated');
-  const [duplicateAssociations, setDuplicateAssociations] = useState([]);
-  const [duplicateAssociationsLoading, setDuplicateAssociationsLoading] = useState(true);
-  const [duplicateAssociationsError, setDuplicateAssociationsError] = useState('');
-  const [duplicateActionPending, setDuplicateActionPending] = useState(false);
-  const [duplicateReviewMessage, setDuplicateReviewMessage] = useState('');
+  const [relatedJobsResultSource, setRelatedJobsResultSource] = useState('similarity');
   const [isEditing, setIsEditing] = useState(false);
   const recommendationsAvailable = capabilities?.recommendations?.similar_jobs?.available !== false;
 
@@ -310,7 +258,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
           return;
         }
         setRelatedJobs(data.recommendations || []);
-        setRelatedJobsJevStatus(data.jev_status || 'not_evaluated');
+        setRelatedJobsResultSource(data.result_source || 'similarity');
         setRelatedJobsLoading(false);
       })
       .catch((err) => {
@@ -335,68 +283,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
     };
   }, [jobId, apiUrl, capabilitiesLoading, recommendationsAvailable]);
 
-  useEffect(() => {
-    let isActive = true;
-    setDuplicateAssociations([]);
-    setDuplicateAssociationsError('');
-    setDuplicateAssociationsLoading(true);
-
-    fetch(`${apiUrl}/api/jobs/${jobId}/duplicate-associations`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Duplicate associations are unavailable right now');
-        return res.json();
-      })
-      .then((data) => {
-        if (!isActive) return;
-        setDuplicateAssociations(Array.isArray(data.associations) ? data.associations : []);
-        setDuplicateAssociationsLoading(false);
-      })
-      .catch((err) => {
-        if (!isActive) return;
-        setDuplicateAssociationsError(err.message);
-        setDuplicateAssociationsLoading(false);
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [jobId, apiUrl]);
-
-  const reviewDuplicateAssociation = async (associationId, action) => {
-    setDuplicateActionPending(true);
-    setDuplicateReviewMessage('');
-    try {
-      const response = await fetch(
-        `${apiUrl}/api/jobs/${jobId}/duplicate-associations/${associationId}/review`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': globalThis.crypto?.randomUUID?.()
-              || `duplicate-${Date.now()}-${associationId}`,
-          },
-          body: JSON.stringify({ action }),
-        },
-      );
-      if (!response.ok) throw new Error('Duplicate association review failed');
-      const updated = await response.json();
-      setDuplicateAssociations((current) => (
-        action === 'reject'
-          ? current.filter((item) => item.id !== associationId)
-          : current.map((item) => (item.id === associationId ? updated : item))
-      ));
-      setDuplicateReviewMessage(
-        action === 'confirm'
-          ? 'Association confirmed; both source Jobs remain available.'
-          : 'Association rejected; both source Jobs remain available.',
-      );
-    } catch (err) {
-      setDuplicateAssociationsError(err.message);
-    } finally {
-      setDuplicateActionPending(false);
-    }
-  };
-
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) {
       onClose();
@@ -418,17 +304,6 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
   const governedSkillNames = Array.isArray(job?.skill_state?.skills)
     ? job.skill_state.skills.map((skill) => skill?.name).filter(Boolean)
     : (job?.skills || []);
-  const skillCandidateMentions = Array.isArray(job?.skill_state?.candidate_mentions)
-    ? job.skill_state.candidate_mentions
-    : (Array.isArray(job?.skill_candidate_mentions)
-      ? job.skill_candidate_mentions
-      : []);
-  const hasSkillCandidateMentions = skillCandidateMentions.length > 0;
-  const jevOperationStates = new Map(
-    (Array.isArray(job?.jev_operations) ? job.jev_operations : []).map(
-      (state) => [state.operation, state],
-    ),
-  );
 
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -513,65 +388,7 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
               />
             )}
 
-            <section
-              className="modal-section jev-processing-summary"
-              role="region"
-              aria-labelledby="jev-processing-heading"
-            >
-              <div className="jev-processing-heading">
-                <div>
-                  <h3 id="jev-processing-heading">Jev processing</h3>
-                  <p>Latest durable operation state for this Job.</p>
-                </div>
-                <a href="#jev">Open Jev Operations</a>
-              </div>
-              <div className="jev-processing-grid">
-                {JEV_OPERATIONS.map(([operation, label]) => {
-                  const state = jevOperationStates.get(operation);
-                  const updatedAt = formatJevTimestamp(state?.updated_at);
-                  return (
-                    <div className="jev-processing-card" key={operation}>
-                      <div className="jev-processing-card-heading">
-                        <strong className="jev-processing-card-title">
-                          {label}
-                        </strong>
-                        <span
-                          className={`jev-operation-status is-${jevOperationTone(state)}`}
-                        >
-                          {jevOperationStatusLabel(state)}
-                        </span>
-                      </div>
-                      {state ? (
-                        <dl className="jev-processing-details">
-                          <dt>Batch</dt>
-                          <dd>
-                            <code>{state.batch_id}</code>
-                          </dd>
-                          <dt>Updated</dt>
-                          <dd>{updatedAt || 'Time unavailable'}</dd>
-                          {state.error_code && (
-                            <>
-                              <dt>Error</dt>
-                              <dd>{humanizeContractValue(state.error_code)}</dd>
-                            </>
-                          )}
-                          {state.error_message && (
-                            <>
-                              <dt>Message</dt>
-                              <dd>{state.error_message}</dd>
-                            </>
-                          )}
-                        </dl>
-                      ) : (
-                        <p>No durable Jev batch item has been recorded.</p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-
-            <section
+           <section
               className="modal-section"
               role="region"
               aria-labelledby="job-role-evidence-heading"
@@ -655,61 +472,14 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
 
             <section className="modal-section" aria-labelledby="governed-skills-heading">
               <h3 id="governed-skills-heading">Skills</h3>
-              <div className="modal-subsection">
-                <h4>Governed Skills</h4>
-                {governedSkillNames.length > 0 ? (
-                  <SkillTags skills={governedSkillNames} />
-                ) : (
-                  <p className="modal-empty">
-                    {job.ai_enriched_at
-                      ? (hasSkillCandidateMentions
-                        ? 'No governed skills matched yet'
-                        : 'No technical skills extracted from this posting')
-                      : getAwaitingAiCopy()}
-                  </p>
-                )}
-              </div>
-
-              {hasSkillCandidateMentions && (
-                <div className="modal-subsection">
-                  <h4>Skill Candidate Evidence</h4>
-                  <p className="modal-evidence-note">
-                    Repeated evidence is handled by automatic Skill processing.
-                  </p>
-                  <div className="skill-tags-container">
-                    {skillCandidateMentions.map((mention, index) => (
-                      <span key={mention.id || `${mention.raw_name}-${index}`} className="skill-tag">
-                        {mention.raw_name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {job.jev_skill_classification && (
-                <div className="modal-subsection" aria-label="Latest Jev Skill classification">
-                  <h4>Latest Jev Skill classification</h4>
-                  <dl className="modal-kv">
-                    <dt>Status</dt>
-                    <dd>{job.jev_skill_classification.status}</dd>
-                    <dt>Model</dt>
-                    <dd>{job.jev_skill_classification.model || 'Model unavailable'}</dd>
-                    <dt>Request</dt>
-                    <dd>{job.jev_skill_classification.request_id || 'Request ID unavailable'}</dd>
-                    <dt>Cost</dt>
-                    <dd>
-                      {job.jev_skill_classification.cost_usd != null
-                        ? `USD ${Number(job.jev_skill_classification.cost_usd).toFixed(5)}`
-                        : 'Cost unavailable'}
-                    </dd>
-                    {job.jev_skill_classification.error_code && (
-                      <>
-                        <dt>Error</dt>
-                        <dd>{job.jev_skill_classification.error_code}</dd>
-                      </>
-                    )}
-                  </dl>
-                </div>
+              {governedSkillNames.length > 0 ? (
+                <SkillTags skills={governedSkillNames} />
+              ) : (
+                <p className="modal-empty">
+                  {job.ai_enriched_at
+                    ? 'No technical skills extracted from this posting'
+                    : getAwaitingAiCopy()}
+                </p>
               )}
             </section>
 
@@ -745,83 +515,12 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
               />
             </section>
 
-            <section className="modal-section" aria-labelledby="duplicate-associations-heading">
-              <div className="related-job-card-header">
-                <div>
-                  <h3 id="duplicate-associations-heading">Possible same vacancy</h3>
-                  <p className="modal-evidence-note">
-                    Source-preserving associations only. No Job is merged, hidden, or deleted.
-                  </p>
-                </div>
-                <a href="#jev">Process in Jev Operations</a>
-              </div>
-              {duplicateReviewMessage && <p role="status">{duplicateReviewMessage}</p>}
-              {duplicateAssociationsLoading ? (
-                <p className="modal-empty">Loading duplicate associations...</p>
-              ) : duplicateAssociations.length > 0 ? (
-                <div className="related-jobs-list">
-                  {duplicateAssociations.map((association) => {
-                    const otherJob = association.other_job;
-                    return (
-                      <article key={association.id} className="related-job-card">
-                        <div className="related-job-card-header">
-                          <h4>{otherJob?.title || 'Source Job unavailable'}</h4>
-                          <span className="related-job-score">
-                            {association.status === 'confirmed'
-                              ? 'Confirmed same vacancy'
-                              : 'Jev proposal — pending review'}
-                          </span>
-                        </div>
-                        <p className="related-job-company">
-                          {otherJob?.company_name || 'Unknown company'}
-                        </p>
-                        <div className="related-job-meta">
-                          <span>
-                            {otherJob?.source_site || 'unknown source'}:{otherJob?.source_job_id || 'unknown'}
-                          </span>
-                          {otherJob?.location && <span>{otherJob.location}</span>}
-                          {association.confidence != null && (
-                            <span>Jev confidence {Math.round(Number(association.confidence) * 100)}%</span>
-                          )}
-                        </div>
-                        {association.status === 'proposed' && (
-                          <div className="modal-inline-actions">
-                            <button
-                              type="button"
-                              disabled={duplicateActionPending}
-                              onClick={() => reviewDuplicateAssociation(association.id, 'confirm')}
-                            >
-                              Confirm association
-                            </button>
-                            <button
-                              type="button"
-                              disabled={duplicateActionPending}
-                              onClick={() => reviewDuplicateAssociation(association.id, 'reject')}
-                            >
-                              Not the same vacancy
-                            </button>
-                          </div>
-                        )}
-                      </article>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="modal-empty">
-                  {duplicateAssociationsError || 'No possible same-vacancy associations yet'}
-                </p>
-              )}
-            </section>
-
             <section className="modal-section">
               <h3>Related Jobs</h3>
               <p className="modal-evidence-note">
-                {relatedJobsJevStatus === 'evaluated'
-                  && 'Filtered and ranked by a manually started Jev evaluation.'}
-                {relatedJobsJevStatus === 'awaiting_reevaluation'
-                  && 'Job evidence changed; showing algorithmic fallback while awaiting manual Jev reevaluation.'}
-                {relatedJobsJevStatus === 'not_evaluated'
-                  && 'Algorithmic recommendations; not evaluated by Jev.'}
+                {relatedJobsResultSource === 'ai_ranked'
+                  ? 'AI-ranked from the latest enrichment'
+                  : 'Suggested by job similarity'}
               </p>
               {relatedJobsLoading ? (
                 <p className="modal-empty">Loading related jobs...</p>
@@ -844,14 +543,14 @@ function JobDetailModal({ jobId, apiUrl, onClose, capabilities = null, capabilit
                         {relatedJob.location && <span>{relatedJob.location}</span>}
                         <span>{relatedEmploymentTypesLabel(relatedJob)}</span>
                         {relatedJob.posted_date && <span>{formatRelativePostedState(relatedJob.posted_date)}</span>}
-                        {relatedJob.jev_reason && <span>{relatedJob.jev_reason}</span>}
+                        {relatedJob.reason && <span>{relatedJob.reason}</span>}
                       </div>
                     </article>
                   ))}
                 </div>
               ) : (
                 <p className="modal-empty">
-                  {relatedJobsError || 'No related jobs available yet'}
+                  {relatedJobsError || 'No related jobs available'}
                 </p>
               )}
             </section>

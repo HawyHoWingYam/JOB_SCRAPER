@@ -125,34 +125,6 @@ const defaultProviderCatalog = {
     { value: "openai_responses", label: "OpenAI Responses" },
   ],
 };
-const defaultJevRequest = {
-  enabled: false,
-  endpoint: "https://openrouter.ai/api/alpha/decisions",
-  model: "~typesafe/jev-latest",
-  api_key: "",
-  sample_limit: 100,
-  question_batch_limit: 10,
-  concurrency: 2,
-  retry_limit: 0,
-  timeout_seconds: 30,
-  evidence_threshold: "0.800",
-  recommendation_threshold: "0.800",
-  duplicate_enabled: false,
-  duplicate_candidate_limit: 3,
-  duplicate_corpus_limit: 200,
-  crawl_quality_enabled: false,
-  crawl_quality_batch_limit: 20,
-  search_rerank_enabled: false,
-  search_rerank_candidate_limit: 20,
-  incident_triage_enabled: false,
-  incident_triage_event_limit: 200,
-  maintenance_enabled: false,
-  maintenance_model: "~typesafe/jev-latest",
-  maintenance_interval_days: 30,
-  maintenance_min_candidates: 50,
-  maintenance_batch_size: 100,
-  maintenance_threshold: "0.900",
-};
 const aiSettingsPayload = {
   provider_catalog: defaultProviderCatalog,
   persisted_config: {
@@ -160,7 +132,6 @@ const aiSettingsPayload = {
     company_llm_provider: "anthropic",
     ai_enrichment_run_concurrency: 8,
     company_ai_enrichment_run_concurrency: 3,
-    skill_auto_create_distinct_job_threshold: 5,
     anthropic: {
       model: null,
       base_url: null,
@@ -211,7 +182,6 @@ const aiSettingsPayload = {
     company_llm_provider: "anthropic",
     ai_enrichment_run_concurrency: 8,
     company_ai_enrichment_run_concurrency: 3,
-    skill_auto_create_distinct_job_threshold: 5,
     anthropic: {
       model: "claude-sonnet-4-5",
       base_url: "https://api.anthropic.com",
@@ -271,18 +241,12 @@ const aiSettingsPayload = {
     is_ready: false,
     last_test_status: "untested",
   },
-  jev: {
-    ...defaultJevRequest,
-    has_api_key: true,
-    api_key_preview: "jev-...alue",
-  },
 };
 
 describe("AISettingsPage", () => {
   let currentSettingsPayload;
   let putSettingsResponse;
   let testProfileResponse;
-  let testJevResponse;
 
   beforeEach(() => {
     window.history.replaceState(null, "", "#settings");
@@ -334,18 +298,6 @@ describe("AISettingsPage", () => {
         config_fingerprint: "jobs:test-fingerprint",
       }),
     );
-    testJevResponse = vi.fn(async () =>
-      mockJsonResponse({
-        ok: true,
-        status: "answered",
-        model: "jev-latest",
-        provider: "fake-jev",
-        request_id: "jev-request-1",
-        latency_ms: 17,
-        usage: { input_tokens: 9, output_tokens: 3, cost: 0.00005 },
-      }),
-    );
-
     globalThis.fetch = vi.fn((input, init = {}) => {
       const url = String(input);
       const method = init.method || "GET";
@@ -367,9 +319,6 @@ describe("AISettingsPage", () => {
       }
 
       if (url.includes("/api/settings/ai")) {
-        if (url.includes("/api/settings/ai/jev/test")) {
-          return testJevResponse(url, init);
-        }
         if (url.includes("/api/settings/ai/test")) {
           return testProfileResponse(url, init);
         }
@@ -379,10 +328,6 @@ describe("AISettingsPage", () => {
         }
 
         return mockJsonResponse(currentSettingsPayload);
-      }
-
-      if (url.includes("/api/jev/runs")) {
-        return mockJsonResponse({ runs: [] });
       }
 
       if (url.includes("/api/settings/scraper-pacing")) {
@@ -472,141 +417,6 @@ describe("AISettingsPage", () => {
     expect(screen.getByText(/comp\.\.\.9999/i)).toBeInTheDocument();
     expect(screen.queryByText(/configured provider/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/degraded state/i)).not.toBeInTheDocument();
-  });
-
-  it("edits Jev future-run defaults through the shared settings save", async () => {
-    const user = userEvent.setup();
-    putSettingsResponse.mockImplementationOnce(async (_url, init) => {
-      const body = JSON.parse(init.body);
-      expect(body.jev).toEqual({
-        ...defaultJevRequest,
-        enabled: true,
-        api_key: "new-jev-secret",
-        concurrency: 4,
-      });
-      return mockJsonResponse({
-        ...currentSettingsPayload,
-        jev: {
-          ...currentSettingsPayload.jev,
-          enabled: true,
-          concurrency: 4,
-          api_key_preview: "new-...cret",
-        },
-      });
-    });
-
-    render(<AISettingsPage />);
-    await waitForSettingsLoaded();
-
-    expect(
-      screen.getByRole("heading", { level: 2, name: /jev system one/i }),
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText(/jev endpoint/i)).toHaveValue(
-      "https://openrouter.ai/api/alpha/decisions",
-    );
-    expect(screen.getByLabelText(/jev model/i)).toHaveValue("~typesafe/jev-latest");
-    expect(screen.getByText("jev-...alue")).toBeInTheDocument();
-
-    await user.click(screen.getByLabelText(/^enable jev$/i));
-    await user.type(
-      screen.getByLabelText(/^jev api key$/i),
-      "new-jev-secret",
-    );
-    await user.clear(screen.getByLabelText(/jev concurrency/i));
-    await user.type(screen.getByLabelText(/jev concurrency/i), "4");
-    await user.click(screen.getByRole("button", { name: /save settings/i }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /ai runtime settings saved/i,
-    );
-    expect(screen.getByLabelText(/^enable jev$/i)).toBeChecked();
-    expect(screen.getByLabelText(/jev concurrency/i)).toHaveValue(4);
-    expect(screen.getByText(/monetary limits are managed in the jev api console/i))
-      .toBeInTheDocument();
-    expect(screen.getByText("new-...cret")).toBeInTheDocument();
-  });
-
-  it("routes Jev smoke execution to the unified manual console", async () => {
-    currentSettingsPayload.jev.enabled = true;
-
-    render(<AISettingsPage />);
-    await waitForSettingsLoaded();
-    expect(screen.getByRole("link", { name: "Open Jev Operations" }))
-      .toHaveAttribute("href", "#jev");
-    expect(globalThis.fetch.mock.calls.some(([input, init = {}]) => (
-      String(input).endsWith("/api/jev/runs") && init.method === "POST"
-    ))).toBe(false);
-  });
-
-  it("tests the current Jev draft without saving or creating run history", async () => {
-    const user = userEvent.setup();
-    render(<AISettingsPage />);
-    await waitForSettingsLoaded();
-
-    await user.clear(screen.getByLabelText(/jev endpoint/i));
-    await user.type(
-      screen.getByLabelText(/jev endpoint/i),
-      "https://draft.example/v1/systemone",
-    );
-    await user.clear(screen.getByLabelText(/jev model/i));
-    await user.type(screen.getByLabelText(/jev model/i), "jev-draft");
-    await user.type(screen.getByLabelText(/^jev api key$/i), "draft-secret");
-    await user.click(
-      screen.getByRole("button", { name: /test jev connection/i }),
-    );
-
-    await waitFor(() => expect(testJevResponse).toHaveBeenCalledTimes(1));
-    expect(JSON.parse(testJevResponse.mock.calls[0][1].body)).toEqual({
-      endpoint: "https://draft.example/v1/systemone",
-      model: "jev-draft",
-      api_key: "draft-secret",
-      timeout_seconds: 30,
-    });
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /jev connection test passed/i,
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(/17 ms/i);
-    expect(screen.getByRole("alert")).toHaveTextContent(/\$0\.000050/i);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      /no jev run or batch history was created/i,
-    );
-    expect(putSettingsResponse).not.toHaveBeenCalled();
-    expect(globalThis.fetch.mock.calls.some(([input]) =>
-      String(input).endsWith("/api/jev/runs"),
-    )).toBe(false);
-  });
-
-  it("shows the Jev connection diagnostic and keeps the draft", async () => {
-    testJevResponse.mockResolvedValueOnce(
-      await mockJsonResponse(
-        { detail: { error_message: "System One returned HTTP 401" } },
-        { ok: false, status: 422 },
-      ),
-    );
-    const user = userEvent.setup();
-    render(<AISettingsPage />);
-    await waitForSettingsLoaded();
-    await user.type(screen.getByLabelText(/^jev api key$/i), "wrong-secret");
-    await user.click(
-      screen.getByRole("button", { name: /test jev connection/i }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /system one returned http 401/i,
-    );
-    expect(screen.getByLabelText(/^jev api key$/i)).toHaveValue("wrong-secret");
-    expect(putSettingsResponse).not.toHaveBeenCalled();
-  });
-
-  it("keeps Jev configuration visible while execution remains manual elsewhere", async () => {
-    currentSettingsPayload.jev.enabled = true;
-
-    render(<AISettingsPage />);
-    await waitForSettingsLoaded();
-    expect(screen.getByLabelText(/^enable jev$/i)).toBeChecked();
-    expect(screen.getByLabelText(/jev model/i)).toHaveValue("~typesafe/jev-latest");
-    expect(screen.getByText(/Preview, Start, Stop, Resume, retry, history, and smoke execution/))
-      .toBeInTheDocument();
   });
 
   it("navigates between AI Runtime and Scraper Pacing settings sections", async () => {
@@ -907,10 +717,6 @@ describe("AISettingsPage", () => {
         company_llm_provider: "anthropic",
         ai_enrichment_run_concurrency: 8,
         company_ai_enrichment_run_concurrency: 3,
-        skill_auto_create_distinct_job_threshold: 5,
-        skill_candidate_recommendation_limit: 5,
-        skill_candidate_evidence_limit: 5,
-        jev: defaultJevRequest,
         custom_api_key: "",
         custom_model: "gpt-4.1-mini",
         custom_base_url: "https://api.example.com/v1",
@@ -997,10 +803,6 @@ describe("AISettingsPage", () => {
         company_llm_provider: "anthropic",
         ai_enrichment_run_concurrency: 12,
         company_ai_enrichment_run_concurrency: 4,
-        skill_auto_create_distinct_job_threshold: 5,
-        skill_candidate_recommendation_limit: 5,
-        skill_candidate_evidence_limit: 5,
-        jev: defaultJevRequest,
         gemini_api_key: "",
         gemini_model: "gemini-2.5-pro",
         company_anthropic_api_key: "",
@@ -1081,10 +883,6 @@ describe("AISettingsPage", () => {
         company_llm_provider: "anthropic",
         ai_enrichment_run_concurrency: 9,
         company_ai_enrichment_run_concurrency: 3,
-        skill_auto_create_distinct_job_threshold: 5,
-        skill_candidate_recommendation_limit: 5,
-        skill_candidate_evidence_limit: 5,
-        jev: defaultJevRequest,
         anthropic_api_key: "anthropic-secret-987654",
         anthropic_model: "claude-sonnet-4-5",
         anthropic_base_url: "https://api.anthropic.com/v1",
@@ -1627,10 +1425,6 @@ describe("AISettingsPage", () => {
         company_llm_provider: "anthropic",
         ai_enrichment_run_concurrency: 8,
         company_ai_enrichment_run_concurrency: 2,
-        skill_auto_create_distinct_job_threshold: 5,
-        skill_candidate_recommendation_limit: 5,
-        skill_candidate_evidence_limit: 5,
-        jev: defaultJevRequest,
         custom_api_key: "deepseek-secret",
         custom_model: "deepseek-v4-flash",
         custom_base_url: "https://api.deepseek.com",

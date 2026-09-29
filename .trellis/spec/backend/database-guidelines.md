@@ -60,10 +60,9 @@ python backend/scripts/sandbox_cutover.py clear-database \
 - Tests that may create or clear PostgreSQL state parse their URL with
   `make_url` and require a database name ending in `_test` before the first
   engine open, DDL statement, or cleanup call.
-- New Jev production slices and the authoritative Jev browser fixture use
-  isolated PostgreSQL `_test` databases. Do not add SQLite compatibility shims
-  for new persistence behavior; PostgreSQL UUID, JSON, indexes, constraints and
-  locking are part of the contract.
+- Persistence behavior that depends on PostgreSQL UUID, JSON, indexes,
+  constraints, or locking uses isolated PostgreSQL `_test` databases. Do not
+  add SQLite compatibility shims for those production contracts.
 
 ### 4. Validation Matrix
 
@@ -79,7 +78,7 @@ python backend/scripts/sandbox_cutover.py clear-database \
 | Destructive confirmation missing | Refuse the clear operation |
 | Retained artifact is incomplete, reordered, malformed, or hash-invalid | Refuse before clearing the database |
 | PostgreSQL test database name does not end in `_test` | Fail before connection or mutation |
-| New Jev persistence test attempts SQLite | Replace it with an isolated PostgreSQL `_test` suite |
+| PostgreSQL-specific persistence test attempts SQLite | Replace it with an isolated PostgreSQL `_test` suite |
 | Old and new application processes overlap | Unsupported; keep services stopped |
 
 ### 5. Tests Required

@@ -12,7 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.ai.job_insight_extractor import get_job_insight_extractor
+from app.ai.job_insight_extractor import JobInsightExtractor, get_job_insight_extractor
 from app.ai.llm_client import LLMResponseFormatError, LLMUpstreamError, get_llm_status
 from app.job_intelligence.current_taxonomies.enrichment import (
     CurrentSkillEnrichment,
@@ -20,7 +20,9 @@ from app.job_intelligence.current_taxonomies.enrichment import (
 from app.job_intelligence.enrichment_evidence import JobEnrichmentEvidence
 from app.models.job import Job
 from app.database import SessionLocal
+from app.services.job_recommendation_service import JobRecommendationService
 from app.services.job_role_mode import resolve_job_role_mode
+from app.services.related_jobs_service import RelatedJobsService
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -57,10 +59,22 @@ class AIEnrichmentService:
             skill_candidates = skill_enrichment.build_skill_prompt(
                 role_mode=role_mode,
             )
+            related_jobs_candidates = JobRecommendationService(db).recommend_for_job(
+                job.id,
+                limit=10,
+            )
             insight = await self.insight_extractor.extract(
                 title=job.title,
                 description=job.description or "",
                 skill_taxonomy_candidates=skill_candidates,
+                related_jobs_candidates=related_jobs_candidates,
+            )
+            # The service validates again so injected/test extractors cannot bypass
+            # the transaction boundary's strict pre-mutation contract.
+            JobInsightExtractor().validate_result(
+                insight,
+                skill_taxonomy_candidates=skill_candidates,
+                related_jobs_candidates=related_jobs_candidates,
             )
 
             llm_status = get_llm_status("jobs")
@@ -68,12 +82,6 @@ class AIEnrichmentService:
             results["skills"] = {
                 "skills": extracted_skills,
                 "confidence": insight.get("confidence"),
-            }
-
-            results["jev_skill_classification"] = {
-                "status": "not_started",
-                "reason": "manual_start_required",
-                "apply_projection": False,
             }
 
             model_provenance = self._model_provenance(llm_status)
@@ -118,6 +126,14 @@ class AIEnrichmentService:
                 },
                 source="ai-extraction",
             )
+            related_jobs = insight.get("related_jobs") or []
+            RelatedJobsService(db).replace_snapshot(
+                source_job_id=job.id,
+                source_evidence_hash=enrichment_input.evidence.evidence_hash,
+                model_provenance=model_provenance,
+                selections=related_jobs,
+            )
+            results["related_jobs"] = related_jobs
             if enrichment_input.origin == "manual" and job.manual_evidence is not None:
                 job.manual_evidence.enriched_evidence_hash = (
                     job.manual_evidence.evidence_hash

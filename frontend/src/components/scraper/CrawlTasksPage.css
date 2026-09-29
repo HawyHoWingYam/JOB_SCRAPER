@@ -549,6 +549,5 @@
 .crawl-tasks-detail button:focus-visible,
 .crawl-task-row:focus-visible { outline: 2px solid var(--color-accent, #8b9cff); outline-offset: 3px; }
 
-.crawl-tasks-page > [aria-label="Jev repeated incident triage"] { padding: var(--space-4); }
 .crawl-tasks-detail-block > label { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); flex-wrap: wrap; }
 .crawl-tasks-detail-block > label input { width: 7rem; padding: var(--space-2); }

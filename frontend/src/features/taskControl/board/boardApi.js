@@ -21,17 +21,6 @@ export async function getCrawlTaskDetail(taskId, { signal } = {}) {
   ));
 }
 
-export async function getCrawlQuality(taskId, { signal } = {}) {
-  return apiFetchJson(
-    apiPath(`/crawl-jobs/tasks/${encodeURIComponent(taskId)}/quality`),
-    { signal },
-  );
-}
-
-export async function getIncidentTriage({ signal } = {}) {
-  return apiFetchJson(apiPath('/crawl-jobs/incident-triage'), { signal });
-}
-
 export async function transitionAutomation(automationId, action) {
   return apiFetchJson(
     apiPath(`/automations/${encodeURIComponent(automationId)}/${action}`),

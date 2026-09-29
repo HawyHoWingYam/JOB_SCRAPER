@@ -93,32 +93,9 @@ class RetrievalService:
         from app.api import jobs as jobs_api
 
         retrieval_mode = getattr(request, "retrieval_mode", "lexical")
-        evaluation_id = getattr(request, "jev_rerank_evaluation_id", None)
-        if evaluation_id and retrieval_mode != "lexical":
-            raise ValueError(
-                "Jev search reranking currently supports lexical search only"
-            )
         include_facets = getattr(request, "include_facets", True)
         if retrieval_mode == "lexical":
             query = build_lexical_query(self.db, request.scope)
-            preserve_query_order = False
-            facets_override = None
-            if evaluation_id:
-                from app.services.jev_search_rerank import JevSearchRerankService
-
-                rerank = JevSearchRerankService(self.db)
-                query = rerank.apply_order(
-                    query,
-                    evaluation_id=evaluation_id,
-                    scope=request.scope,
-                    retrieval_mode=retrieval_mode,
-                )
-                facets_override = rerank.frozen_facets(
-                    evaluation_id,
-                    scope=request.scope,
-                    retrieval_mode=retrieval_mode,
-                )
-                preserve_query_order = True
             return jobs_api._build_search_response(
                 query,
                 page=request.page,
@@ -126,8 +103,8 @@ class RetrievalService:
                 applied_scope=request.scope,
                 layer_summaries=layer_summaries,
                 include_facets=include_facets,
-                preserve_query_order=preserve_query_order,
-                facets_override=facets_override,
+                preserve_query_order=False,
+                facets_override=None,
             )
 
         query_text = extract_semantic_query_text(request.scope)
@@ -221,24 +198,8 @@ class RetrievalService:
         from app.api import jobs as jobs_api
 
         retrieval_mode = getattr(request, "retrieval_mode", "lexical")
-        evaluation_id = getattr(request, "jev_rerank_evaluation_id", None)
-        if evaluation_id and retrieval_mode != "lexical":
-            raise ValueError(
-                "Jev search reranking currently supports lexical search only"
-            )
         if retrieval_mode == "lexical":
             query = build_lexical_query(self.db, request.scope)
-            if evaluation_id:
-                from app.services.jev_search_rerank import JevSearchRerankService
-
-                query = JevSearchRerankService(self.db).apply_order(
-                    query,
-                    evaluation_id=evaluation_id,
-                    scope=request.scope,
-                    retrieval_mode=retrieval_mode,
-                )
-                jobs_api._validate_export_row_limit(query.order_by(None).count())
-                return jobs_api._build_export_rows_from_results(query.all())
             jobs_api._validate_export_row_limit(query.order_by(None).count())
             return jobs_api._build_export_rows(query)
 

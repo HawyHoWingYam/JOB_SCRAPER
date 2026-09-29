@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.job import (
     EmploymentTypeSchema,
@@ -24,20 +24,25 @@ class JobRecommendationSchema(BaseModel):
     title: str
     company_name: Optional[str] = None
     location: Optional[str] = None
-    employment_types: list[EmploymentTypeSchema]
+    employment_types: list[EmploymentTypeSchema] = Field(default_factory=list)
     posted_date: Optional[str] = None
-    job_intelligence_availability: JobRecommendationIntelligenceAvailabilitySchema
-    semantic_score: float
-    skill_overlap_score: float
-    freshness_score: float
-    combined_score: float
-    jev_score: Optional[int] = None
-    jev_reason: Optional[str] = None
+    job_intelligence_availability: Optional[
+        JobRecommendationIntelligenceAvailabilitySchema
+    ] = None
+    semantic_score: Optional[float] = None
+    skill_overlap_score: Optional[float] = None
+    freshness_score: Optional[float] = None
+    combined_score: Optional[float] = None
+    reason: Optional[str] = None
 
     @model_validator(mode="after")
     def keep_governed_data_aligned_with_availability(self):
         availability = self.job_intelligence_availability
-        if not availability.source_attributes.available and self.employment_types:
+        if (
+            availability is not None
+            and not availability.source_attributes.available
+            and self.employment_types
+        ):
             raise ValueError(
                 "Unavailable Source Job Attributes cannot expose Employment Types"
             )
@@ -47,8 +52,7 @@ class JobRecommendationSchema(BaseModel):
 class JobRecommendationsResponse(BaseModel):
     source_job_id: UUID
     recommendations: list[JobRecommendationSchema]
-    jev_status: str = "not_evaluated"
-    jev_evaluation_id: Optional[str] = None
+    result_source: str = "similarity"
 
 
 JobRecommendationSchema.model_rebuild()

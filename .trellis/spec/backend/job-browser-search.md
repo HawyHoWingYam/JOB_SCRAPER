@@ -261,7 +261,7 @@ query.join(
 
 - Job Browser places search/actions above a visible filter column and results.
   At 1366×768 and 1440×900, a populated initial result row must be visible
-  without scrolling. Jev advisory controls must not precede the primary list.
+  without scrolling. Secondary advisory controls must not precede the primary list.
 - Draft edits require explicit submission. Keep replace, refine, and edit
   semantics distinct; an unapplied draft never changes the export scope.
 - A failed apply renders an accessible error alongside prior successful rows.

@@ -9,7 +9,6 @@
     "preview": "vite preview",
     "test": "vitest run",
     "e2e": "playwright test",
-    "e2e:jev-real": "JEV_E2E_TEST_DATABASE=jobsdb_jev_real_e2e_test playwright test --config playwright.real.config.js",
     "lint": "eslint .",
     "format": "prettier --write \"src/**/*.{js,jsx,css}\""
   },

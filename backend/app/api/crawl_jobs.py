@@ -5,7 +5,7 @@ from datetime import timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -42,11 +42,6 @@ from app.services.crawl_task_snapshot_service import (
     build_crawl_task_snapshot,
 )
 from app.services.source_sites import is_supported_source_site
-from app.services.jev_crawl_quality_product import JevCrawlQualityProductService
-from app.services.jev_incident_triage_product import JevIncidentTriageProductService
-from app.services.jev_evaluator_factory import build_jev_evaluator
-from app.services.jev_run_service import JevRunConfigurationError, JevRunService
-from app.services.jev_runtime_settings_service import JevRuntimeSettingsService
 from app.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -61,18 +56,6 @@ failed_run_attention_service = FailedRunAttentionService()
 
 class ResumeCrawlJobRequest(BaseModel):
     strategy: ResumeStrategy | None = None
-
-
-class CrawlQualityLimitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    limit: int = Field(ge=1, le=100)
-
-
-class IncidentTriagePreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    event_limit: int = Field(ge=1, le=1_000)
 
 
 def _resolve_time_range_start(time_range: str):
@@ -103,9 +86,13 @@ def _raise_action_http_error(exc: Exception) -> None:
             detail=exc.to_detail(),
         ) from exc
     if isinstance(exc, ValueError):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
     if isinstance(exc, RuntimeError):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     raise exc
 
 
@@ -118,7 +105,9 @@ async def list_listing_batches(
     db: Session = Depends(get_db),
 ):
     effective_source_site = normalize_source_site(source_site) if source_site else None
-    if effective_source_site is not None and not is_supported_source_site(effective_source_site):
+    if effective_source_site is not None and not is_supported_source_site(
+        effective_source_site
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported source_site",
@@ -230,154 +219,13 @@ async def get_crawl_task_detail(
     )
 
 
-@router.get("/tasks/{crawl_job_id}/quality")
-def get_crawl_quality(
-    crawl_job_id: UUID,
-    db: Session = Depends(get_db),
-):
-    if crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id) is None:
-        raise HTTPException(status_code=404, detail="Crawl task not found")
-    settings_row = JevRuntimeSettingsService(db).get_or_create()
-    return {
-        "enabled": bool(settings_row.crawl_quality_enabled),
-        "maximum_limit": settings_row.crawl_quality_batch_limit,
-        "latest": JevCrawlQualityProductService(db).latest(crawl_job_id),
-    }
-
-
-@router.post("/tasks/{crawl_job_id}/quality/preview")
-def preview_crawl_quality(
-    crawl_job_id: UUID,
-    request: CrawlQualityLimitRequest,
-    db: Session = Depends(get_db),
-):
-    try:
-        preview = JevCrawlQualityProductService(db).preview(
-            crawl_job_id,
-            limit=request.limit,
-        )
-        return {
-            "crawl_job_id": str(preview.crawl_job_id),
-            "eligible_count": preview.eligible_count,
-            "selected_count": preview.selected_count,
-            "deterministic_excluded_count": preview.deterministic_excluded_count,
-            "insufficient_excluded_count": preview.insufficient_excluded_count,
-            "input_fingerprint": preview.input_fingerprint,
-        }
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Crawl task not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.post("/tasks/{crawl_job_id}/quality/evaluations")
-async def evaluate_crawl_quality(
-    crawl_job_id: UUID,
-    request: CrawlQualityLimitRequest,
-    db: Session = Depends(get_db),
-):
-    settings_row = JevRuntimeSettingsService(db).get_or_create()
-    if not settings_row.crawl_quality_enabled:
-        raise HTTPException(status_code=409, detail="Jev crawl quality is disabled")
-    if request.limit > settings_row.crawl_quality_batch_limit:
-        raise HTTPException(
-            status_code=422,
-            detail="limit exceeds the saved crawl-quality batch limit",
-        )
-    service = JevCrawlQualityProductService(db)
-    evaluator = None
-    try:
-        evaluation = service.start(crawl_job_id, limit=request.limit)
-        if evaluation.status not in {"completed", "completed_with_failures"}:
-            run = JevRunService(db).get(evaluation.jev_run_id)
-            evaluator = build_jev_evaluator(db, run)
-            await service.execute(evaluation.id, evaluator=evaluator)
-        db.commit()
-        return service.serialize(evaluation)
-    except KeyError as exc:
-        db.rollback()
-        raise HTTPException(status_code=404, detail="Crawl task not found") from exc
-    except JevRunConfigurationError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    finally:
-        close = getattr(evaluator, "aclose", None)
-        if close is not None:
-            await close()
-
-
-@router.get("/incident-triage")
-def get_incident_triage(db: Session = Depends(get_db)):
-    settings_row = JevRuntimeSettingsService(db).get_or_create()
-    return {
-        "enabled": bool(settings_row.incident_triage_enabled),
-        "maximum_event_limit": settings_row.incident_triage_event_limit,
-        "latest": JevIncidentTriageProductService(db).latest(),
-    }
-
-
-@router.post("/incident-triage/preview")
-def preview_incident_triage(
-    request: IncidentTriagePreviewRequest,
-    db: Session = Depends(get_db),
-):
-    settings_row = JevRuntimeSettingsService(db).get_or_create()
-    if request.event_limit > settings_row.incident_triage_event_limit:
-        raise HTTPException(
-            status_code=422,
-            detail="event_limit exceeds the saved incident-triage event limit",
-        )
-    service = JevIncidentTriageProductService(db)
-    try:
-        evaluation = service.preview(event_limit=request.event_limit)
-        db.commit()
-        return service.serialize(evaluation)
-    except ValueError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.post("/incident-triage/evaluations/{evaluation_id}")
-async def evaluate_incident_triage(
-    evaluation_id: str,
-    db: Session = Depends(get_db),
-):
-    settings_row = JevRuntimeSettingsService(db).get_or_create()
-    if not settings_row.incident_triage_enabled:
-        raise HTTPException(status_code=409, detail="Jev incident triage is disabled")
-    service = JevIncidentTriageProductService(db)
-    evaluator = None
-    try:
-        evaluation = service.start(evaluation_id)
-        if evaluation.jev_run_id is not None and evaluation.status not in {
-            "completed",
-            "completed_with_failures",
-        }:
-            run = JevRunService(db).get(evaluation.jev_run_id)
-            evaluator = build_jev_evaluator(db, run)
-            evaluation = await service.execute(evaluation.id, evaluator=evaluator)
-        db.commit()
-        return service.serialize(evaluation)
-    except KeyError as exc:
-        db.rollback()
-        raise HTTPException(status_code=404, detail="Incident triage preview not found") from exc
-    except JevRunConfigurationError as exc:
-        db.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    finally:
-        close = getattr(evaluator, "aclose", None)
-        if close is not None:
-            await close()
-
-
 @router.get("/{crawl_job_id}", response_model=CrawlJobSchema)
 async def get_crawl_job(crawl_job_id: UUID, db: Session = Depends(get_db)):
     crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
     if crawl_job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crawl job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Crawl job not found"
+        )
     return crawl_job
 
 
@@ -449,9 +297,7 @@ async def reset_browser_profile(
         latest_payload.get("manual_action"),
         source_site=crawl_job.source_site,
         request_payload=(
-            latest_payload.get("request_payload")
-            or crawl_job.request_payload
-            or {}
+            latest_payload.get("request_payload") or crawl_job.request_payload or {}
         ),
         default_browser_channel=settings.jobsdb_headed_browser_channel,
         default_browser_profile_path=settings.jobsdb_headed_browser_user_data_dir,
@@ -553,7 +399,9 @@ async def list_crawl_job_events(
 ):
     crawl_job = crawl_job_repository.get_crawl_job_by_id(db, crawl_job_id)
     if crawl_job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crawl job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Crawl job not found"
+        )
 
     total = crawl_job_repository.count_events(db, crawl_job_id)
     events = crawl_job_repository.list_events(db, crawl_job_id, limit=limit, tail=True)
